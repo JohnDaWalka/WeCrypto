@@ -1271,14 +1271,28 @@
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
         window._lastKalshiSnapshot[coin.sym] = {
-          ref:         ka.ref,
-          kYesPct:     ka.kalshiYesPct,
-          mYesPct:     ka.modelYesPct,
-          modelDir:    dir,
-          ts:          nowMs,
-          closeTimeMs: ka.closeTimeMs ?? null,  // Kalshi contract expiry — for window alignment
-          ticker:      ka.ticker     ?? null,   // Kalshi contract ticker — for cross-reference
+          ref:          ka.ref,
+          kYesPct:      ka.kalshiYesPct,
+          mYesPct:      ka.modelYesPct,
+          modelDir:     dir,
+          ts:           nowMs,
+          // Contract structural fields — now passed through from prediction-markets.js
+          floorPrice:   ka.floorPrice    ?? ka.ref,
+          capPrice:     ka.capPrice      ?? null,
+          strikeDir:    ka.strikeDir     ?? 'above',
+          strikeType:   ka.strikeType    ?? null,
+          ticker:       ka.ticker        ?? null,
+          closeTimeMs:  ka.closeTimeMs   ?? null,
+          // Diagnostic flags
+          dirConflict:  ka.dirConflict   ?? false,
+          cdfImpliedDir: ka.cdfImpliedDir ?? null,
         };
+        if (ka.dirConflict) {
+          console.warn(
+            `[Snapshot] ⚠️ ${coin.sym} momentum=${dir} conflicts with CDF direction=${ka.cdfImpliedDir} ` +
+            `(mYesPct=${ka.modelYesPct}% kYesPct=${ka.kalshiYesPct}% strike=${ka.strikeDir} ref=${ka.ref})`
+          );
+        }
       }
     });
     saveLastPred();
@@ -1348,7 +1362,7 @@
           ticker: kSnap.ticker, kCloseMs, bucketOpen, bucketClose,
         });
       } else {
-        const refPrice     = kSnap.floorPrice ?? kSnap.ref;
+        const refPrice     = (kSnap.floorPrice > 0 ? kSnap.floorPrice : null) ?? kSnap.ref;
         const strikeDir    = kSnap.strikeDir ?? 'above';
         const isBelowContract = strikeDir === 'below';
 
@@ -1370,19 +1384,32 @@
         // Proxy confidence: lower when wick straddles ref or price is very close
         const proxyConfidence = wickStraddle ? 45 : (refDiffPct < 0.30 ? 72 : 88);
 
-        if (pendingAuth) {
-          const reason = wickStraddle ? 'wick_straddle' : 'near_ref';
-          console.warn(
-            `[KalshiTracker] ⚠️ ${reason.toUpperCase()} ${sym}: close=${bucket.c.toFixed(4)} ` +
-            `ref=${refPrice} gap=${refDiffPct.toFixed(4)}% ${wickStraddle ? `wickSize=${wickSize.toFixed(3)}%` : ''} ` +
-            `H=${bucket.h} L=${bucket.l} strike=${strikeDir} ticker=${kSnap.ticker} ` +
-            `— deferring to authoritative settlement`
-          );
+        // Direction-conflict: momentum says one way, CDF probability says the other
+        const dirConflict = kSnap.dirConflict ?? false;
+
+        if (pendingAuth || dirConflict) {
+          const reason = wickStraddle ? 'wick_straddle' : nearRef ? 'near_ref' : 'dir_conflict';
+          if (pendingAuth) {
+            console.warn(
+              `[KalshiTracker] ⚠️ ${reason.toUpperCase()} ${sym}: close=${bucket.c.toFixed(4)} ` +
+              `ref=${refPrice} gap=${refDiffPct.toFixed(4)}% ${wickStraddle ? `wickSize=${wickSize.toFixed(3)}%` : ''} ` +
+              `H=${bucket.h} L=${bucket.l} strike=${strikeDir} ticker=${kSnap.ticker} ` +
+              `— deferring to authoritative settlement`
+            );
+          }
+          if (dirConflict) {
+            console.warn(
+              `[KalshiTracker] ⚠️ DIR_CONFLICT at close ${sym}: ` +
+              `momentum=${kSnap.modelDir} cdfImplied=${kSnap.cdfImpliedDir} ` +
+              `mYesPct=${kSnap.mYesPct}% proxy=${yesResolved ? 'YES' : 'NO'} ref=${refPrice}`
+            );
+          }
           logContractError(reason, sym, {
             ticker: kSnap.ticker, ref: refPrice, strikeDir,
             close: bucket.c, high: bucket.h, low: bucket.l,
             refDiffPct: +refDiffPct.toFixed(4), wickSize: +wickSize.toFixed(4),
             proxyYES: yesResolved, kYesPct: kSnap.kYesPct, mYesPct: kSnap.mYesPct,
+            dirConflict, momentumDir: kSnap.modelDir, cdfImpliedDir: kSnap.cdfImpliedDir,
           });
         }
 
@@ -1391,11 +1418,13 @@
           ticker:          kSnap.ticker ?? null,
           strikeDir,
           outcome:         yesResolved ? 'YES' : 'NO',
-          proxyOutcome:    yesResolved ? 'YES' : 'NO', // stored for resolver cross-check
+          proxyOutcome:    yesResolved ? 'YES' : 'NO',
           proxyConfidence,
           kYesPct:         kSnap.kYesPct,
           mYesPct:         kSnap.mYesPct,
           modelDir:        kSnap.modelDir,
+          cdfImpliedDir:   kSnap.cdfImpliedDir ?? null,
+          dirConflict,
           closePrice:      +bucket.c.toFixed(6),
           candleH:         bucket.h != null ? +bucket.h.toFixed(6) : null,
           candleL:         bucket.l != null ? +bucket.l.toFixed(6) : null,
@@ -1403,9 +1432,10 @@
           wickSize:        +wickSize.toFixed(4),
           marketCorrect:   (kSnap.kYesPct >= 50) === yesResolved,
           modelCorrect:    kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
-          _pendingAuth:    pendingAuth,
+          _pendingAuth:    pendingAuth || dirConflict,
           _wickStraddle:   wickStraddle,
           _nearRef:        nearRef,
+          _dirConflict:    dirConflict,
         };
         window._kalshiLog.push(kEntry);
         if (window._kalshiLog.length > 500) window._kalshiLog.shift();
