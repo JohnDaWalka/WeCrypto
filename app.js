@@ -5004,6 +5004,144 @@
       </div>`;
   }
 
+  // ── Kalshi Live Debug Panel ──────────────────────────────────────────────
+  // Shows in the predictions view: per-coin contract state, last 5 errors,
+  // last 5 resolutions. Collapsed by default, toggled by clicking the header.
+  function buildKalshiDebugPanel() {
+    const snaps   = window._lastKalshiSnapshot || {};
+    const log     = (window._kalshiLog         || []).slice(-20).reverse();
+    const errors  = (window._kalshiErrors      || []).slice(-8).reverse();
+    const resLog  = (window._15mResolutionLog  || []).slice(-8).reverse();
+
+    const fmtPrice = v => v != null ? `$${Number(v).toLocaleString(undefined, {maximumFractionDigits:2})}` : '–';
+    const fmtPct   = v => v != null ? `${v}%` : '–';
+    const fmtTime  = ms => ms ? new Date(ms).toISOString().slice(11,19) : '–';
+    const col = (v, ok, warn, bad) => {
+      if (v === ok)   return 'color:#4caf50';
+      if (v === warn) return 'color:#ffc107';
+      if (v === bad)  return 'color:#f44336';
+      return 'color:#aaa';
+    };
+
+    // ── snapshot rows ──
+    const snapRows = Object.entries(snaps).map(([sym, s]) => {
+      const conflict = s.dirConflict ? '⚠️' : '';
+      const confCol  = s.dirConflict ? 'color:#f44336;font-weight:700' : 'color:#4caf50';
+      return `<tr>
+        <td style="color:#fff;font-weight:600">${sym}</td>
+        <td>${fmtPrice(s.floorPrice || s.ref)}</td>
+        <td style="${s.strikeDir==='below'?'color:#f44336':'color:#4caf50'}">${s.strikeDir||'above'}</td>
+        <td style="${col(s.modelDir,'UP','FLAT','DOWN')}">${s.modelDir||'–'}</td>
+        <td>${fmtPct(s.mYesPct)}</td>
+        <td>${fmtPct(s.kYesPct)}</td>
+        <td style="${confCol}">${conflict}${s.cdfImpliedDir||'–'}</td>
+        <td style="color:#888">${fmtTime(s.closeTimeMs)}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="8" style="color:#666;text-align:center">No snapshots yet</td></tr>';
+
+    // ── recent log rows ──
+    const logRows = log.slice(0,8).map(e => {
+      const settled = e._settled  ? `<span style="color:#4caf50">✓${e._kalshiResult||''}</span>` : (e._pendingAuth ? '<span style="color:#ffc107">⏳</span>' : '');
+      const match   = e._settled  ? (e._proxyMismatch ? '<span style="color:#f44336">MISMATCH</span>' : '<span style="color:#4caf50">✓match</span>') : '';
+      const flags   = [e._wickStraddle?'🔥wick':'', e._nearRef?'≈ref':'', e._dirConflict?'⚠️dir':''].filter(Boolean).join(' ');
+      return `<tr>
+        <td style="color:#fff">${e.sym}</td>
+        <td>${e.outcome||'–'}</td>
+        <td style="color:#888;font-size:10px">${fmtPrice(e.ref)}</td>
+        <td style="color:#888;font-size:10px">${fmtPrice(e.closePrice)}</td>
+        <td style="color:#aaa;font-size:10px">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':'–'}</td>
+        <td style="font-size:10px">${e.proxyConfidence!=null?e.proxyConfidence:'–'}</td>
+        <td>${settled} ${match}</td>
+        <td style="color:#ffc107;font-size:10px">${flags}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="8" style="color:#666;text-align:center">No entries yet</td></tr>';
+
+    // ── recent errors ──
+    const errRows = errors.map(e => {
+      const typeCol = e.type==='proxy_mismatch'?'#f44336':e.type==='wick_straddle'?'#ff9800':e.type==='dir_conflict'?'#e040fb':'#ffc107';
+      return `<tr>
+        <td style="color:${typeCol};font-weight:600;font-size:10px">${e.type}</td>
+        <td style="color:#fff">${e.sym}</td>
+        <td style="font-size:10px;color:#888">${e.tsIso?.slice(11,19)||'–'}</td>
+        <td style="font-size:10px">${e.proxy||''} → ${e.authoritative||''}</td>
+        <td style="font-size:10px;color:#aaa">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':''} ${e.wickStraddle?'🔥':''} ${e.nearRef?'≈':''}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" style="color:#666;text-align:center">No errors 🎉</td></tr>';
+
+    // ── recent resolutions ──
+    const resRows = resLog.map(r => {
+      const mc = r.modelCorrect===true?'<span style="color:#4caf50">✓</span>':r.modelCorrect===false?'<span style="color:#f44336">✗</span>':'<span style="color:#888">?</span>';
+      return `<tr>
+        <td style="color:#fff">${r.sym}</td>
+        <td style="color:${r.actualOutcome==='UP'?'#4caf50':'#f44336'}">${r.actualOutcome}</td>
+        <td style="color:#888;font-size:10px">${r.kalshiResult||'–'}</td>
+        <td style="font-size:10px">${r.modelDir||'–'} ${mc}</td>
+        <td style="font-size:10px;color:#aaa">${fmtPrice(r.floorPrice||r.refPrice)}</td>
+        <td style="font-size:10px;color:#888">${fmtTime(r.settledTs)}</td>
+        <td style="font-size:10px;color:${r.confidence>=90?'#4caf50':'#ffc107'}">${r.confidence!=null?r.confidence+'%conf':'–'}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="7" style="color:#666;text-align:center">No settled contracts yet</td></tr>';
+
+    const th = 'style="color:#888;font-size:10px;font-weight:600;padding:3px 6px;border-bottom:1px solid #2a2a2a;white-space:nowrap"';
+    const td = 'style="padding:3px 6px;font-size:11px;border-bottom:1px solid #1a1a1a"';
+    const tableStyle = 'width:100%;border-collapse:collapse;margin-bottom:8px';
+
+    return `
+    <details id="kalshi-debug-panel" style="margin:8px 0 14px;background:#111;border:1px solid #2a2a2a;border-radius:8px;overflow:hidden">
+      <summary style="cursor:pointer;padding:8px 14px;font-size:12px;font-weight:700;color:#ffc107;letter-spacing:.5px;display:flex;align-items:center;gap:8px;user-select:none">
+        🔬 KALSHI CONTRACT DEBUG
+        <span style="font-size:10px;color:#666;font-weight:400;margin-left:auto">
+          snap:${Object.keys(snaps).length} log:${log.length} err:${errors.length} res:${resLog.length}
+        </span>
+      </summary>
+      <div style="padding:10px 14px">
+
+        <div style="font-size:10px;color:#ffc107;font-weight:700;margin-bottom:4px;letter-spacing:.5px">▸ CURRENT SNAPSHOTS</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>SYM</th><th ${th}>FLOOR</th><th ${th}>STRIKE</th>
+            <th ${th}>MODEL↑↓</th><th ${th}>mYes%</th><th ${th}>kYes%</th>
+            <th ${th}>CDF→</th><th ${th}>CLOSES</th>
+          </tr></thead>
+          <tbody>${snapRows.replace(/<td/g, `<td ${td}`.replace('td style=', 'td ').replace(/td  style=/g,'td style='))}</tbody>
+        </table></div>
+
+        <div style="font-size:10px;color:#4fc3f7;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ RECENT CONTRACT LOG (last 8)</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>SYM</th><th ${th}>PROXY</th><th ${th}>REF</th>
+            <th ${th}>CLOSE</th><th ${th}>GAP</th><th ${th}>CONF</th>
+            <th ${th}>AUTH</th><th ${th}>FLAGS</th>
+          </tr></thead>
+          <tbody>${logRows.replace(/<td/g, `<td ${td}`)}</tbody>
+        </table></div>
+
+        <div style="font-size:10px;color:#f44336;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ ERRORS / MISMATCHES (last 8)</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>TYPE</th><th ${th}>SYM</th><th ${th}>TIME</th>
+            <th ${th}>PROXY→AUTH</th><th ${th}>GAP</th>
+          </tr></thead>
+          <tbody>${errRows.replace(/<td/g, `<td ${td}`)}</tbody>
+        </table></div>
+
+        <div style="font-size:10px;color:#4caf50;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ SETTLED CONTRACTS (last 8)</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>SYM</th><th ${th}>OUTCOME</th><th ${th}>RAW</th>
+            <th ${th}>MODEL</th><th ${th}>REF</th>
+            <th ${th}>TIME</th><th ${th}>CONF</th>
+          </tr></thead>
+          <tbody>${resRows.replace(/<td/g, `<td ${td}`)}</tbody>
+        </table></div>
+
+        <div style="margin-top:8px;font-size:10px;color:#555;font-family:monospace">
+          DevTools: KalshiDebug.audit('ETH') · .errors() · .pending() · .last('ETH') · .contract('ETH')
+        </div>
+      </div>
+    </details>`;
+  }
+
   async function renderPredictions() {
     const _myRV = _rv; // capture version — bail after any await if stale
 
@@ -5070,6 +5208,7 @@
       ${!predsLoaded ? `<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.3);border-radius:6px;margin-bottom:12px;font-size:13px;color:#ffc107"><div style="width:16px;height:16px;border:2px solid rgba(255,193,7,0.3);border-top-color:#ffc107;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></div><span>Scoring UP/DOWN markets\u2026</span></div>` : ''}
       ${buildQuickDecisionPanel(predArr)}
       <div id="pred-accuracy-badge" style="text-align:center;padding:4px 0 6px;font-size:12px;letter-spacing:.5px"></div>
+      ${buildKalshiDebugPanel()}
       <div class="pred-disclaimer">
         \u26a0 <strong>Not financial advice.</strong> These UP/DOWN calls are algorithmic signals derived from RSI, VWAP deviation, EMA crosses, OBV, order book imbalance, and trade flow analysis on 5-minute candles. They represent statistical probabilities, not certainties. Always manage risk.
       </div>
