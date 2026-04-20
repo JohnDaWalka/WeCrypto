@@ -5367,6 +5367,7 @@
     if (rerunBtn) {
       rerunBtn.addEventListener('click', async () => {
         predictionRunInFlight = null; // cancel any stuck run
+        window.PredictionEngine?.forceReset?.();  // clear hung internal promise
         predsLoaded = false;
         rerunBtn.textContent = 'Analyzing...';
         rerunBtn.disabled = true;
