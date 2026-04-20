@@ -7,6 +7,9 @@ config.toml
 Thumbs.db
 
 # Rust/Tauri build artifacts
-src-tauri/target/
+src-tauri/
 *.rlib
 *.pdb
+
+# Generated backtest reports (large JSON, rebuild locally)
+*-report.json
