@@ -598,6 +598,12 @@
     getAll()     { return cache; },
     getCoin(sym) { return cache[sym] ?? null; },
     getSnipes()  { return detectSnipes(cache); },
+    // Funding-rate bias for a coin: { avg, bias, strength, sources } or null.
+    // Populated by cfm-engine.js _computeFundingBias() after each poll cycle.
+    getFundingBias(sym) { return window._cfm?.[sym]?.fundingBias || null; },
+    // Fear & Greed Index: { value, label, ts } or null.
+    // Fetched by cfm-engine.js fetchFNG() every 5 minutes.
+    getFNG()            { return window._cfm?._fng            || null; },
     getVelocity(sym)  { return getProbVelocity(sym); },
     getAllVelocities() { return Object.fromEntries(Object.keys(COIN_KEYWORDS).map(s => [s, getProbVelocity(s)])); },
     getStatus()  {

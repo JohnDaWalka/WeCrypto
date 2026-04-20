@@ -1204,7 +1204,7 @@ input, select { font: inherit; color: inherit; }
 .pred-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 18px;
+  gap: 10px;
 }
 
 .pred-card {

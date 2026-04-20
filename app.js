@@ -1914,7 +1914,7 @@
     }
     function _side(prob, large) {
       if (prob == null) return '<span style="color:var(--color-text-faint)">—</span>';
-      const sz = large ? 'font-size:17px;font-weight:800' : 'font-size:13px;font-weight:700';
+      const sz = large ? 'font-size:20px;font-weight:800' : 'font-size:13px;font-weight:700';
       if (prob >= 0.55) return `<span class="badge-up" style="${sz}">▲ BUY YES</span>`;
       if (prob <= 0.45) return `<span class="badge-down" style="${sz}">▼ BUY NO</span>`;
       return `<span style="color:var(--color-text-faint);${sz}">NEUTRAL</span>`;
@@ -2908,9 +2908,13 @@
 
       // Zoom: short TFs show a tight window so candles are large and readable.
       // Longer TFs show all data (fitContent).
-      const ZOOM_WINDOW = { '1m': 60, '3m': 60, '5m': 80, '15m': 120 };
+      // barSpacing is set explicitly per-TF so candle widths look right regardless of chart width.
+      const ZOOM_WINDOW  = { '1m': 60, '3m': 60, '5m': 80, '15m': 120 };
+      const BAR_SPACING  = { '1m': 5,  '3m': 7,  '5m': 9,  '15m': 9  };
       const total = series.length;
       const show  = ZOOM_WINDOW[chartTf];
+      const bs    = BAR_SPACING[chartTf];
+      if (bs) candleChart.timeScale().applyOptions({ barSpacing: bs });
       if (show && total > show) {
         candleChart.timeScale().setVisibleLogicalRange({ from: total - show - 1, to: total - 1 });
       } else {
@@ -6871,6 +6875,14 @@
         console.info('[WE] ⚡ Settlement pulse scheduler armed — fires at :00/:15/:30/:45');
       }, 4500); // arm after all modules are up
     });
+  });
+
+  // ── 5M Markets auto-refresh: re-render the view when prediction data arrives ──
+  // PredictionMarkets fetches async; if the user opens the 5M view before the
+  // first fetch completes, the cards show "No active contract". This listener
+  // re-renders the view as soon as fresh data is available.
+  window.addEventListener('predictionmarketsready', () => {
+    if (currentView === 'markets5m') renderMarkets5M();
   });
 
   // ── Order Book HUD — initialise after DOM is ready ──────────────
