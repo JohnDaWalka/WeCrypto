@@ -15,6 +15,26 @@
   const LAST_CALL_MS     = 60000;
   const MAX_KELLY        = 0.25;
 
+  // Signal stability — prevents flipping in final minutes
+  const LOCK_MS          = 45000;   // hold a trade signal for 45s on same contract
+  const CROWD_FADE_PCT   = 0.80;    // fade crowd when >=80% on one side (last 90s)
+  const CROWD_FADE_SECS  = 90;      // only apply crowd fade in last 90s
+
+  // Sweet spot entry window — best payout + not too close to close
+  const SWEET_MIN_SECS   = 180;     // 3 min left
+  const SWEET_MAX_SECS   = 360;     // 6 min left
+  const SWEET_PAYOUT_MIN = 1.65;    // payout >= 1.65x (entry price <= ~0.61)
+
+  // _locks[sym+closeTimeMs] = { direction, side, ts, closeTimeMs }
+  var _locks = {};
+
+  function crowdFadeDir(kalshiYesPrice, secsLeft) {
+    if (secsLeft == null || secsLeft > CROWD_FADE_SECS) return null;
+    if (kalshiYesPrice >= CROWD_FADE_PCT)        return 'DOWN'; // fade heavy YES
+    if (kalshiYesPrice <= (1 - CROWD_FADE_PCT))  return 'UP';  // fade heavy NO
+    return null;
+  }
+
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
   function scoreToProbUp(score) {
@@ -110,6 +130,12 @@
     else action = modelActive ? 'trade' : 'watch';
     if (action === 'skip')
       return _skip(sym, 'Negative EV — edge ' + (entry ? entry.edgeCents : 0) + 'c (need >=' + EDGE_MIN_CENTS + 'c)');
+
+    // Tier 1: Sweet spot window (3–6 min left, payout >= 1.65x)
+    var payout = entry ? entry.payoutMult : null;
+    var sweetSpot = secsLeft != null && secsLeft >= SWEET_MIN_SECS && secsLeft <= SWEET_MAX_SECS
+                    && payout != null && payout >= SWEET_PAYOUT_MIN
+                    && action === 'trade';
     var kPct    = kalshiYesPrice != null ? 'Kalshi ' + Math.round(kalshiYesPrice * 100) + '% YES' : '';
     var mPct    = 'model ' + Math.round(modelProbUp * 100) + '% UP';
     var edgeStr = entry ? ((entry.edgeCents >= 0 ? '+' : '') + entry.edgeCents + 'c/contract') : '';
@@ -139,8 +165,36 @@
       targetPrice: k15 ? k15.targetPrice : null, targetPriceNum: k15 ? k15.targetPriceNum : null,
       liquidity: k15 ? k15.liquidity : 0, closeTime: k15 ? k15.closeTime : null,
       humanReason: reasonMap[alignment] || (sym + ' ' + direction),
+      sweetSpot: sweetSpot,
     };
     if (entry) Object.assign(result, entry);
+
+    // --- Signal lock + crowd fade ---
+    var lockKey  = sym + '_' + (closeTimeMs || 'none');
+    var lock     = _locks[lockKey];
+    var fadeDir  = crowdFadeDir(kalshiYesPrice, secsLeft);
+
+    if (fadeDir) {
+      // Last 90s + extreme crowd → fade, override everything
+      result.direction  = fadeDir;
+      result.side       = fadeDir === 'UP' ? 'YES' : 'NO';
+      result.action     = 'trade';
+      result.alignment  = 'CROWD_FADE';
+      result.crowdFade  = true;
+      result.humanReason = sym + ' CROWD FADE → ' + fadeDir + ': Kalshi ' + Math.round(kalshiYesPrice * 100) + '% YES extreme — fading crowd in final ' + Math.round(secsLeft) + 's';
+      _locks[lockKey]   = { direction: fadeDir, side: result.side, ts: Date.now(), closeTimeMs: closeTimeMs };
+    } else if (result.action === 'trade') {
+      // New trade signal — lock it
+      _locks[lockKey] = { direction: result.direction, side: result.side, ts: Date.now(), closeTimeMs: closeTimeMs };
+    } else if (lock && lock.closeTimeMs === closeTimeMs && (Date.now() - lock.ts) < LOCK_MS) {
+      // Signal drifted off trade but lock is still fresh — hold it
+      result.direction   = lock.direction;
+      result.side        = lock.side;
+      result.action      = 'trade';
+      result.signalLocked = true;
+      result.humanReason  = sym + ' [LOCKED ' + Math.round((Date.now() - lock.ts) / 1000) + 's ago] ' + lock.direction;
+    }
+
     return result;
   }
 

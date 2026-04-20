@@ -5117,14 +5117,14 @@
     const tableStyle = 'width:100%;border-collapse:collapse;margin-bottom:8px';
 
     return `
-    <details id="kalshi-debug-panel" style="margin:8px 0 14px;background:#111;border:1px solid #2a2a2a;border-radius:8px;overflow:hidden">
+    <details id="kalshi-debug-panel" style="margin:8px 0 14px;background:#111;border:1px solid #2a2a2a;border-radius:8px">
       <summary style="cursor:pointer;padding:8px 14px;font-size:12px;font-weight:700;color:#ffc107;letter-spacing:.5px;display:flex;align-items:center;gap:8px;user-select:none">
         🔬 KALSHI CONTRACT DEBUG
         <span style="font-size:10px;color:#666;font-weight:400;margin-left:auto">
           snap:${Object.keys(snaps).length} log:${log.length} err:${errors.length} res:${resLog.length}
         </span>
       </summary>
-      <div style="padding:10px 14px">
+      <div style="padding:10px 14px;overflow:hidden;border-radius:0 0 8px 8px">
 
         <div style="font-size:10px;color:#ffc107;font-weight:700;margin-bottom:4px;letter-spacing:.5px">▸ CURRENT SNAPSHOTS</div>
         <div style="overflow-x:auto"><table style="${tableStyle}">
@@ -5186,7 +5186,7 @@
     if (_rv !== _myRV) return; // guard: stale render version
     const preds = PredictionEngine.getAll();
     const session = PredictionEngine.getSession();
-    const predArr = Object.values(preds).filter(p => p.price > 0);
+    const predArr = Object.values(preds).filter(p => p.sym);
     const bullCount = predArr.filter(p => p.signal === 'strong_bull' || p.signal === 'bullish').length;
     const bearCount = predArr.filter(p => p.signal === 'strong_bear' || p.signal === 'bearish').length;
     const backtests = predArr.map(p => p.backtest).filter(Boolean);
@@ -5379,18 +5379,11 @@
 
     content.querySelectorAll('[data-pred-toggle]').forEach(card => {
       card.addEventListener('click', (e) => {
-        // Signal grid has its own onclick stopPropagation — don't intercept it
         if (e.target.closest('.gs-wrap')) return;
-        const sym     = card.dataset.predToggle;
-        const opening = !card.classList.contains('expanded');
-        // Update state set
-        if (opening) predictionExpanded.add(sym); else predictionExpanded.delete(sym);
-        // Direct DOM toggle — no full re-render, no hover flicker
-        card.classList.toggle('expanded', opening);
-        const panel = card.querySelector('.pred-expand-panel');
-        if (panel) panel.classList.toggle('open', opening);
-        const icon  = card.querySelector('.pred-expand-icon');
-        if (icon)  icon.textContent = opening ? '−' : '+';
+        const sym = card.dataset.predToggle;
+        if (predictionExpanded.has(sym)) predictionExpanded.delete(sym);
+        else predictionExpanded.add(sym);
+        renderPredictions();
       });
     });
 
@@ -5687,6 +5680,9 @@
                 <span style="color:${isTrade ? 'var(--color-green)' : isSplit ? 'var(--color-orange)' : 'var(--color-text-muted)'}">${alignTag} · <strong>${ki.confidence}%</strong></span>
               </div>
               ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:5px;line-height:1.4;font-family:var(--font-sans)">${ki.humanReason}</div>` : ''}
+               ${ki.sweetSpot    ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — ${ki.minsLeft?.toFixed(1)}m left · ${ki.payoutMult?.toFixed(2)}x payout · prime entry window</div>` : ''}
+              ${ki.crowdFade    ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — ${Math.round(ki.kalshiYesPrice * 100)}% YES extreme · going ${ki.direction}</div>` : ''}
+              ${ki.signalLocked ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">🔒 Signal locked (${ki.humanReason?.match(/\d+s/)?.[0] || '?'} ago) — holding position</div>` : ''}
               ${ki.illiquid ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Low liquidity ($${ki.liquidity?.toFixed(0)}) — size carefully</div>` : ''}
               ${isSplit     ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Kalshi vs model disagree — watch only, do not trade</div>` : ''}
             </div>`;
