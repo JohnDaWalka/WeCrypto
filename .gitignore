@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.exe
+*.log
+config.toml
+.DS_Store
+Thumbs.db
+
+# Rust/Tauri build artifacts
+src-tauri/target/
+*.rlib
+*.pdb

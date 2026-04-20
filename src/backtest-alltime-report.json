@@ -1,0 +1,3972 @@
+{
+  "generatedAt": "2026-04-18T19:48:14.200Z",
+  "note": "All-time backtest from coin genesis dates on Binance global",
+  "liveWindow": 300,
+  "coins": {
+    "BTC": {
+      "results": {
+        "h1": {
+          "horizonMin": 1,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.1,
+            "minAgreement": 0.52
+          },
+          "observations": 668,
+          "activeSignals": 223,
+          "coverage": 33.38323353293413,
+          "winRate": 46.63677130044843,
+          "wins": 104,
+          "losses": 115,
+          "scratches": 4,
+          "avgSignedReturn": -0.0024674272520780628,
+          "profitFactor": 0.9579856579441545,
+          "equity": {
+            "final": 99.41494912325525,
+            "returnPct": -0.5850508767447451,
+            "maxDrawdownPct": 2.868027259227376
+          },
+          "buckets": {
+            "strong": {
+              "count": 5,
+              "winRate": 60
+            },
+            "moderate": {
+              "count": 69,
+              "winRate": 59.42028985507246
+            },
+            "light": {
+              "count": 149,
+              "winRate": 40.26845637583892
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 73,
+              "winRate": 41.0958904109589
+            },
+            {
+              "session": "NY Open",
+              "total": 72,
+              "winRate": 48.61111111111111
+            },
+            {
+              "session": "London",
+              "total": 55,
+              "winRate": 52.72727272727272
+            },
+            {
+              "session": "Asia",
+              "total": 23,
+              "winRate": 43.47826086956522
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "rsi",
+              "accuracy": 62.121212121212125,
+              "samples": 66
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 58.42696629213483,
+              "samples": 178
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 55.60538116591929,
+              "samples": 223
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 53.77358490566038,
+              "samples": 212
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 51.35135135135135,
+              "samples": 148
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 48.8235294117647,
+              "samples": 170
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 48.18181818181818,
+              "samples": 220
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 47.53086419753087,
+              "samples": 162
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 47.19626168224299,
+              "samples": 214
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 46.72131147540984,
+              "samples": 122
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 46.63677130044843,
+              "samples": 223
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 46.08695652173913,
+              "samples": 115
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 45.86466165413533,
+              "samples": 133
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 44.91525423728814,
+              "samples": 118
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 43.56435643564357,
+              "samples": 202
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 223,
+              "wins": 104,
+              "losses": 115,
+              "winRate": 47.48858447488584
+            }
+          ]
+        },
+        "h5": {
+          "horizonMin": 5,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.14,
+            "minAgreement": 0.56
+          },
+          "observations": 668,
+          "activeSignals": 182,
+          "coverage": 27.245508982035926,
+          "winRate": 48.35164835164835,
+          "wins": 88,
+          "losses": 92,
+          "scratches": 2,
+          "avgSignedReturn": 0.010572872194883023,
+          "profitFactor": 1.198677846254212,
+          "equity": {
+            "final": 101.9174335702771,
+            "returnPct": 1.9174335702770975,
+            "maxDrawdownPct": 2.2203715358037566
+          },
+          "buckets": {
+            "strong": {
+              "count": 5,
+              "winRate": 60
+            },
+            "moderate": {
+              "count": 68,
+              "winRate": 58.82352941176471
+            },
+            "light": {
+              "count": 109,
+              "winRate": 41.284403669724774
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 61,
+              "winRate": 54.09836065573771
+            },
+            {
+              "session": "Off-Hours",
+              "total": 54,
+              "winRate": 40.74074074074074
+            },
+            {
+              "session": "London",
+              "total": 53,
+              "winRate": 50.943396226415096
+            },
+            {
+              "session": "Asia",
+              "total": 14,
+              "winRate": 42.857142857142854
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "rsi",
+              "accuracy": 61.904761904761905,
+              "samples": 63
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 56.64335664335665,
+              "samples": 143
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 55.494505494505496,
+              "samples": 182
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 53.84615384615385,
+              "samples": 117
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 52.57142857142857,
+              "samples": 175
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 50.4,
+              "samples": 125
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 49.72375690607735,
+              "samples": 181
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 49.074074074074076,
+              "samples": 108
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 48.29545454545455,
+              "samples": 176
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 47.42268041237113,
+              "samples": 97
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 47.25274725274725,
+              "samples": 182
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 46.15384615384615,
+              "samples": 143
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 46,
+              "samples": 100
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 45.16129032258064,
+              "samples": 93
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 44.91017964071856,
+              "samples": 167
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 182,
+              "wins": 88,
+              "losses": 92,
+              "winRate": 48.888888888888886
+            }
+          ]
+        },
+        "h10": {
+          "horizonMin": 10,
+          "horizonBars": 2,
+          "filter": {
+            "entryThreshold": 0.18,
+            "minAgreement": 0.6
+          },
+          "observations": 667,
+          "activeSignals": 144,
+          "coverage": 21.58920539730135,
+          "winRate": 53.47222222222222,
+          "wins": 77,
+          "losses": 66,
+          "scratches": 1,
+          "avgSignedReturn": 0.029005194576531043,
+          "profitFactor": 1.3946325519219434,
+          "equity": {
+            "final": 104.22194008986374,
+            "returnPct": 4.221940089863736,
+            "maxDrawdownPct": 2.4671622867740757
+          },
+          "buckets": {
+            "strong": {
+              "count": 5,
+              "winRate": 80
+            },
+            "moderate": {
+              "count": 68,
+              "winRate": 61.76470588235294
+            },
+            "light": {
+              "count": 71,
+              "winRate": 43.66197183098591
+            }
+          },
+          "sessions": [
+            {
+              "session": "London",
+              "total": 47,
+              "winRate": 55.319148936170215
+            },
+            {
+              "session": "NY Open",
+              "total": 46,
+              "winRate": 50
+            },
+            {
+              "session": "Off-Hours",
+              "total": 44,
+              "winRate": 50
+            },
+            {
+              "session": "Asia",
+              "total": 7,
+              "winRate": 85.71428571428571
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "volume",
+              "accuracy": 64.34782608695652,
+              "samples": 115
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 54.166666666666664,
+              "samples": 144
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 53.57142857142857,
+              "samples": 56
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 53.47222222222222,
+              "samples": 144
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 53.191489361702125,
+              "samples": 141
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 52.98507462686567,
+              "samples": 134
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 52.51798561151079,
+              "samples": 139
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 52.083333333333336,
+              "samples": 144
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 50.649350649350644,
+              "samples": 77
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 50,
+              "samples": 98
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 50,
+              "samples": 78
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 47.91666666666667,
+              "samples": 96
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 47.41379310344828,
+              "samples": 116
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 46.236559139784944,
+              "samples": 93
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 44,
+              "samples": 75
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 144,
+              "wins": 77,
+              "losses": 66,
+              "winRate": 53.84615384615385
+            }
+          ]
+        },
+        "h15": {
+          "horizonMin": 15,
+          "horizonBars": 3,
+          "filter": {
+            "entryThreshold": 0.24,
+            "minAgreement": 0.66
+          },
+          "observations": 666,
+          "activeSignals": 80,
+          "coverage": 12.012012012012011,
+          "winRate": 60,
+          "wins": 48,
+          "losses": 32,
+          "scratches": 0,
+          "avgSignedReturn": 0.1197280977809813,
+          "profitFactor": 3.0511904347473022,
+          "equity": {
+            "final": 110.00881682155203,
+            "returnPct": 10.008816821552031,
+            "maxDrawdownPct": 1.2741587300050004
+          },
+          "buckets": {
+            "strong": {
+              "count": 5,
+              "winRate": 80
+            },
+            "moderate": {
+              "count": 68,
+              "winRate": 61.76470588235294
+            },
+            "light": {
+              "count": 7,
+              "winRate": 28.57142857142857
+            }
+          },
+          "sessions": [
+            {
+              "session": "London",
+              "total": 30,
+              "winRate": 63.33333333333333
+            },
+            {
+              "session": "NY Open",
+              "total": 26,
+              "winRate": 73.07692307692307
+            },
+            {
+              "session": "Off-Hours",
+              "total": 22,
+              "winRate": 36.36363636363637
+            },
+            {
+              "session": "Asia",
+              "total": 2,
+              "winRate": 100
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "volume",
+              "accuracy": 70.1492537313433,
+              "samples": 67
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 63.1578947368421,
+              "samples": 38
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 62.5,
+              "samples": 64
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 61.702127659574465,
+              "samples": 47
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 60,
+              "samples": 80
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 60,
+              "samples": 80
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 60,
+              "samples": 80
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 60,
+              "samples": 80
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 58.97435897435898,
+              "samples": 78
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 56.00000000000001,
+              "samples": 75
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 51.02040816326531,
+              "samples": 49
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 48.57142857142857,
+              "samples": 70
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 43.13725490196079,
+              "samples": 51
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 42.857142857142854,
+              "samples": 35
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 32.5,
+              "samples": 40
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 80,
+              "wins": 48,
+              "losses": 32,
+              "winRate": 60
+            }
+          ]
+        }
+      },
+      "candleCount": 721,
+      "issues": [
+        "✅  No anomalies detected"
+      ]
+    },
+    "ETH": {
+      "results": {
+        "h1": {
+          "horizonMin": 1,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.1,
+            "minAgreement": 0.52
+          },
+          "observations": 668,
+          "activeSignals": 286,
+          "coverage": 42.81437125748503,
+          "winRate": 49.65034965034965,
+          "wins": 142,
+          "losses": 142,
+          "scratches": 2,
+          "avgSignedReturn": 0.009402044636287925,
+          "profitFactor": 1.1777908321573962,
+          "equity": {
+            "final": 102.68377894387432,
+            "returnPct": 2.683778943874316,
+            "maxDrawdownPct": 2.2849299471493056
+          },
+          "buckets": {
+            "strong": {
+              "count": 3,
+              "winRate": 100
+            },
+            "moderate": {
+              "count": 96,
+              "winRate": 44.79166666666667
+            },
+            "light": {
+              "count": 187,
+              "winRate": 51.33689839572193
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 87,
+              "winRate": 50.57471264367817
+            },
+            {
+              "session": "NY Open",
+              "total": 79,
+              "winRate": 49.36708860759494
+            },
+            {
+              "session": "Asia",
+              "total": 66,
+              "winRate": 46.96969696969697
+            },
+            {
+              "session": "London",
+              "total": 54,
+              "winRate": 51.85185185185185
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 53.78787878787878,
+              "samples": 132
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 52.94117647058824,
+              "samples": 221
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 52.892561983471076,
+              "samples": 121
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 52.800000000000004,
+              "samples": 125
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 51.127819548872175,
+              "samples": 266
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 49.30875576036866,
+              "samples": 217
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 49.19786096256685,
+              "samples": 187
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 49.11032028469751,
+              "samples": 281
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 49.11032028469751,
+              "samples": 281
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 48.91304347826087,
+              "samples": 276
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 48.61111111111111,
+              "samples": 72
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 48.6013986013986,
+              "samples": 286
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 48.57142857142857,
+              "samples": 210
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 47.30538922155689,
+              "samples": 167
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 47.199999999999996,
+              "samples": 250
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 286,
+              "wins": 142,
+              "losses": 142,
+              "winRate": 50
+            }
+          ]
+        },
+        "h5": {
+          "horizonMin": 5,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.14,
+            "minAgreement": 0.56
+          },
+          "observations": 668,
+          "activeSignals": 221,
+          "coverage": 33.08383233532935,
+          "winRate": 51.58371040723983,
+          "wins": 114,
+          "losses": 106,
+          "scratches": 1,
+          "avgSignedReturn": 0.016950768069893315,
+          "profitFactor": 1.3204056779206055,
+          "equity": {
+            "final": 103.7807235673978,
+            "returnPct": 3.7807235673978,
+            "maxDrawdownPct": 1.8869911170100089
+          },
+          "buckets": {
+            "strong": {
+              "count": 3,
+              "winRate": 100
+            },
+            "moderate": {
+              "count": 94,
+              "winRate": 44.680851063829785
+            },
+            "light": {
+              "count": 124,
+              "winRate": 55.64516129032258
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 65,
+              "winRate": 52.307692307692314
+            },
+            {
+              "session": "NY Open",
+              "total": 63,
+              "winRate": 52.38095238095239
+            },
+            {
+              "session": "Asia",
+              "total": 50,
+              "winRate": 50
+            },
+            {
+              "session": "London",
+              "total": 43,
+              "winRate": 51.162790697674424
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "mfi",
+              "accuracy": 52.72727272727272,
+              "samples": 165
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 52.63157894736842,
+              "samples": 95
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 52.63157894736842,
+              "samples": 95
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 51.515151515151516,
+              "samples": 165
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 51.141552511415526,
+              "samples": 219
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 51.041666666666664,
+              "samples": 96
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 50.92592592592593,
+              "samples": 216
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 50.67567567567568,
+              "samples": 148
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 49.760765550239235,
+              "samples": 209
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 49.30875576036866,
+              "samples": 217
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 49.25373134328358,
+              "samples": 67
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 48.80952380952381,
+              "samples": 168
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 48.41628959276018,
+              "samples": 221
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 48.205128205128204,
+              "samples": 195
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 48.06201550387597,
+              "samples": 129
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 221,
+              "wins": 114,
+              "losses": 106,
+              "winRate": 51.81818181818182
+            }
+          ]
+        },
+        "h10": {
+          "horizonMin": 10,
+          "horizonBars": 2,
+          "filter": {
+            "entryThreshold": 0.18,
+            "minAgreement": 0.6
+          },
+          "observations": 667,
+          "activeSignals": 166,
+          "coverage": 24.887556221889056,
+          "winRate": 54.81927710843374,
+          "wins": 91,
+          "losses": 75,
+          "scratches": 0,
+          "avgSignedReturn": 0.034946364308153496,
+          "profitFactor": 1.4997015705926888,
+          "equity": {
+            "final": 105.91128026478171,
+            "returnPct": 5.911280264781709,
+            "maxDrawdownPct": 2.2708745953972804
+          },
+          "buckets": {
+            "strong": {
+              "count": 3,
+              "winRate": 100
+            },
+            "moderate": {
+              "count": 93,
+              "winRate": 55.91397849462365
+            },
+            "light": {
+              "count": 70,
+              "winRate": 51.42857142857142
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 47,
+              "winRate": 53.191489361702125
+            },
+            {
+              "session": "NY Open",
+              "total": 45,
+              "winRate": 42.22222222222222
+            },
+            {
+              "session": "Asia",
+              "total": 38,
+              "winRate": 63.1578947368421
+            },
+            {
+              "session": "London",
+              "total": 36,
+              "winRate": 63.888888888888886
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 60.60606060606061,
+              "samples": 66
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 60,
+              "samples": 55
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 56.896551724137936,
+              "samples": 116
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 55.10204081632652,
+              "samples": 147
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 54.54545454545454,
+              "samples": 165
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 54.54545454545454,
+              "samples": 165
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 54.32098765432099,
+              "samples": 162
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 53.43511450381679,
+              "samples": 131
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 53.03030303030303,
+              "samples": 66
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 52.83018867924528,
+              "samples": 159
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 52,
+              "samples": 75
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 50.602409638554214,
+              "samples": 166
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 50.39370078740157,
+              "samples": 127
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 48.97959183673469,
+              "samples": 98
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 45.90163934426229,
+              "samples": 122
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 166,
+              "wins": 91,
+              "losses": 75,
+              "winRate": 54.81927710843374
+            }
+          ]
+        },
+        "h15": {
+          "horizonMin": 15,
+          "horizonBars": 3,
+          "filter": {
+            "entryThreshold": 0.24,
+            "minAgreement": 0.66
+          },
+          "observations": 666,
+          "activeSignals": 103,
+          "coverage": 15.465465465465467,
+          "winRate": 53.398058252427184,
+          "wins": 55,
+          "losses": 48,
+          "scratches": 0,
+          "avgSignedReturn": 0.08193628412422335,
+          "profitFactor": 1.8714818180586688,
+          "equity": {
+            "final": 108.71633822099456,
+            "returnPct": 8.716338220994558,
+            "maxDrawdownPct": 3.027825976266402
+          },
+          "buckets": {
+            "strong": {
+              "count": 3,
+              "winRate": 100
+            },
+            "moderate": {
+              "count": 92,
+              "winRate": 52.17391304347826
+            },
+            "light": {
+              "count": 8,
+              "winRate": 50
+            }
+          },
+          "sessions": [
+            {
+              "session": "London",
+              "total": 29,
+              "winRate": 68.96551724137932
+            },
+            {
+              "session": "Off-Hours",
+              "total": 26,
+              "winRate": 42.30769230769231
+            },
+            {
+              "session": "NY Open",
+              "total": 26,
+              "winRate": 50
+            },
+            {
+              "session": "Asia",
+              "total": 22,
+              "winRate": 50
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 76.66666666666667,
+              "samples": 30
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 67.44186046511628,
+              "samples": 43
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 57.89473684210527,
+              "samples": 95
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 55.42168674698795,
+              "samples": 83
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 53.398058252427184,
+              "samples": 103
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 53.398058252427184,
+              "samples": 103
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 53.398058252427184,
+              "samples": 103
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 52,
+              "samples": 50
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 50.79365079365079,
+              "samples": 63
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 50,
+              "samples": 42
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 50,
+              "samples": 100
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 48.68421052631579,
+              "samples": 76
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 48.64864864864865,
+              "samples": 74
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 46.601941747572816,
+              "samples": 103
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 42.857142857142854,
+              "samples": 84
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 103,
+              "wins": 55,
+              "losses": 48,
+              "winRate": 53.398058252427184
+            }
+          ]
+        }
+      },
+      "candleCount": 721,
+      "issues": [
+        "✅  No anomalies detected"
+      ]
+    },
+    "SOL": {
+      "results": {
+        "h1": {
+          "horizonMin": 1,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.12,
+            "minAgreement": 0.48
+          },
+          "observations": 668,
+          "activeSignals": 246,
+          "coverage": 36.82634730538922,
+          "winRate": 48.3739837398374,
+          "wins": 119,
+          "losses": 111,
+          "scratches": 16,
+          "avgSignedReturn": 0.004865429581547722,
+          "profitFactor": 1.0736488905088124,
+          "equity": {
+            "final": 101.14194106429997,
+            "returnPct": 1.1419410642999708,
+            "maxDrawdownPct": 2.942912612946282
+          },
+          "buckets": {
+            "strong": {
+              "count": 2,
+              "winRate": 50
+            },
+            "moderate": {
+              "count": 79,
+              "winRate": 44.303797468354425
+            },
+            "light": {
+              "count": 165,
+              "winRate": 50.303030303030305
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 77,
+              "winRate": 48.05194805194805
+            },
+            {
+              "session": "NY Open",
+              "total": 72,
+              "winRate": 51.388888888888886
+            },
+            {
+              "session": "London",
+              "total": 59,
+              "winRate": 42.3728813559322
+            },
+            {
+              "session": "Asia",
+              "total": 38,
+              "winRate": 52.63157894736842
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "structure",
+              "accuracy": 52.88461538461539,
+              "samples": 104
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 52.77777777777778,
+              "samples": 108
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 52.47933884297521,
+              "samples": 242
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 52.4390243902439,
+              "samples": 246
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 51.92307692307693,
+              "samples": 208
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 51.69491525423729,
+              "samples": 236
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 51.42857142857142,
+              "samples": 210
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 51.21951219512195,
+              "samples": 123
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 50.81300813008131,
+              "samples": 246
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 49.72677595628415,
+              "samples": 183
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 49.122807017543856,
+              "samples": 171
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 47.74193548387097,
+              "samples": 155
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 47.08994708994709,
+              "samples": 189
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 47.008547008547005,
+              "samples": 234
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 38.88888888888889,
+              "samples": 72
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 246,
+              "wins": 119,
+              "losses": 111,
+              "winRate": 51.73913043478261
+            }
+          ]
+        },
+        "h5": {
+          "horizonMin": 5,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.16,
+            "minAgreement": 0.5
+          },
+          "observations": 668,
+          "activeSignals": 189,
+          "coverage": 28.29341317365269,
+          "winRate": 47.08994708994709,
+          "wins": 89,
+          "losses": 88,
+          "scratches": 12,
+          "avgSignedReturn": 0.0034047725151480327,
+          "profitFactor": 1.0456679776006643,
+          "equity": {
+            "final": 100.58750760276725,
+            "returnPct": 0.5875076027672463,
+            "maxDrawdownPct": 2.830037238344967
+          },
+          "buckets": {
+            "strong": {
+              "count": 2,
+              "winRate": 50
+            },
+            "moderate": {
+              "count": 79,
+              "winRate": 44.303797468354425
+            },
+            "light": {
+              "count": 108,
+              "winRate": 49.074074074074076
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 60,
+              "winRate": 48.333333333333336
+            },
+            {
+              "session": "NY Open",
+              "total": 54,
+              "winRate": 48.148148148148145
+            },
+            {
+              "session": "London",
+              "total": 47,
+              "winRate": 42.5531914893617
+            },
+            {
+              "session": "Asia",
+              "total": 28,
+              "winRate": 50
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "vwap",
+              "accuracy": 53.48837209302325,
+              "samples": 172
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 52.94117647058824,
+              "samples": 85
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 52.38095238095239,
+              "samples": 84
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 51.85185185185185,
+              "samples": 189
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 51.533742331288344,
+              "samples": 163
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 51.33689839572193,
+              "samples": 187
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 51.24999999999999,
+              "samples": 80
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 50.79365079365079,
+              "samples": 189
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 50.54347826086957,
+              "samples": 184
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 48.507462686567166,
+              "samples": 134
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 47.712418300653596,
+              "samples": 153
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 47.24409448818898,
+              "samples": 127
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 46.44808743169399,
+              "samples": 183
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 46.26865671641791,
+              "samples": 134
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 39.39393939393939,
+              "samples": 66
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 189,
+              "wins": 89,
+              "losses": 88,
+              "winRate": 50.282485875706215
+            }
+          ]
+        },
+        "h10": {
+          "horizonMin": 10,
+          "horizonBars": 2,
+          "filter": {
+            "entryThreshold": 0.2,
+            "minAgreement": 0.54
+          },
+          "observations": 667,
+          "activeSignals": 124,
+          "coverage": 18.590704647676162,
+          "winRate": 45.96774193548387,
+          "wins": 57,
+          "losses": 62,
+          "scratches": 5,
+          "avgSignedReturn": 0.00041596202074401764,
+          "profitFactor": 1.0039937137326436,
+          "equity": {
+            "final": 99.98048315646321,
+            "returnPct": -0.01951684353679184,
+            "maxDrawdownPct": 4.3219148210185
+          },
+          "buckets": {
+            "strong": {
+              "count": 2,
+              "winRate": 100
+            },
+            "moderate": {
+              "count": 77,
+              "winRate": 42.857142857142854
+            },
+            "light": {
+              "count": 45,
+              "winRate": 48.888888888888886
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 43,
+              "winRate": 37.2093023255814
+            },
+            {
+              "session": "NY Open",
+              "total": 33,
+              "winRate": 42.42424242424242
+            },
+            {
+              "session": "London",
+              "total": 29,
+              "winRate": 55.172413793103445
+            },
+            {
+              "session": "Asia",
+              "total": 19,
+              "winRate": 57.89473684210527
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 54.347826086956516,
+              "samples": 46
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 53.63636363636364,
+              "samples": 110
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 52.083333333333336,
+              "samples": 48
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 51.61290322580645,
+              "samples": 124
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 50.602409638554214,
+              "samples": 83
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 50,
+              "samples": 52
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 49.193548387096776,
+              "samples": 124
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 49.193548387096776,
+              "samples": 124
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 48.62385321100918,
+              "samples": 109
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 48.148148148148145,
+              "samples": 54
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 47.540983606557376,
+              "samples": 122
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 47.25274725274725,
+              "samples": 91
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 45.45454545454545,
+              "samples": 121
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 45.1219512195122,
+              "samples": 82
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 43.56435643564357,
+              "samples": 101
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 124,
+              "wins": 57,
+              "losses": 62,
+              "winRate": 47.89915966386555
+            }
+          ]
+        },
+        "h15": {
+          "horizonMin": 15,
+          "horizonBars": 3,
+          "filter": {
+            "entryThreshold": 0.26,
+            "minAgreement": 0.62
+          },
+          "observations": 666,
+          "activeSignals": 75,
+          "coverage": 11.26126126126126,
+          "winRate": 48,
+          "wins": 36,
+          "losses": 34,
+          "scratches": 5,
+          "avgSignedReturn": 0.02217862048601328,
+          "profitFactor": 1.174041803512662,
+          "equity": {
+            "final": 101.59913826917072,
+            "returnPct": 1.599138269170723,
+            "maxDrawdownPct": 5.289715040442786
+          },
+          "buckets": {
+            "strong": {
+              "count": 2,
+              "winRate": 100
+            },
+            "moderate": {
+              "count": 73,
+              "winRate": 46.57534246575342
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 25,
+              "winRate": 32
+            },
+            {
+              "session": "London",
+              "total": 20,
+              "winRate": 65
+            },
+            {
+              "session": "NY Open",
+              "total": 18,
+              "winRate": 38.88888888888889
+            },
+            {
+              "session": "Asia",
+              "total": 12,
+              "winRate": 66.66666666666666
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "ichimoku",
+              "accuracy": 56.00000000000001,
+              "samples": 75
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 55.223880597014926,
+              "samples": 67
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 54.666666666666664,
+              "samples": 75
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 54.666666666666664,
+              "samples": 75
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 54.54545454545454,
+              "samples": 66
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 54.285714285714285,
+              "samples": 35
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 53.333333333333336,
+              "samples": 75
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 53.333333333333336,
+              "samples": 75
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 49.056603773584904,
+              "samples": 53
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 48.275862068965516,
+              "samples": 58
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 48,
+              "samples": 25
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 44.06779661016949,
+              "samples": 59
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 42.22222222222222,
+              "samples": 45
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 36.666666666666664,
+              "samples": 30
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 32.25806451612903,
+              "samples": 31
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 75,
+              "wins": 36,
+              "losses": 34,
+              "winRate": 51.42857142857142
+            }
+          ]
+        }
+      },
+      "candleCount": 721,
+      "issues": [
+        "✅  No anomalies detected"
+      ]
+    },
+    "XRP": {
+      "results": {
+        "h1": {
+          "horizonMin": 1,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.08,
+            "minAgreement": 0.52
+          },
+          "observations": 668,
+          "activeSignals": 281,
+          "coverage": 42.06586826347306,
+          "winRate": 47.686832740213525,
+          "wins": 134,
+          "losses": 146,
+          "scratches": 1,
+          "avgSignedReturn": -0.012061098414265132,
+          "profitFactor": 0.8352370869233768,
+          "equity": {
+            "final": 96.61101486606621,
+            "returnPct": -3.3889851339337866,
+            "maxDrawdownPct": 4.786177137871434
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 66.66666666666666
+            },
+            "moderate": {
+              "count": 83,
+              "winRate": 45.78313253012048
+            },
+            "light": {
+              "count": 171,
+              "winRate": 47.953216374269005
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 99,
+              "winRate": 48.484848484848484
+            },
+            {
+              "session": "NY Open",
+              "total": 79,
+              "winRate": 53.16455696202531
+            },
+            {
+              "session": "London",
+              "total": 53,
+              "winRate": 45.28301886792453
+            },
+            {
+              "session": "Asia",
+              "total": 50,
+              "winRate": 40
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "rsi",
+              "accuracy": 62.16216216216216,
+              "samples": 74
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 52.313167259786475,
+              "samples": 281
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 51.35135135135135,
+              "samples": 185
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 51.14503816793893,
+              "samples": 131
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 50.191570881226056,
+              "samples": 261
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 49.327354260089685,
+              "samples": 223
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 49.06832298136646,
+              "samples": 161
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 48.760330578512395,
+              "samples": 242
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 48.59154929577465,
+              "samples": 142
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 48.484848484848484,
+              "samples": 198
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 47.82608695652174,
+              "samples": 276
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 46.81647940074906,
+              "samples": 267
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 46.42857142857143,
+              "samples": 252
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 46.42857142857143,
+              "samples": 280
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 42.926829268292686,
+              "samples": 205
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 281,
+              "wins": 134,
+              "losses": 146,
+              "winRate": 47.85714285714286
+            }
+          ]
+        },
+        "h5": {
+          "horizonMin": 5,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.12,
+            "minAgreement": 0.54
+          },
+          "observations": 668,
+          "activeSignals": 221,
+          "coverage": 33.08383233532935,
+          "winRate": 48.86877828054298,
+          "wins": 108,
+          "losses": 112,
+          "scratches": 1,
+          "avgSignedReturn": -0.008928115597181454,
+          "profitFactor": 0.879399994352413,
+          "equity": {
+            "final": 97.99721776568083,
+            "returnPct": -2.00278223431917,
+            "maxDrawdownPct": 3.1128352101956094
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 66.66666666666666
+            },
+            "moderate": {
+              "count": 80,
+              "winRate": 45
+            },
+            "light": {
+              "count": 135,
+              "winRate": 50.37037037037037
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 73,
+              "winRate": 47.94520547945205
+            },
+            {
+              "session": "NY Open",
+              "total": 67,
+              "winRate": 52.23880597014925
+            },
+            {
+              "session": "London",
+              "total": 46,
+              "winRate": 45.65217391304348
+            },
+            {
+              "session": "Asia",
+              "total": 35,
+              "winRate": 48.57142857142857
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "rsi",
+              "accuracy": 62.857142857142854,
+              "samples": 70
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 52.94117647058824,
+              "samples": 221
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 51.85185185185185,
+              "samples": 189
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 50.967741935483865,
+              "samples": 155
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 50.480769230769226,
+              "samples": 208
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 50.467289719626166,
+              "samples": 107
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 49.740932642487046,
+              "samples": 193
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 49.54128440366973,
+              "samples": 218
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 48.701298701298704,
+              "samples": 154
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 48.598130841121495,
+              "samples": 214
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 47.27272727272727,
+              "samples": 220
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 46.51162790697674,
+              "samples": 129
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 46.08695652173913,
+              "samples": 115
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 45.54455445544555,
+              "samples": 202
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 44.76744186046512,
+              "samples": 172
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 221,
+              "wins": 108,
+              "losses": 112,
+              "winRate": 49.09090909090909
+            }
+          ]
+        },
+        "h10": {
+          "horizonMin": 10,
+          "horizonBars": 2,
+          "filter": {
+            "entryThreshold": 0.16,
+            "minAgreement": 0.56
+          },
+          "observations": 667,
+          "activeSignals": 175,
+          "coverage": 26.236881559220386,
+          "winRate": 47.42857142857143,
+          "wins": 83,
+          "losses": 92,
+          "scratches": 0,
+          "avgSignedReturn": -0.00008910256702268015,
+          "profitFactor": 0.9991875575861204,
+          "equity": {
+            "final": 99.88840212337456,
+            "returnPct": -0.11159787662543863,
+            "maxDrawdownPct": 4.610684433136533
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 83.33333333333334
+            },
+            "moderate": {
+              "count": 80,
+              "winRate": 50
+            },
+            "light": {
+              "count": 89,
+              "winRate": 42.69662921348314
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 60,
+              "winRate": 51.66666666666667
+            },
+            {
+              "session": "NY Open",
+              "total": 54,
+              "winRate": 42.592592592592595
+            },
+            {
+              "session": "London",
+              "total": 35,
+              "winRate": 57.14285714285714
+            },
+            {
+              "session": "Asia",
+              "total": 26,
+              "winRate": 34.61538461538461
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "macd",
+              "accuracy": 56.57142857142857,
+              "samples": 175
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 54.91803278688525,
+              "samples": 122
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 52.94117647058824,
+              "samples": 153
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 51.49700598802395,
+              "samples": 167
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 50,
+              "samples": 60
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 48.99328859060403,
+              "samples": 149
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 47.89915966386555,
+              "samples": 119
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 47.12643678160919,
+              "samples": 174
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 47.093023255813954,
+              "samples": 172
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 45.714285714285715,
+              "samples": 175
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 45.67901234567901,
+              "samples": 162
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 45.45454545454545,
+              "samples": 88
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 45.348837209302324,
+              "samples": 86
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 44.89795918367347,
+              "samples": 98
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 40.140845070422536,
+              "samples": 142
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 175,
+              "wins": 83,
+              "losses": 92,
+              "winRate": 47.42857142857143
+            }
+          ]
+        },
+        "h15": {
+          "horizonMin": 15,
+          "horizonBars": 3,
+          "filter": {
+            "entryThreshold": 0.22,
+            "minAgreement": 0.64
+          },
+          "observations": 666,
+          "activeSignals": 112,
+          "coverage": 16.816816816816818,
+          "winRate": 52.67857142857143,
+          "wins": 59,
+          "losses": 53,
+          "scratches": 0,
+          "avgSignedReturn": 0.03282342075853538,
+          "profitFactor": 1.2787763896079312,
+          "equity": {
+            "final": 103.65699709993577,
+            "returnPct": 3.656997099935765,
+            "maxDrawdownPct": 2.8692981420042973
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 83.33333333333334
+            },
+            "moderate": {
+              "count": 77,
+              "winRate": 50.649350649350644
+            },
+            "light": {
+              "count": 29,
+              "winRate": 51.724137931034484
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 35,
+              "winRate": 51.42857142857142
+            },
+            {
+              "session": "London",
+              "total": 31,
+              "winRate": 61.29032258064516
+            },
+            {
+              "session": "Off-Hours",
+              "total": 30,
+              "winRate": 50
+            },
+            {
+              "session": "Asia",
+              "total": 16,
+              "winRate": 43.75
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "macd",
+              "accuracy": 58.03571428571429,
+              "samples": 112
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 57.49999999999999,
+              "samples": 80
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 56.88073394495413,
+              "samples": 109
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 56.730769230769226,
+              "samples": 104
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 53.84615384615385,
+              "samples": 52
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 52.67857142857143,
+              "samples": 112
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 51.81818181818182,
+              "samples": 110
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 50,
+              "samples": 108
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 49.504950495049506,
+              "samples": 101
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 48.214285714285715,
+              "samples": 112
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 46.55172413793103,
+              "samples": 58
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 45.94594594594595,
+              "samples": 74
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 44.21052631578947,
+              "samples": 95
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 42.62295081967213,
+              "samples": 61
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 42.62295081967213,
+              "samples": 61
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 112,
+              "wins": 59,
+              "losses": 53,
+              "winRate": 52.67857142857143
+            }
+          ]
+        }
+      },
+      "candleCount": 721,
+      "issues": [
+        "✅  No anomalies detected"
+      ]
+    },
+    "DOGE": {
+      "results": {
+        "h1": {
+          "horizonMin": 1,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.22,
+            "minAgreement": 0.62
+          },
+          "observations": 668,
+          "activeSignals": 156,
+          "coverage": 23.353293413173652,
+          "winRate": 50.641025641025635,
+          "wins": 79,
+          "losses": 77,
+          "scratches": 0,
+          "avgSignedReturn": -0.009466797182431567,
+          "profitFactor": 0.8865337228551553,
+          "equity": {
+            "final": 98.49071840017056,
+            "returnPct": -1.5092815998294355,
+            "maxDrawdownPct": 2.4353842526618883
+          },
+          "buckets": {
+            "strong": {
+              "count": 4,
+              "winRate": 25
+            },
+            "moderate": {
+              "count": 112,
+              "winRate": 50.89285714285714
+            },
+            "light": {
+              "count": 40,
+              "winRate": 52.5
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 43,
+              "winRate": 48.837209302325576
+            },
+            {
+              "session": "Off-Hours",
+              "total": 42,
+              "winRate": 50
+            },
+            {
+              "session": "Asia",
+              "total": 37,
+              "winRate": 48.64864864864865
+            },
+            {
+              "session": "London",
+              "total": 34,
+              "winRate": 55.88235294117647
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 59.61538461538461,
+              "samples": 52
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 59.375,
+              "samples": 96
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 57.8125,
+              "samples": 64
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 54.54545454545454,
+              "samples": 44
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 53.14685314685315,
+              "samples": 143
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 50.68493150684932,
+              "samples": 146
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 50.641025641025635,
+              "samples": 156
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 50.641025641025635,
+              "samples": 156
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 50.641025641025635,
+              "samples": 156
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 49.358974358974365,
+              "samples": 156
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 49.193548387096776,
+              "samples": 124
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 48.51485148514851,
+              "samples": 101
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 48.031496062992126,
+              "samples": 127
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 47.91666666666667,
+              "samples": 144
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 47.16981132075472,
+              "samples": 53
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 156,
+              "wins": 79,
+              "losses": 77,
+              "winRate": 50.641025641025635
+            }
+          ]
+        },
+        "h5": {
+          "horizonMin": 5,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.26,
+            "minAgreement": 0.64
+          },
+          "observations": 668,
+          "activeSignals": 107,
+          "coverage": 16.017964071856287,
+          "winRate": 51.4018691588785,
+          "wins": 55,
+          "losses": 52,
+          "scratches": 0,
+          "avgSignedReturn": 0.011270696379868212,
+          "profitFactor": 1.1708960904803423,
+          "equity": {
+            "final": 101.1958227998141,
+            "returnPct": 1.1958227998140956,
+            "maxDrawdownPct": 1.11200696310773
+          },
+          "buckets": {
+            "strong": {
+              "count": 4,
+              "winRate": 25
+            },
+            "moderate": {
+              "count": 103,
+              "winRate": 52.42718446601942
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 31,
+              "winRate": 51.61290322580645
+            },
+            {
+              "session": "NY Open",
+              "total": 27,
+              "winRate": 51.85185185185185
+            },
+            {
+              "session": "Asia",
+              "total": 25,
+              "winRate": 52
+            },
+            {
+              "session": "London",
+              "total": 24,
+              "winRate": 50
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "stochrsi",
+              "accuracy": 61.29032258064516,
+              "samples": 62
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 60.60606060606061,
+              "samples": 33
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 57.14285714285714,
+              "samples": 28
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 55.10204081632652,
+              "samples": 49
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 53.06122448979592,
+              "samples": 98
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 52.94117647058824,
+              "samples": 85
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 52.336448598130836,
+              "samples": 107
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 51.4018691588785,
+              "samples": 107
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 51.4018691588785,
+              "samples": 107
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 51.4018691588785,
+              "samples": 107
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 50.48543689320388,
+              "samples": 103
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 50,
+              "samples": 42
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 50,
+              "samples": 74
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 47.77777777777778,
+              "samples": 90
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 47.05882352941176,
+              "samples": 102
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 107,
+              "wins": 55,
+              "losses": 52,
+              "winRate": 51.4018691588785
+            }
+          ]
+        },
+        "h10": {
+          "horizonMin": 10,
+          "horizonBars": 2,
+          "filter": {
+            "entryThreshold": 0.28,
+            "minAgreement": 0.66
+          },
+          "observations": 667,
+          "activeSignals": 77,
+          "coverage": 11.544227886056973,
+          "winRate": 38.961038961038966,
+          "wins": 30,
+          "losses": 47,
+          "scratches": 0,
+          "avgSignedReturn": -0.014150666137096483,
+          "profitFactor": 0.8801357957101203,
+          "equity": {
+            "final": 98.863718771576,
+            "returnPct": -1.1362812284239965,
+            "maxDrawdownPct": 4.724209796317798
+          },
+          "buckets": {
+            "strong": {
+              "count": 4,
+              "winRate": 25
+            },
+            "moderate": {
+              "count": 73,
+              "winRate": 39.726027397260275
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 23,
+              "winRate": 21.73913043478261
+            },
+            {
+              "session": "Off-Hours",
+              "total": 22,
+              "winRate": 54.54545454545454
+            },
+            {
+              "session": "London",
+              "total": 18,
+              "winRate": 38.88888888888889
+            },
+            {
+              "session": "Asia",
+              "total": 14,
+              "winRate": 42.857142857142854
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 80.95238095238095,
+              "samples": 21
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 68.42105263157895,
+              "samples": 19
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 62.857142857142854,
+              "samples": 35
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 54.54545454545454,
+              "samples": 44
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 50,
+              "samples": 62
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 42.42424242424242,
+              "samples": 66
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 42,
+              "samples": 50
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 40.54054054054054,
+              "samples": 74
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 40.27777777777778,
+              "samples": 72
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 38.961038961038966,
+              "samples": 77
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 38.961038961038966,
+              "samples": 77
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 38.961038961038966,
+              "samples": 77
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 38.666666666666664,
+              "samples": 75
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 36.36363636363637,
+              "samples": 77
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 34.375,
+              "samples": 32
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 77,
+              "wins": 30,
+              "losses": 47,
+              "winRate": 38.961038961038966
+            }
+          ]
+        },
+        "h15": {
+          "horizonMin": 15,
+          "horizonBars": 3,
+          "filter": {
+            "entryThreshold": 0.3,
+            "minAgreement": 0.68
+          },
+          "observations": 666,
+          "activeSignals": 53,
+          "coverage": 7.957957957957958,
+          "winRate": 41.509433962264154,
+          "wins": 22,
+          "losses": 31,
+          "scratches": 0,
+          "avgSignedReturn": -0.09316606860653234,
+          "profitFactor": 0.5483560206711471,
+          "equity": {
+            "final": 95.11658188309913,
+            "returnPct": -4.88341811690087,
+            "maxDrawdownPct": 6.932249904189981
+          },
+          "buckets": {
+            "strong": {
+              "count": 4,
+              "winRate": 25
+            },
+            "moderate": {
+              "count": 49,
+              "winRate": 42.857142857142854
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 18,
+              "winRate": 27.77777777777778
+            },
+            {
+              "session": "Off-Hours",
+              "total": 15,
+              "winRate": 46.666666666666664
+            },
+            {
+              "session": "London",
+              "total": 12,
+              "winRate": 41.66666666666667
+            },
+            {
+              "session": "Asia",
+              "total": 8,
+              "winRate": 62.5
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 92.3076923076923,
+              "samples": 13
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 69.23076923076923,
+              "samples": 13
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 60.86956521739131,
+              "samples": 23
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 55.172413793103445,
+              "samples": 29
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 44.230769230769226,
+              "samples": 52
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 43.47826086956522,
+              "samples": 23
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 43.39622641509434,
+              "samples": 53
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 43.18181818181818,
+              "samples": 44
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 43.13725490196079,
+              "samples": 51
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 41.509433962264154,
+              "samples": 53
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 41.509433962264154,
+              "samples": 53
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 41.509433962264154,
+              "samples": 53
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 40,
+              "samples": 45
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 35.8974358974359,
+              "samples": 39
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 30.18867924528302,
+              "samples": 53
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 53,
+              "wins": 22,
+              "losses": 31,
+              "winRate": 41.509433962264154
+            }
+          ]
+        }
+      },
+      "candleCount": 721,
+      "issues": [
+        "⚠️  h15m coverage=8.0% — filters too strict"
+      ]
+    },
+    "BNB": {
+      "results": {
+        "h1": {
+          "horizonMin": 1,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.08,
+            "minAgreement": 0.56
+          },
+          "observations": 668,
+          "activeSignals": 219,
+          "coverage": 32.78443113772455,
+          "winRate": 48.401826484018265,
+          "wins": 106,
+          "losses": 107,
+          "scratches": 6,
+          "avgSignedReturn": 0.003501480996009543,
+          "profitFactor": 1.0858207917362657,
+          "equity": {
+            "final": 100.7532461984925,
+            "returnPct": 0.753246198492505,
+            "maxDrawdownPct": 1.7024911250417065
+          },
+          "buckets": {
+            "strong": {
+              "count": 0,
+              "winRate": null
+            },
+            "moderate": {
+              "count": 62,
+              "winRate": 48.38709677419355
+            },
+            "light": {
+              "count": 136,
+              "winRate": 47.05882352941176
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 67,
+              "winRate": 52.23880597014925
+            },
+            {
+              "session": "Off-Hours",
+              "total": 64,
+              "winRate": 48.4375
+            },
+            {
+              "session": "Asia",
+              "total": 51,
+              "winRate": 47.05882352941176
+            },
+            {
+              "session": "London",
+              "total": 37,
+              "winRate": 43.24324324324324
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 54.81481481481482,
+              "samples": 135
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 52.23880597014925,
+              "samples": 134
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 51.85185185185185,
+              "samples": 54
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 51.010101010101,
+              "samples": 198
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 50.92592592592593,
+              "samples": 216
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 50.53763440860215,
+              "samples": 93
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 50.31055900621118,
+              "samples": 161
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 50.256410256410255,
+              "samples": 195
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 49.75845410628019,
+              "samples": 207
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 49.740932642487046,
+              "samples": 193
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 49.31506849315068,
+              "samples": 219
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 47.93814432989691,
+              "samples": 194
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 47.674418604651166,
+              "samples": 172
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 46.788990825688074,
+              "samples": 109
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 46.666666666666664,
+              "samples": 180
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 219,
+              "wins": 106,
+              "losses": 107,
+              "winRate": 49.76525821596244
+            }
+          ]
+        },
+        "h5": {
+          "horizonMin": 5,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.12,
+            "minAgreement": 0.58
+          },
+          "observations": 668,
+          "activeSignals": 186,
+          "coverage": 27.844311377245507,
+          "winRate": 48.38709677419355,
+          "wins": 90,
+          "losses": 90,
+          "scratches": 6,
+          "avgSignedReturn": 0.00652805396182226,
+          "profitFactor": 1.1717665769291397,
+          "equity": {
+            "final": 101.20814137319289,
+            "returnPct": 1.2081413731928876,
+            "maxDrawdownPct": 1.0994998831716944
+          },
+          "buckets": {
+            "strong": {
+              "count": 0,
+              "winRate": null
+            },
+            "moderate": {
+              "count": 62,
+              "winRate": 48.38709677419355
+            },
+            "light": {
+              "count": 124,
+              "winRate": 48.38709677419355
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 57,
+              "winRate": 49.122807017543856
+            },
+            {
+              "session": "Asia",
+              "total": 49,
+              "winRate": 44.89795918367347
+            },
+            {
+              "session": "NY Open",
+              "total": 47,
+              "winRate": 55.319148936170215
+            },
+            {
+              "session": "London",
+              "total": 33,
+              "winRate": 42.42424242424242
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "williamsR",
+              "accuracy": 52.67857142857143,
+              "samples": 112
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 51.829268292682926,
+              "samples": 164
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 51.26050420168067,
+              "samples": 119
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 51.075268817204304,
+              "samples": 186
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 50.98039215686274,
+              "samples": 51
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 50.37037037037037,
+              "samples": 135
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 50.28901734104046,
+              "samples": 173
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 50,
+              "samples": 184
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 49.664429530201346,
+              "samples": 149
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 49.39759036144578,
+              "samples": 166
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 49.162011173184354,
+              "samples": 179
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 48.05194805194805,
+              "samples": 77
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 47.59036144578313,
+              "samples": 166
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 47.31182795698925,
+              "samples": 93
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 46.666666666666664,
+              "samples": 150
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 186,
+              "wins": 90,
+              "losses": 90,
+              "winRate": 50
+            }
+          ]
+        },
+        "h10": {
+          "horizonMin": 10,
+          "horizonBars": 2,
+          "filter": {
+            "entryThreshold": 0.16,
+            "minAgreement": 0.6
+          },
+          "observations": 667,
+          "activeSignals": 149,
+          "coverage": 22.338830584707647,
+          "winRate": 50.33557046979866,
+          "wins": 75,
+          "losses": 73,
+          "scratches": 1,
+          "avgSignedReturn": 0.016616703201901954,
+          "profitFactor": 1.3149518513141882,
+          "equity": {
+            "final": 102.4849778439093,
+            "returnPct": 2.4849778439093058,
+            "maxDrawdownPct": 1.8970300138529346
+          },
+          "buckets": {
+            "strong": {
+              "count": 0,
+              "winRate": null
+            },
+            "moderate": {
+              "count": 61,
+              "winRate": 55.73770491803278
+            },
+            "light": {
+              "count": 88,
+              "winRate": 46.590909090909086
+            }
+          },
+          "sessions": [
+            {
+              "session": "Asia",
+              "total": 43,
+              "winRate": 34.883720930232556
+            },
+            {
+              "session": "Off-Hours",
+              "total": 41,
+              "winRate": 58.536585365853654
+            },
+            {
+              "session": "NY Open",
+              "total": 36,
+              "winRate": 58.333333333333336
+            },
+            {
+              "session": "London",
+              "total": 29,
+              "winRate": 51.724137931034484
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "mfi",
+              "accuracy": 56.19834710743802,
+              "samples": 121
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 56.09756097560976,
+              "samples": 41
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 54.36241610738255,
+              "samples": 149
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 54.08163265306123,
+              "samples": 98
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 52.56410256410257,
+              "samples": 78
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 51.724137931034484,
+              "samples": 87
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 51.14503816793893,
+              "samples": 131
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 50.71428571428571,
+              "samples": 140
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 50.69444444444444,
+              "samples": 144
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 50,
+              "samples": 100
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 49.25373134328358,
+              "samples": 134
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 48.333333333333336,
+              "samples": 120
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 47.01492537313433,
+              "samples": 134
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 46.62162162162162,
+              "samples": 148
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 38.70967741935484,
+              "samples": 62
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 149,
+              "wins": 75,
+              "losses": 73,
+              "winRate": 50.67567567567568
+            }
+          ]
+        },
+        "h15": {
+          "horizonMin": 15,
+          "horizonBars": 3,
+          "filter": {
+            "entryThreshold": 0.22,
+            "minAgreement": 0.64
+          },
+          "observations": 666,
+          "activeSignals": 89,
+          "coverage": 13.363363363363364,
+          "winRate": 50.56179775280899,
+          "wins": 45,
+          "losses": 44,
+          "scratches": 0,
+          "avgSignedReturn": 0.0641700271957946,
+          "profitFactor": 2.1202901662283655,
+          "equity": {
+            "final": 105.85302275318985,
+            "returnPct": 5.8530227531898475,
+            "maxDrawdownPct": 1.610391597108032
+          },
+          "buckets": {
+            "strong": {
+              "count": 0,
+              "winRate": null
+            },
+            "moderate": {
+              "count": 59,
+              "winRate": 54.23728813559322
+            },
+            "light": {
+              "count": 30,
+              "winRate": 43.333333333333336
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 27,
+              "winRate": 59.25925925925925
+            },
+            {
+              "session": "Asia",
+              "total": 24,
+              "winRate": 33.33333333333333
+            },
+            {
+              "session": "Off-Hours",
+              "total": 20,
+              "winRate": 65
+            },
+            {
+              "session": "London",
+              "total": 18,
+              "winRate": 44.44444444444444
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "mfi",
+              "accuracy": 58.666666666666664,
+              "samples": 75
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 56.92307692307692,
+              "samples": 65
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 56.666666666666664,
+              "samples": 30
+            },
+            {
+              "indicator": "structure",
+              "accuracy": 55.00000000000001,
+              "samples": 60
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 53.93258426966292,
+              "samples": 89
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 52.85714285714286,
+              "samples": 70
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 51.21951219512195,
+              "samples": 82
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 51.13636363636363,
+              "samples": 88
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 50.56179775280899,
+              "samples": 89
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 50,
+              "samples": 46
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 48,
+              "samples": 50
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 47.5,
+              "samples": 80
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 47.368421052631575,
+              "samples": 38
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 47.19101123595505,
+              "samples": 89
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 45.78313253012048,
+              "samples": 83
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 89,
+              "wins": 45,
+              "losses": 44,
+              "winRate": 50.56179775280899
+            }
+          ]
+        }
+      },
+      "candleCount": 721,
+      "issues": [
+        "✅  No anomalies detected"
+      ]
+    },
+    "HYPE": {
+      "results": {
+        "h1": {
+          "horizonMin": 1,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.4,
+            "minAgreement": 0.72
+          },
+          "observations": 668,
+          "activeSignals": 6,
+          "coverage": 0.8982035928143712,
+          "winRate": 83.33333333333334,
+          "wins": 5,
+          "losses": 1,
+          "scratches": 0,
+          "avgSignedReturn": 0.12362282834589422,
+          "profitFactor": 6.522231742210886,
+          "equity": {
+            "final": 100.74280356633246,
+            "returnPct": 0.742803566332455,
+            "maxDrawdownPct": 0.13431833445264943
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 83.33333333333334
+            },
+            "moderate": {
+              "count": 0,
+              "winRate": null
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 4,
+              "winRate": 75
+            },
+            {
+              "session": "Off-Hours",
+              "total": 1,
+              "winRate": 100
+            },
+            {
+              "session": "Asia",
+              "total": 1,
+              "winRate": 100
+            }
+          ],
+          "indicatorAccuracy": [],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 6,
+              "wins": 5,
+              "losses": 1,
+              "winRate": 83.33333333333334
+            }
+          ]
+        },
+        "h5": {
+          "horizonMin": 5,
+          "horizonBars": 1,
+          "filter": {
+            "entryThreshold": 0.38,
+            "minAgreement": 0.72
+          },
+          "observations": 668,
+          "activeSignals": 12,
+          "coverage": 1.7964071856287425,
+          "winRate": 50,
+          "wins": 6,
+          "losses": 6,
+          "scratches": 0,
+          "avgSignedReturn": 0.02717430352269315,
+          "profitFactor": 1.4114609175869424,
+          "equity": {
+            "final": 100.32417171619412,
+            "returnPct": 0.32417171619411533,
+            "maxDrawdownPct": 0.5221113214891773
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 83.33333333333334
+            },
+            "moderate": {
+              "count": 6,
+              "winRate": 16.666666666666664
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 5,
+              "winRate": 80
+            },
+            {
+              "session": "Asia",
+              "total": 3,
+              "winRate": 33.33333333333333
+            },
+            {
+              "session": "London",
+              "total": 2,
+              "winRate": 0
+            },
+            {
+              "session": "Off-Hours",
+              "total": 2,
+              "winRate": 50
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "ema",
+              "accuracy": 50,
+              "samples": 12
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 50,
+              "samples": 12
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 50,
+              "samples": 12
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 50,
+              "samples": 12
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 50,
+              "samples": 12
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 50,
+              "samples": 12
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 50,
+              "samples": 12
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 45.45454545454545,
+              "samples": 11
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 18.181818181818183,
+              "samples": 11
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 12,
+              "wins": 6,
+              "losses": 6,
+              "winRate": 50
+            }
+          ]
+        },
+        "h10": {
+          "horizonMin": 10,
+          "horizonBars": 2,
+          "filter": {
+            "entryThreshold": 0.35,
+            "minAgreement": 0.7
+          },
+          "observations": 667,
+          "activeSignals": 25,
+          "coverage": 3.7481259370314843,
+          "winRate": 32,
+          "wins": 8,
+          "losses": 16,
+          "scratches": 1,
+          "avgSignedReturn": -0.04529049208229519,
+          "profitFactor": 0.6773067122248958,
+          "equity": {
+            "final": 98.86156492468606,
+            "returnPct": -1.1384350753139358,
+            "maxDrawdownPct": 1.6003974870989406
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 33.33333333333333
+            },
+            "moderate": {
+              "count": 19,
+              "winRate": 31.57894736842105
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "NY Open",
+              "total": 8,
+              "winRate": 62.5
+            },
+            {
+              "session": "Off-Hours",
+              "total": 8,
+              "winRate": 25
+            },
+            {
+              "session": "Asia",
+              "total": 7,
+              "winRate": 14.285714285714285
+            },
+            {
+              "session": "London",
+              "total": 2,
+              "winRate": 0
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "structure",
+              "accuracy": 80,
+              "samples": 10
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 41.66666666666667,
+              "samples": 12
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 40,
+              "samples": 25
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 33.33333333333333,
+              "samples": 24
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 32,
+              "samples": 25
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 32,
+              "samples": 25
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 32,
+              "samples": 25
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 32,
+              "samples": 25
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 32,
+              "samples": 25
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 32,
+              "samples": 25
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 27.27272727272727,
+              "samples": 22
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 23.809523809523807,
+              "samples": 21
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 25,
+              "wins": 8,
+              "losses": 16,
+              "winRate": 33.33333333333333
+            }
+          ]
+        },
+        "h15": {
+          "horizonMin": 15,
+          "horizonBars": 3,
+          "filter": {
+            "entryThreshold": 0.32,
+            "minAgreement": 0.68
+          },
+          "observations": 666,
+          "activeSignals": 49,
+          "coverage": 7.3573573573573565,
+          "winRate": 26.53061224489796,
+          "wins": 13,
+          "losses": 36,
+          "scratches": 0,
+          "avgSignedReturn": -0.07553345121629651,
+          "profitFactor": 0.578564392891122,
+          "equity": {
+            "final": 96.34074187478703,
+            "returnPct": -3.659258125212972,
+            "maxDrawdownPct": 3.659258125212972
+          },
+          "buckets": {
+            "strong": {
+              "count": 6,
+              "winRate": 66.66666666666666
+            },
+            "moderate": {
+              "count": 43,
+              "winRate": 20.930232558139537
+            },
+            "light": {
+              "count": 0,
+              "winRate": null
+            }
+          },
+          "sessions": [
+            {
+              "session": "Off-Hours",
+              "total": 18,
+              "winRate": 27.77777777777778
+            },
+            {
+              "session": "Asia",
+              "total": 14,
+              "winRate": 7.142857142857142
+            },
+            {
+              "session": "NY Open",
+              "total": 12,
+              "winRate": 50
+            },
+            {
+              "session": "London",
+              "total": 5,
+              "winRate": 20
+            }
+          ],
+          "indicatorAccuracy": [
+            {
+              "indicator": "structure",
+              "accuracy": 93.75,
+              "samples": 16
+            },
+            {
+              "indicator": "bands",
+              "accuracy": 73.68421052631578,
+              "samples": 19
+            },
+            {
+              "indicator": "williamsR",
+              "accuracy": 72.22222222222221,
+              "samples": 18
+            },
+            {
+              "indicator": "mfi",
+              "accuracy": 53.333333333333336,
+              "samples": 45
+            },
+            {
+              "indicator": "stochrsi",
+              "accuracy": 52.63157894736842,
+              "samples": 19
+            },
+            {
+              "indicator": "momentum",
+              "accuracy": 36.84210526315789,
+              "samples": 38
+            },
+            {
+              "indicator": "vwap",
+              "accuracy": 33.33333333333333,
+              "samples": 45
+            },
+            {
+              "indicator": "macd",
+              "accuracy": 30.612244897959183,
+              "samples": 49
+            },
+            {
+              "indicator": "adx",
+              "accuracy": 27.500000000000004,
+              "samples": 40
+            },
+            {
+              "indicator": "ema",
+              "accuracy": 26.53061224489796,
+              "samples": 49
+            },
+            {
+              "indicator": "volume",
+              "accuracy": 26.53061224489796,
+              "samples": 49
+            },
+            {
+              "indicator": "persistence",
+              "accuracy": 26.53061224489796,
+              "samples": 49
+            },
+            {
+              "indicator": "ichimoku",
+              "accuracy": 26.53061224489796,
+              "samples": 49
+            },
+            {
+              "indicator": "rsi",
+              "accuracy": 25,
+              "samples": 20
+            },
+            {
+              "indicator": "obv",
+              "accuracy": 25,
+              "samples": 48
+            }
+          ],
+          "monthly": [
+            {
+              "month": "2026-04",
+              "trades": 49,
+              "wins": 13,
+              "losses": 36,
+              "winRate": 26.53061224489796
+            }
+          ]
+        }
+      },
+      "candleCount": 721,
+      "issues": [
+        "⚠️  h1m coverage=0.9% — filters too strict",
+        "⚠️  h5m coverage=1.8% — filters too strict",
+        "⚠️  h10m coverage=3.7% — filters too strict",
+        "⚠️  h15m coverage=7.4% — filters too strict"
+      ]
+    }
+  }
+}
