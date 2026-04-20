@@ -365,12 +365,12 @@
 
   async function fetchWithTimeout(url, timeoutMs = 8000, options = {}) {
     if (typeof AbortController === 'undefined') {
-      return fetch(url, options);
+      return (window.throttledFetch ?? fetch)(url, options);
     }
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(url, { ...options, signal: controller.signal });
+      return await (window.throttledFetch ?? fetch)(url, { ...options, signal: controller.signal });
     } finally {
       clearTimeout(timeoutId);
     }

@@ -28,8 +28,9 @@
   let candleChart   = null;       // lightweight-charts instance
   let donutChart    = null;       // Chart.js donut
   let scanRunning   = false;
-  let cfmExpanded   = new Set();
+  let cfmExpanded        = new Set();
   let predictionExpanded = new Set();
+  let _universeActiveTab = 'table'; // persists across auto-refresh re-renders
   let screenerSortBy = 'marketCap';
   let screenerSortDir = -1;
   let screenerMetaCache = {};
@@ -5233,6 +5234,9 @@
     const highSetups = allSetups.filter(s => s.strength === 'high');
     const contrarian = allSetups.filter(s => s.type.startsWith('contrarian_'));
 
+    // Save collapsible state before wiping DOM
+    const _debugOpen = document.getElementById('kalshi-debug-panel')?.open ?? false;
+
     content.innerHTML = `
       ${!predsLoaded ? `<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.3);border-radius:6px;margin-bottom:12px;font-size:13px;color:#ffc107"><div style="width:16px;height:16px;border:2px solid rgba(255,193,7,0.3);border-top-color:#ffc107;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></div><span>Scoring UP/DOWN markets\u2026</span></div>` : ''}
       ${buildQuickDecisionPanel(predArr)}
@@ -5352,26 +5356,40 @@
     // Populate accuracy badge immediately after render
     updateAccuracyBadge();
 
-    // Rerun button
+    // Restore Kalshi debug panel open state (lost on innerHTML replace)
+    if (_debugOpen) {
+      const _dp = document.getElementById('kalshi-debug-panel');
+      if (_dp) _dp.open = true;
+    }
+
+    // Rerun button — clear stuck in-flight so refresh always works
     const rerunBtn = document.getElementById('rerunPreds');
     if (rerunBtn) {
       rerunBtn.addEventListener('click', async () => {
-        if (predictionRunInFlight) return;
+        predictionRunInFlight = null; // cancel any stuck run
+        predsLoaded = false;
         rerunBtn.textContent = 'Analyzing...';
         rerunBtn.disabled = true;
-        // Show loading screen immediately so browser can paint before heavy work starts
         content.innerHTML = `<div class="loading-screen"><div class="loader-ring"></div><p>Scoring UP/DOWN markets — routing inner shells first, then loading deeper confirmations...</p></div>`;
-        // Yield two frames so the loading state is actually visible before CPU work begins
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        predsLoaded = false;
         await renderPredictions();
       });
     }
 
     content.querySelectorAll('[data-pred-toggle]').forEach(card => {
-      card.addEventListener('click', () => {
-        toggleExpanded(predictionExpanded, card.dataset.predToggle);
-        renderPredictions();
+      card.addEventListener('click', (e) => {
+        // Signal grid has its own onclick stopPropagation — don't intercept it
+        if (e.target.closest('.gs-wrap')) return;
+        const sym     = card.dataset.predToggle;
+        const opening = !card.classList.contains('expanded');
+        // Update state set
+        if (opening) predictionExpanded.add(sym); else predictionExpanded.delete(sym);
+        // Direct DOM toggle — no full re-render, no hover flicker
+        card.classList.toggle('expanded', opening);
+        const panel = card.querySelector('.pred-expand-panel');
+        if (panel) panel.classList.toggle('open', opening);
+        const icon  = card.querySelector('.pred-expand-icon');
+        if (icon)  icon.textContent = opening ? '−' : '+';
       });
     });
 
@@ -6310,24 +6328,26 @@
   // ================================================================
 
   function renderUniverse() {
+    const _t = _universeActiveTab;
     content.innerHTML = `
       <div class="universe-header">
         <h2 style="font-size:18px;font-weight:700;color:var(--color-text)">Market Universe</h2>
         <div class="universe-toggle">
-          <button class="universe-tab active" data-tab="table">Periodic Table</button>
-          <button class="universe-tab" data-tab="orbital">Orbital View</button>
-          <button class="universe-tab" data-tab="cex">CEX Flows</button>
+          <button class="universe-tab ${_t==='table'?'active':''}"   data-tab="table">Periodic Table</button>
+          <button class="universe-tab ${_t==='orbital'?'active':''}" data-tab="orbital">Orbital View</button>
+          <button class="universe-tab ${_t==='cex'?'active':''}"     data-tab="cex">CEX Flows</button>
         </div>
       </div>
-      <div id="universe-table"  class="universe-panel"></div>
-      <div id="universe-orbital" class="universe-panel" style="display:none">
+      <div id="universe-table"   class="universe-panel" style="${_t!=='table'?'display:none':''}"></div>
+      <div id="universe-orbital" class="universe-panel" style="${_t==='orbital'?'display:block':'display:none'}">
         <canvas id="orbital-canvas" width="900" height="620" style="max-width:100%;display:block;margin:0 auto"></canvas>
       </div>
-      <div id="universe-cex" class="universe-panel" style="display:none"></div>
+      <div id="universe-cex" class="universe-panel" style="${_t==='cex'?'display:block':'display:none'}"></div>
     `;
 
     document.querySelectorAll('.universe-tab').forEach(tab => {
       tab.addEventListener('click', () => {
+        _universeActiveTab = tab.dataset.tab; // persist across re-renders
         document.querySelectorAll('.universe-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         const tabName = tab.dataset.tab;
@@ -6341,6 +6361,9 @@
     });
 
     renderPeriodicTable();
+    // Restore the correct panel on re-render
+    if (_universeActiveTab === 'orbital') setTimeout(drawOrbital, 50);
+    if (_universeActiveTab === 'cex') renderCexFlow();
   }
 
   function renderPeriodicTable() {
