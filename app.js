@@ -1458,6 +1458,35 @@
     console.log(`[PredTracker] ${sym} ${stored.direction} → ${actual} ${entry.correct ? '✓' : '✗'} | ${pctMove.toFixed(3)}%`);
   });
 
+  // ── Live 1m candle → chart update ─────────────────────────────────────────
+  // candleWS fires candleWS:1mTick on every update to the current 1m candle
+  // and candleWS:1mClosed when a 1m candle seals. Both update the chart in
+  // real-time so the 1m chart view stays live without polling.
+
+  function _push1mToChart(sym, bucket) {
+    if (!chartSeries?.candles || chartTf !== '1m') return;
+    const coin = WATCHLIST.find(c => c.sym === sym);
+    if (!coin || coin.instrument !== chartCoin) return;
+    const bar = {
+      time:  Math.floor(bucket.t / 1000),
+      open:  bucket.o,
+      high:  bucket.h,
+      low:   bucket.l,
+      close: bucket.c,
+    };
+    try {
+      chartSeries.candles.update(bar);
+      chartSeries.volume.update({
+        time:  bar.time,
+        value: bucket.v,
+        color: bucket.c >= bucket.o ? 'rgba(38,212,126,0.3)' : 'rgba(255,75,110,0.3)',
+      });
+    } catch (_) { /* lightweight-charts may reject out-of-order bars */ }
+  }
+
+  window.addEventListener('candleWS:1mTick',   (e) => { if (e.detail) _push1mToChart(e.detail.sym, e.detail.bucket); });
+  window.addEventListener('candleWS:1mClosed', (e) => { if (e.detail) _push1mToChart(e.detail.sym, e.detail.bucket); });
+
   // ── Authoritative Kalshi settlement back-fill ─────────────────────────────
   // market-resolver.js polls the actual Kalshi API after settlement and fires
   // this event with the ground-truth outcome. Update matching _kalshiLog entries

@@ -1031,10 +1031,11 @@
         const gecko5m = bucketGeckoSeries(prices, volumes, geckoBucketMs('5m'));
         const gecko15m = bucketGeckoSeries(prices, volumes, geckoBucketMs('15m'));
         // Merge WS live 15m buckets as highest-priority anchor
-        const ws15m = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws15m  = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws1m   = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
         const candles = anchoredPoolCandles(cb5m, gecko5m, bin5m, mexc5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m, cb15m, gecko15m, bin15m, mexc15m, bybit15m, kucoin15m, bfnx15m, krk15m);
-        const candles1m = anchoredPoolCandles(cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        const candles1m = anchoredPoolCandles(ws1m, cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
         if (!candles.length && Array.isArray(existing.candles) && existing.candles.length) {
           candleCache[coin.sym] = existing;
           return;
@@ -1113,9 +1114,10 @@
           fetchKrakenTrades(coin.sym).catch(() => []),
           hasLongHistory ? Promise.resolve(existing.longHistory) : fetchGeckoMaxHistory(coin.geckoId).catch(() => existing.longHistory || []),
         ]);
-        const candles1m = anchoredPoolCandles(cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
-        const candles5m = anchoredPoolCandles(cb5m, cdc5m, mexc5m, bin5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const ws15m_b = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws1m    = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
+        const candles1m  = anchoredPoolCandles(ws1m, cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        const candles5m  = anchoredPoolCandles(cb5m, cdc5m, mexc5m, bin5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m_b, cb15m, cdc15m, mexc15m, bin15m, bybit15m, kucoin15m, bfnx15m, krk15m);
         // Book priority: Coinbase → CDC → MEXC → ByBit → KuCoin → Bitfinex → Kraken
         const book = cbBook?.bids?.length ? cbBook : cdcBook?.bids?.length ? cdcBook : mexcBook?.bids?.length ? mexcBook : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;

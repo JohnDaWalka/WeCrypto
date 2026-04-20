@@ -7,9 +7,10 @@
 (function () {
   'use strict';
 
-  const WS_URL       = 'wss://advanced-trade-ws.coinbase.com';
-  const BUCKET_MS    = 15 * 60 * 1000;   // 15-minute window
-  const MAX_BUCKETS  = 200;               // ~50 hours of history per coin
+  const WS_URL          = 'wss://advanced-trade-ws.coinbase.com';
+  const BUCKET_MS       = 15 * 60 * 1000;  // 15-minute window
+  const MAX_BUCKETS     = 200;              // ~50 hours of 15m history per coin
+  const MAX_BUCKETS_1M  = 500;             // ~8 hours of 1m history per coin
 
   // Map Coinbase product_id → internal symbol
   const PRODUCTS = [
@@ -30,7 +31,8 @@
   const store = {};
   for (const sym of Object.values(SYM_MAP)) {
     store[sym] = {
-      buckets15m: [],   // [{t, o, h, l, c, v, closed}] newest last
+      buckets15m: [],   // [{t, o, h, l, c, v, closed}] newest last — 15-min buckets
+      buckets1m:  [],   // [{t, o, h, l, c, v, closed}] newest last — 1-min candles
       live1m:     null, // latest 1-min candle from WS
       ticker:     null  // latest ticker snapshot
     };
@@ -78,7 +80,47 @@
       bucket.v += c.v;
     }
 
-    store[sym].live1m = c;
+    // ── 1-minute bucket history ───────────────────────────────────────────
+    // Each distinct c.t is a 1m candle. When we see a newer t, the previous
+    // 1m candle is complete — fire candleWS:1mClosed and archive it.
+    const b1m   = store[sym].buckets1m;
+    const last1m = b1m.length ? b1m[b1m.length - 1] : null;
+
+    if (!last1m || last1m.t < c.t) {
+      // Previous 1m candle is now closed
+      if (last1m && !last1m.closed) {
+        last1m.closed = true;
+        try {
+          dispatchEvent(new CustomEvent('candleWS:1mClosed', {
+            detail: { sym, bucket: { ...last1m } }
+          }));
+        } catch { /* non-critical */ }
+      }
+      // Open new 1m candle
+      const newBucket1m = { t: c.t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v, closed: false };
+      b1m.push(newBucket1m);
+      if (b1m.length > MAX_BUCKETS_1M) b1m.shift();
+      // Fire tick for the new live candle
+      try {
+        dispatchEvent(new CustomEvent('candleWS:1mTick', {
+          detail: { sym, bucket: { ...newBucket1m } }
+        }));
+      } catch { /* non-critical */ }
+    } else if (last1m.t === c.t) {
+      // Update the live 1m candle in place
+      last1m.h = Math.max(last1m.h, c.h);
+      last1m.l = Math.min(last1m.l, c.l);
+      last1m.c = c.c;
+      last1m.v = c.v;  // CB sends the running total for the minute — don't accumulate
+      // Fire tick so chart can show the live candle updating
+      try {
+        dispatchEvent(new CustomEvent('candleWS:1mTick', {
+          detail: { sym, bucket: { ...last1m } }
+        }));
+      } catch { /* non-critical */ }
+    }
+
+    store[sym].live1m = { ...c };
   }
 
   // ─── Message handler ────────────────────────────────────────────────────────
@@ -215,6 +257,31 @@
     /** Last N closed 15-minute buckets */
     getLastN15m(sym, n = 20) {
       const closed = (store[sym]?.buckets15m || []).filter(b => b.closed);
+      return closed.slice(-n);
+    },
+
+    // ── 1-minute candle history ─────────────────────────────────────
+
+    /** All closed 1-minute candles for a coin (newest last, up to ~8h) */
+    getClosedBuckets1m(sym) {
+      return (store[sym]?.buckets1m || []).filter(b => b.closed);
+    },
+
+    /** All 1-minute candles including the live (open) current candle */
+    getAllBuckets1m(sym) {
+      return store[sym]?.buckets1m || [];
+    },
+
+    /** The currently-forming (open) 1-minute candle — updates every WS tick */
+    getLiveBucket1m(sym) {
+      const b = store[sym]?.buckets1m || [];
+      const last = b[b.length - 1];
+      return (last && !last.closed) ? last : null;
+    },
+
+    /** Last N closed 1m candles */
+    getLastN1m(sym, n = 60) {
+      const closed = (store[sym]?.buckets1m || []).filter(b => b.closed);
       return closed.slice(-n);
     },
 
