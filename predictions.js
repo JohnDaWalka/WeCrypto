@@ -395,7 +395,7 @@
       const waitMs = Math.max(0, minGapMs - (now - lastGeckoRequestAt));
       if (waitMs > 0) await wait(waitMs);
       lastGeckoRequestAt = Date.now();
-      const res = await fetchWithTimeout(`${GECKO_BASE}${path}`, 15000);
+      const res = await fetchWithTimeout(`${GECKO_BASE}${path}`, 4500);
       if (res.status === 429 && attempt < retries) {
         await wait((attempt + 1) * 2200);
         return run(attempt + 1);
@@ -3881,6 +3881,10 @@
         ]);
       } catch {}
     },
+    forceReset() {
+      // Unstick a hung predictionRunPromise so the next runAll() starts fresh.
+      predictionRunPromise = null;
+    },
     async runAll() {
       if (predictionRunPromise) return predictionRunPromise;
       predictionRunPromise = (async () => {
@@ -3890,7 +3894,7 @@
           Promise.race([p, new Promise(r => setTimeout(r, 12000))]);
         await Promise.allSettled([
           ...PREDICTION_COINS.map(c => withCoinTimeout(loadCoinData(c))),
-          fetchDerivatives()
+          Promise.race([fetchDerivatives(), new Promise(r => setTimeout(r, 8000))]) // 8s cap
         ]);
         // Yield between each coin's backtest to keep the UI thread responsive
         for (const coin of PREDICTION_COINS) {
