@@ -363,14 +363,14 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  async function fetchWithTimeout(url, timeoutMs = 8000, options = {}) {
+  async function fetchWithTimeout(url, timeoutMs = 4000, options = {}) {
     if (typeof AbortController === 'undefined') {
-      return fetch(url, options);
+      return (window.throttledFetch ?? fetch)(url, options);
     }
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(url, { ...options, signal: controller.signal });
+      return await (window.throttledFetch ?? fetch)(url, { ...options, signal: controller.signal });
     } finally {
       clearTimeout(timeoutId);
     }
@@ -389,15 +389,15 @@
   }
 
   async function fetchGeckoJSON(path, options = {}) {
-    const { minGapMs = 1800, retries = 4 } = options;
+    const { minGapMs = 1800, retries = 1 } = options;  // max 1 retry — 4 retries created 22s+ backlog
     const run = async (attempt = 0) => {
       const now = Date.now();
       const waitMs = Math.max(0, minGapMs - (now - lastGeckoRequestAt));
       if (waitMs > 0) await wait(waitMs);
       lastGeckoRequestAt = Date.now();
-      const res = await fetchWithTimeout(`${GECKO_BASE}${path}`, 15000);
+      const res = await fetchWithTimeout(`${GECKO_BASE}${path}`, 4500);
       if (res.status === 429 && attempt < retries) {
-        await wait((attempt + 1) * 2200);
+        await wait(1500);   // flat 1.5s backoff instead of compounding
         return run(attempt + 1);
       }
       if (!res.ok) throw new Error(`Gecko ${res.status}`);
@@ -1031,10 +1031,11 @@
         const gecko5m = bucketGeckoSeries(prices, volumes, geckoBucketMs('5m'));
         const gecko15m = bucketGeckoSeries(prices, volumes, geckoBucketMs('15m'));
         // Merge WS live 15m buckets as highest-priority anchor
-        const ws15m = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws15m  = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws1m   = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
         const candles = anchoredPoolCandles(cb5m, gecko5m, bin5m, mexc5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m, cb15m, gecko15m, bin15m, mexc15m, bybit15m, kucoin15m, bfnx15m, krk15m);
-        const candles1m = anchoredPoolCandles(cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        const candles1m = anchoredPoolCandles(ws1m, cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
         if (!candles.length && Array.isArray(existing.candles) && existing.candles.length) {
           candleCache[coin.sym] = existing;
           return;
@@ -1113,9 +1114,10 @@
           fetchKrakenTrades(coin.sym).catch(() => []),
           hasLongHistory ? Promise.resolve(existing.longHistory) : fetchGeckoMaxHistory(coin.geckoId).catch(() => existing.longHistory || []),
         ]);
-        const candles1m = anchoredPoolCandles(cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
-        const candles5m = anchoredPoolCandles(cb5m, cdc5m, mexc5m, bin5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const ws15m_b = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws1m    = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
+        const candles1m  = anchoredPoolCandles(ws1m, cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        const candles5m  = anchoredPoolCandles(cb5m, cdc5m, mexc5m, bin5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m_b, cb15m, cdc15m, mexc15m, bin15m, bybit15m, kucoin15m, bfnx15m, krk15m);
         // Book priority: Coinbase → CDC → MEXC → ByBit → KuCoin → Bitfinex → Kraken
         const book = cbBook?.bids?.length ? cbBook : cdcBook?.bids?.length ? cdcBook : mexcBook?.bids?.length ? mexcBook : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
@@ -2776,29 +2778,58 @@
           // YES resolves if closePrice ≥ targetPriceNum (meet or exceed).
           // Compute model-implied P(closePrice ≥ ref) using normal CDF over
           // our projected price distribution (mean = target, sigma = ATR-range).
-          const k15m       = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
-          const kalshiRef  = k15m?.targetPriceNum ?? null;   // null while "TBD"
-          const kalshiYes  = k15m?.probability    ?? null;   // market's YES price (0–1)
+          const k15m        = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
+          const kalshiRef   = k15m?.targetPriceNum ?? null;   // null while "TBD"
+          const kalshiYes   = k15m?.probability    ?? null;   // market's YES price (0–1)
+          const kalshiStDir = k15m?.strikeDir       ?? 'above'; // 'above'|'below'
+          const isBelowK    = kalshiStDir === 'below';
 
           if (kalshiRef !== null && kalshiRef > 0) {
             // sigma: one-sigma price move over 15 min based on ATR
             const sigma = (atr * rangeScale) || (lastPrice * 0.003);
             // z: how far our projected target is above/below the reference threshold
             const z = (target - kalshiRef) / sigma;
-            // P(closePrice ≥ kalshiRef) — model-implied YES probability
-            const modelYesPct  = Math.round(normalCDF(z) * 100);
+            // P(closePrice ≥ kalshiRef) via normal CDF
+            // For 'above' contracts: YES = close ≥ ref  → modelYesPct = CDF(z)
+            // For 'below' contracts: YES = close <  ref → modelYesPct = 1 - CDF(z)
+            const pAbove       = normalCDF(z);
+            const modelYesPct  = Math.round((isBelowK ? 1 - pAbove : pAbove) * 100);
             const kalshiYesPct = kalshiYes !== null ? Math.round(kalshiYes * 100) : null;
             const divergence   = kalshiYesPct !== null ? Math.abs(modelYesPct - kalshiYesPct) : null;
             // Distance from current price to reference (+ means we need to rise to meet it)
             const gapPct       = ((kalshiRef - lastPrice) / lastPrice) * 100;
 
+            // Direction consistency check:
+            // modelYesPct ≥ 50 means model thinks YES wins.
+            // For 'above': YES=UP — so modelYesPct ≥ 50 should agree with dir='UP'
+            // For 'below': YES=DOWN — so modelYesPct ≥ 50 should agree with dir='DOWN'
+            const modelYesSide   = modelYesPct >= 50 ? 'YES' : 'NO';
+            const yesDir         = isBelowK ? 'DOWN' : 'UP';
+            const noDir          = isBelowK ? 'UP' : 'DOWN';
+            const cdfImpliedDir  = modelYesPct >= 50 ? yesDir : noDir;
+            const dirConflict    = dir !== 'FLAT' && cdfImpliedDir !== dir;
+            if (dirConflict) {
+              console.warn(
+                `[KalshiAlign] ⚠️ DIR CONFLICT ${options.sym}: ` +
+                `momentum=${dir} but CDF implies ${cdfImpliedDir} ` +
+                `(modelYesPct=${modelYesPct}% strike=${kalshiStDir} ref=${kalshiRef} price=${lastPrice.toFixed(2)})`
+              );
+            }
+
             acc[entry].kalshiAlign = {
-              ref:           kalshiRef,        // settlement threshold (≥ this → YES)
-              gapPct,                          // how far current price is from ref
-              modelYesPct,                     // our model's P(≥ ref)
-              kalshiYesPct,                    // market's YES price
-              divergence,                      // |model - market| in percentage points
-              // aligned = both agree direction; divergent = gap > 20pp (edge opportunity)
+              ref:           kalshiRef,
+              gapPct,
+              modelYesPct,
+              kalshiYesPct,
+              divergence,
+              strikeDir:     kalshiStDir,  // 'above'|'below' — passed through to snapshot
+              floorPrice:    k15m?.floorPrice  ?? kalshiRef,
+              capPrice:      k15m?.capPrice    ?? null,
+              strikeType:    k15m?.strikeType  ?? null,
+              ticker:        k15m?.ticker      ?? null,   // contract ticker for window alignment
+              closeTimeMs:   k15m?.closeTime   ? new Date(k15m.closeTime).getTime() : null,
+              dirConflict,      // true when momentum direction contradicts CDF direction
+              cdfImpliedDir,    // direction implied by model probability
               status: divergence === null ? 'no-market'
                     : divergence <= 12  ? 'aligned'
                     : divergence <= 25  ? 'soft-split'
@@ -3679,7 +3710,15 @@
   function computePrediction(coin, backtest = null) {
     const cache = candleCache[coin.sym];
     if (!cache || !cache.candles || cache.candles.length < 20) {
-      return { sym: coin.sym, signal: 'neutral', confidence: 0, error: 'Insufficient data' };
+      return {
+        sym: coin.sym, name: coin.name, color: coin.color, icon: coin.icon,
+        price: cache?.ticker?.usd || 0,
+        signal: 'neutral', confidence: 0, score: 0,
+        source: 'loading', candleCount: 0, updatedAt: '–',
+        error: 'Insufficient data',
+        indicators: {}, diagnostics: {}, volatility: { label: 'Unknown', atrPct: 0 },
+        projections: {}, reversalFlags: [], scalpSetups: [],
+      };
     }
 
     const baseModel = buildSignalModel(cache.candles, cache.book, cache.trades, {
@@ -3850,12 +3889,28 @@
         ]);
       } catch {}
     },
+    forceReset() {
+      // Unstick a hung predictionRunPromise so the next runAll() starts fresh.
+      predictionRunPromise = null;
+      geckoRequestQueue  = Promise.resolve();  // abandon backed-up serial gecko chain
+      lastGeckoRequestAt = 0;
+      window.throttledFetchReset?.();          // drain stale throttle waitQueue
+    },
     async runAll() {
       if (predictionRunPromise) return predictionRunPromise;
+      // Reset gecko serial queue and throttle waiters so stale calls from prior
+      // runs (e.g. after Refresh clicks) don't block this fresh run.
+      geckoRequestQueue  = Promise.resolve();
+      lastGeckoRequestAt = 0;
+      window.throttledFetchReset?.();
       predictionRunPromise = (async () => {
+        // Per-coin 12s hard cap — if a coin's exchange batch hangs past this,
+        // runAll proceeds with whatever partial data landed rather than freezing.
+        const withCoinTimeout = (p) =>
+          Promise.race([p, new Promise(r => setTimeout(r, 12000))]);
         await Promise.allSettled([
-          ...PREDICTION_COINS.map(c => loadCoinData(c)),
-          fetchDerivatives()
+          ...PREDICTION_COINS.map(c => withCoinTimeout(loadCoinData(c))),
+          Promise.race([fetchDerivatives(), new Promise(r => setTimeout(r, 8000))]) // 8s cap
         ]);
         // Yield between each coin's backtest to keep the UI thread responsive
         for (const coin of PREDICTION_COINS) {

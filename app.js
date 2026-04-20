@@ -28,8 +28,9 @@
   let candleChart   = null;       // lightweight-charts instance
   let donutChart    = null;       // Chart.js donut
   let scanRunning   = false;
-  let cfmExpanded   = new Set();
+  let cfmExpanded        = new Set();
   let predictionExpanded = new Set();
+  let _universeActiveTab = 'table'; // persists across auto-refresh re-renders
   let screenerSortBy = 'marketCap';
   let screenerSortDir = -1;
   let screenerMetaCache = {};
@@ -1271,14 +1272,28 @@
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
         window._lastKalshiSnapshot[coin.sym] = {
-          ref:         ka.ref,
-          kYesPct:     ka.kalshiYesPct,
-          mYesPct:     ka.modelYesPct,
-          modelDir:    dir,
-          ts:          nowMs,
-          closeTimeMs: ka.closeTimeMs ?? null,  // Kalshi contract expiry — for window alignment
-          ticker:      ka.ticker     ?? null,   // Kalshi contract ticker — for cross-reference
+          ref:          ka.ref,
+          kYesPct:      ka.kalshiYesPct,
+          mYesPct:      ka.modelYesPct,
+          modelDir:     dir,
+          ts:           nowMs,
+          // Contract structural fields — now passed through from prediction-markets.js
+          floorPrice:   ka.floorPrice    ?? ka.ref,
+          capPrice:     ka.capPrice      ?? null,
+          strikeDir:    ka.strikeDir     ?? 'above',
+          strikeType:   ka.strikeType    ?? null,
+          ticker:       ka.ticker        ?? null,
+          closeTimeMs:  ka.closeTimeMs   ?? null,
+          // Diagnostic flags
+          dirConflict:  ka.dirConflict   ?? false,
+          cdfImpliedDir: ka.cdfImpliedDir ?? null,
         };
+        if (ka.dirConflict) {
+          console.warn(
+            `[Snapshot] ⚠️ ${coin.sym} momentum=${dir} conflicts with CDF direction=${ka.cdfImpliedDir} ` +
+            `(mYesPct=${ka.modelYesPct}% kYesPct=${ka.kalshiYesPct}% strike=${ka.strikeDir} ref=${ka.ref})`
+          );
+        }
       }
     });
     saveLastPred();
@@ -1348,55 +1363,88 @@
           ticker: kSnap.ticker, kCloseMs, bucketOpen, bucketClose,
         });
       } else {
-        const yesResolved  = bucket.c >= kSnap.ref;
-        const refDiffPct   = Math.abs(bucket.c - kSnap.ref) / kSnap.ref * 100;
+        const refPrice     = (kSnap.floorPrice > 0 ? kSnap.floorPrice : null) ?? kSnap.ref;
+        const strikeDir    = kSnap.strikeDir ?? 'above';
+        const isBelowContract = strikeDir === 'below';
+
+        // Direction-aware resolution: below contracts flip the yes/no comparison
+        const yesResolved  = isBelowContract ? (bucket.c < refPrice) : (bucket.c >= refPrice);
+        const refDiffPct   = Math.abs(bucket.c - refPrice) / refPrice * 100;
         // Wick detection: candle H/L straddles the ref price — close is unreliable
         // proxy for CF Benchmarks 60s TWAP. Flag and defer to authoritative result.
         const wickStraddle = bucket.l != null && bucket.h != null
-          && bucket.l <= kSnap.ref && bucket.h >= kSnap.ref;
+          && bucket.l <= refPrice && bucket.h >= refPrice;
+        // wickSize: how far the wick went through the ref as % of price — larger = more dangerous
+        const wickSize = wickStraddle
+          ? Math.max(bucket.h - refPrice, refPrice - bucket.l) / refPrice * 100
+          : 0;
         // Near-ref: within 0.15% — TWAP and single-price can diverge on thin wicks
         const nearRef      = refDiffPct < 0.15;
         const pendingAuth  = wickStraddle || nearRef;
 
-        if (pendingAuth) {
-          const reason = wickStraddle ? 'wick_straddle' : 'near_ref';
-          console.warn(
-            `[KalshiTracker] ⚠️ ${reason.toUpperCase()} ${sym}: close=${bucket.c.toFixed(4)} ` +
-            `ref=${kSnap.ref} gap=${refDiffPct.toFixed(4)}% H=${bucket.h} L=${bucket.l} ` +
-            `ticker=${kSnap.ticker} — deferring to authoritative settlement`
-          );
+        // Proxy confidence: lower when wick straddles ref or price is very close
+        const proxyConfidence = wickStraddle ? 45 : (refDiffPct < 0.30 ? 72 : 88);
+
+        // Direction-conflict: momentum says one way, CDF probability says the other
+        const dirConflict = kSnap.dirConflict ?? false;
+
+        if (pendingAuth || dirConflict) {
+          const reason = wickStraddle ? 'wick_straddle' : nearRef ? 'near_ref' : 'dir_conflict';
+          if (pendingAuth) {
+            console.warn(
+              `[KalshiTracker] ⚠️ ${reason.toUpperCase()} ${sym}: close=${bucket.c.toFixed(4)} ` +
+              `ref=${refPrice} gap=${refDiffPct.toFixed(4)}% ${wickStraddle ? `wickSize=${wickSize.toFixed(3)}%` : ''} ` +
+              `H=${bucket.h} L=${bucket.l} strike=${strikeDir} ticker=${kSnap.ticker} ` +
+              `— deferring to authoritative settlement`
+            );
+          }
+          if (dirConflict) {
+            console.warn(
+              `[KalshiTracker] ⚠️ DIR_CONFLICT at close ${sym}: ` +
+              `momentum=${kSnap.modelDir} cdfImplied=${kSnap.cdfImpliedDir} ` +
+              `mYesPct=${kSnap.mYesPct}% proxy=${yesResolved ? 'YES' : 'NO'} ref=${refPrice}`
+            );
+          }
           logContractError(reason, sym, {
-            ticker: kSnap.ticker, ref: kSnap.ref,
+            ticker: kSnap.ticker, ref: refPrice, strikeDir,
             close: bucket.c, high: bucket.h, low: bucket.l,
-            refDiffPct: +refDiffPct.toFixed(4),
+            refDiffPct: +refDiffPct.toFixed(4), wickSize: +wickSize.toFixed(4),
             proxyYES: yesResolved, kYesPct: kSnap.kYesPct, mYesPct: kSnap.mYesPct,
+            dirConflict, momentumDir: kSnap.modelDir, cdfImpliedDir: kSnap.cdfImpliedDir,
           });
         }
 
         const kEntry = {
-          sym, ts: Date.now(), ref: kSnap.ref,
-          ticker:        kSnap.ticker ?? null,
-          outcome:       yesResolved ? 'YES' : 'NO',
-          kYesPct:       kSnap.kYesPct,
-          mYesPct:       kSnap.mYesPct,
-          modelDir:      kSnap.modelDir,
-          closePrice:    +bucket.c.toFixed(6),
-          candleH:       bucket.h != null ? +bucket.h.toFixed(6) : null,
-          candleL:       bucket.l != null ? +bucket.l.toFixed(6) : null,
-          refDiffPct:    +refDiffPct.toFixed(4),
-          marketCorrect: (kSnap.kYesPct >= 50) === yesResolved,
-          modelCorrect:  kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
-          _pendingAuth:  pendingAuth,   // awaiting authoritative Kalshi API result
-          _wickStraddle: wickStraddle,
-          _nearRef:      nearRef,
+          sym, ts: Date.now(), ref: refPrice,
+          ticker:          kSnap.ticker ?? null,
+          strikeDir,
+          outcome:         yesResolved ? 'YES' : 'NO',
+          proxyOutcome:    yesResolved ? 'YES' : 'NO',
+          proxyConfidence,
+          kYesPct:         kSnap.kYesPct,
+          mYesPct:         kSnap.mYesPct,
+          modelDir:        kSnap.modelDir,
+          cdfImpliedDir:   kSnap.cdfImpliedDir ?? null,
+          dirConflict,
+          closePrice:      +bucket.c.toFixed(6),
+          candleH:         bucket.h != null ? +bucket.h.toFixed(6) : null,
+          candleL:         bucket.l != null ? +bucket.l.toFixed(6) : null,
+          refDiffPct:      +refDiffPct.toFixed(4),
+          wickSize:        +wickSize.toFixed(4),
+          marketCorrect:   (kSnap.kYesPct >= 50) === yesResolved,
+          modelCorrect:    kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
+          _pendingAuth:    pendingAuth || dirConflict,
+          _wickStraddle:   wickStraddle,
+          _nearRef:        nearRef,
+          _dirConflict:    dirConflict,
         };
         window._kalshiLog.push(kEntry);
         if (window._kalshiLog.length > 500) window._kalshiLog.shift();
         saveKalshiLog();
         console.log(
-          `[KalshiTracker] ${sym} ref≥${kSnap.ref} close=${bucket.c.toFixed(4)} ` +
-          `→ ${yesResolved ? 'YES ✓' : 'NO'} gap=${refDiffPct.toFixed(4)}% ` +
-          `${wickStraddle ? '⚠️WICK' : nearRef ? '⚠️NEAR-REF' : ''} ` +
+          `[KalshiTracker] ${sym} strike=${strikeDir} ref=${refPrice} close=${bucket.c.toFixed(4)} ` +
+          `→ ${yesResolved ? 'YES ✓' : 'NO'} gap=${refDiffPct.toFixed(4)}% conf=${proxyConfidence} ` +
+          `${wickStraddle ? `⚠️WICK(${wickSize.toFixed(2)}%)` : nearRef ? '⚠️NEAR-REF' : ''} ` +
           `K:${kSnap.kYesPct}% M:${kSnap.mYesPct}% ` +
           `market${kEntry.marketCorrect ? '✓' : '✗'} model${kEntry.modelCorrect ? '✓' : '✗'} ` +
           `${pendingAuth ? '[PENDING-AUTH]' : ''}`
@@ -1410,6 +1458,35 @@
     if (currentView === 'predictions' && predsLoaded) updateAccuracyBadge();
     console.log(`[PredTracker] ${sym} ${stored.direction} → ${actual} ${entry.correct ? '✓' : '✗'} | ${pctMove.toFixed(3)}%`);
   });
+
+  // ── Live 1m candle → chart update ─────────────────────────────────────────
+  // candleWS fires candleWS:1mTick on every update to the current 1m candle
+  // and candleWS:1mClosed when a 1m candle seals. Both update the chart in
+  // real-time so the 1m chart view stays live without polling.
+
+  function _push1mToChart(sym, bucket) {
+    if (!chartSeries?.candles || chartTf !== '1m') return;
+    const coin = WATCHLIST.find(c => c.sym === sym);
+    if (!coin || coin.instrument !== chartCoin) return;
+    const bar = {
+      time:  Math.floor(bucket.t / 1000),
+      open:  bucket.o,
+      high:  bucket.h,
+      low:   bucket.l,
+      close: bucket.c,
+    };
+    try {
+      chartSeries.candles.update(bar);
+      chartSeries.volume.update({
+        time:  bar.time,
+        value: bucket.v,
+        color: bucket.c >= bucket.o ? 'rgba(38,212,126,0.3)' : 'rgba(255,75,110,0.3)',
+      });
+    } catch (_) { /* lightweight-charts may reject out-of-order bars */ }
+  }
+
+  window.addEventListener('candleWS:1mTick',   (e) => { if (e.detail) _push1mToChart(e.detail.sym, e.detail.bucket); });
+  window.addEventListener('candleWS:1mClosed', (e) => { if (e.detail) _push1mToChart(e.detail.sym, e.detail.bucket); });
 
   // ── Authoritative Kalshi settlement back-fill ─────────────────────────────
   // market-resolver.js polls the actual Kalshi API after settlement and fires
@@ -4957,6 +5034,144 @@
       </div>`;
   }
 
+  // ── Kalshi Live Debug Panel ──────────────────────────────────────────────
+  // Shows in the predictions view: per-coin contract state, last 5 errors,
+  // last 5 resolutions. Collapsed by default, toggled by clicking the header.
+  function buildKalshiDebugPanel() {
+    const snaps   = window._lastKalshiSnapshot || {};
+    const log     = (window._kalshiLog         || []).slice(-20).reverse();
+    const errors  = (window._kalshiErrors      || []).slice(-8).reverse();
+    const resLog  = (window._15mResolutionLog  || []).slice(-8).reverse();
+
+    const fmtPrice = v => v != null ? `$${Number(v).toLocaleString(undefined, {maximumFractionDigits:2})}` : '–';
+    const fmtPct   = v => v != null ? `${v}%` : '–';
+    const fmtTime  = ms => ms ? new Date(ms).toISOString().slice(11,19) : '–';
+    const col = (v, ok, warn, bad) => {
+      if (v === ok)   return 'color:#4caf50';
+      if (v === warn) return 'color:#ffc107';
+      if (v === bad)  return 'color:#f44336';
+      return 'color:#aaa';
+    };
+
+    // ── snapshot rows ──
+    const snapRows = Object.entries(snaps).map(([sym, s]) => {
+      const conflict = s.dirConflict ? '⚠️' : '';
+      const confCol  = s.dirConflict ? 'color:#f44336;font-weight:700' : 'color:#4caf50';
+      return `<tr>
+        <td style="color:#fff;font-weight:600">${sym}</td>
+        <td>${fmtPrice(s.floorPrice || s.ref)}</td>
+        <td style="${s.strikeDir==='below'?'color:#f44336':'color:#4caf50'}">${s.strikeDir||'above'}</td>
+        <td style="${col(s.modelDir,'UP','FLAT','DOWN')}">${s.modelDir||'–'}</td>
+        <td>${fmtPct(s.mYesPct)}</td>
+        <td>${fmtPct(s.kYesPct)}</td>
+        <td style="${confCol}">${conflict}${s.cdfImpliedDir||'–'}</td>
+        <td style="color:#888">${fmtTime(s.closeTimeMs)}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="8" style="color:#666;text-align:center">No snapshots yet</td></tr>';
+
+    // ── recent log rows ──
+    const logRows = log.slice(0,8).map(e => {
+      const settled = e._settled  ? `<span style="color:#4caf50">✓${e._kalshiResult||''}</span>` : (e._pendingAuth ? '<span style="color:#ffc107">⏳</span>' : '');
+      const match   = e._settled  ? (e._proxyMismatch ? '<span style="color:#f44336">MISMATCH</span>' : '<span style="color:#4caf50">✓match</span>') : '';
+      const flags   = [e._wickStraddle?'🔥wick':'', e._nearRef?'≈ref':'', e._dirConflict?'⚠️dir':''].filter(Boolean).join(' ');
+      return `<tr>
+        <td style="color:#fff">${e.sym}</td>
+        <td>${e.outcome||'–'}</td>
+        <td style="color:#888;font-size:10px">${fmtPrice(e.ref)}</td>
+        <td style="color:#888;font-size:10px">${fmtPrice(e.closePrice)}</td>
+        <td style="color:#aaa;font-size:10px">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':'–'}</td>
+        <td style="font-size:10px">${e.proxyConfidence!=null?e.proxyConfidence:'–'}</td>
+        <td>${settled} ${match}</td>
+        <td style="color:#ffc107;font-size:10px">${flags}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="8" style="color:#666;text-align:center">No entries yet</td></tr>';
+
+    // ── recent errors ──
+    const errRows = errors.map(e => {
+      const typeCol = e.type==='proxy_mismatch'?'#f44336':e.type==='wick_straddle'?'#ff9800':e.type==='dir_conflict'?'#e040fb':'#ffc107';
+      return `<tr>
+        <td style="color:${typeCol};font-weight:600;font-size:10px">${e.type}</td>
+        <td style="color:#fff">${e.sym}</td>
+        <td style="font-size:10px;color:#888">${e.tsIso?.slice(11,19)||'–'}</td>
+        <td style="font-size:10px">${e.proxy||''} → ${e.authoritative||''}</td>
+        <td style="font-size:10px;color:#aaa">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':''} ${e.wickStraddle?'🔥':''} ${e.nearRef?'≈':''}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" style="color:#666;text-align:center">No errors 🎉</td></tr>';
+
+    // ── recent resolutions ──
+    const resRows = resLog.map(r => {
+      const mc = r.modelCorrect===true?'<span style="color:#4caf50">✓</span>':r.modelCorrect===false?'<span style="color:#f44336">✗</span>':'<span style="color:#888">?</span>';
+      return `<tr>
+        <td style="color:#fff">${r.sym}</td>
+        <td style="color:${r.actualOutcome==='UP'?'#4caf50':'#f44336'}">${r.actualOutcome}</td>
+        <td style="color:#888;font-size:10px">${r.kalshiResult||'–'}</td>
+        <td style="font-size:10px">${r.modelDir||'–'} ${mc}</td>
+        <td style="font-size:10px;color:#aaa">${fmtPrice(r.floorPrice||r.refPrice)}</td>
+        <td style="font-size:10px;color:#888">${fmtTime(r.settledTs)}</td>
+        <td style="font-size:10px;color:${r.confidence>=90?'#4caf50':'#ffc107'}">${r.confidence!=null?r.confidence+'%conf':'–'}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="7" style="color:#666;text-align:center">No settled contracts yet</td></tr>';
+
+    const th = 'style="color:#888;font-size:10px;font-weight:600;padding:3px 6px;border-bottom:1px solid #2a2a2a;white-space:nowrap"';
+    const td = 'style="padding:3px 6px;font-size:11px;border-bottom:1px solid #1a1a1a"';
+    const tableStyle = 'width:100%;border-collapse:collapse;margin-bottom:8px';
+
+    return `
+    <details id="kalshi-debug-panel" style="margin:8px 0 14px;background:#111;border:1px solid #2a2a2a;border-radius:8px">
+      <summary style="cursor:pointer;padding:8px 14px;font-size:12px;font-weight:700;color:#ffc107;letter-spacing:.5px;display:flex;align-items:center;gap:8px;user-select:none">
+        🔬 KALSHI CONTRACT DEBUG
+        <span style="font-size:10px;color:#666;font-weight:400;margin-left:auto">
+          snap:${Object.keys(snaps).length} log:${log.length} err:${errors.length} res:${resLog.length}
+        </span>
+      </summary>
+      <div style="padding:10px 14px;overflow:hidden;border-radius:0 0 8px 8px">
+
+        <div style="font-size:10px;color:#ffc107;font-weight:700;margin-bottom:4px;letter-spacing:.5px">▸ CURRENT SNAPSHOTS</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>SYM</th><th ${th}>FLOOR</th><th ${th}>STRIKE</th>
+            <th ${th}>MODEL↑↓</th><th ${th}>mYes%</th><th ${th}>kYes%</th>
+            <th ${th}>CDF→</th><th ${th}>CLOSES</th>
+          </tr></thead>
+          <tbody>${snapRows.replace(/<td/g, `<td ${td}`.replace('td style=', 'td ').replace(/td  style=/g,'td style='))}</tbody>
+        </table></div>
+
+        <div style="font-size:10px;color:#4fc3f7;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ RECENT CONTRACT LOG (last 8)</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>SYM</th><th ${th}>PROXY</th><th ${th}>REF</th>
+            <th ${th}>CLOSE</th><th ${th}>GAP</th><th ${th}>CONF</th>
+            <th ${th}>AUTH</th><th ${th}>FLAGS</th>
+          </tr></thead>
+          <tbody>${logRows.replace(/<td/g, `<td ${td}`)}</tbody>
+        </table></div>
+
+        <div style="font-size:10px;color:#f44336;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ ERRORS / MISMATCHES (last 8)</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>TYPE</th><th ${th}>SYM</th><th ${th}>TIME</th>
+            <th ${th}>PROXY→AUTH</th><th ${th}>GAP</th>
+          </tr></thead>
+          <tbody>${errRows.replace(/<td/g, `<td ${td}`)}</tbody>
+        </table></div>
+
+        <div style="font-size:10px;color:#4caf50;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ SETTLED CONTRACTS (last 8)</div>
+        <div style="overflow-x:auto"><table style="${tableStyle}">
+          <thead><tr>
+            <th ${th}>SYM</th><th ${th}>OUTCOME</th><th ${th}>RAW</th>
+            <th ${th}>MODEL</th><th ${th}>REF</th>
+            <th ${th}>TIME</th><th ${th}>CONF</th>
+          </tr></thead>
+          <tbody>${resRows.replace(/<td/g, `<td ${td}`)}</tbody>
+        </table></div>
+
+        <div style="margin-top:8px;font-size:10px;color:#555;font-family:monospace">
+          DevTools: KalshiDebug.audit('ETH') · .errors() · .pending() · .last('ETH') · .contract('ETH')
+        </div>
+      </div>
+    </details>`;
+  }
+
   async function renderPredictions() {
     const _myRV = _rv; // capture version — bail after any await if stale
 
@@ -4971,7 +5186,7 @@
     if (_rv !== _myRV) return; // guard: stale render version
     const preds = PredictionEngine.getAll();
     const session = PredictionEngine.getSession();
-    const predArr = Object.values(preds).filter(p => p.price > 0);
+    const predArr = Object.values(preds).filter(p => p.sym);
     const bullCount = predArr.filter(p => p.signal === 'strong_bull' || p.signal === 'bullish').length;
     const bearCount = predArr.filter(p => p.signal === 'strong_bear' || p.signal === 'bearish').length;
     const backtests = predArr.map(p => p.backtest).filter(Boolean);
@@ -5019,10 +5234,14 @@
     const highSetups = allSetups.filter(s => s.strength === 'high');
     const contrarian = allSetups.filter(s => s.type.startsWith('contrarian_'));
 
+    // Save collapsible state before wiping DOM
+    const _debugOpen = document.getElementById('kalshi-debug-panel')?.open ?? false;
+
     content.innerHTML = `
       ${!predsLoaded ? `<div style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.3);border-radius:6px;margin-bottom:12px;font-size:13px;color:#ffc107"><div style="width:16px;height:16px;border:2px solid rgba(255,193,7,0.3);border-top-color:#ffc107;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></div><span>Scoring UP/DOWN markets\u2026</span></div>` : ''}
       ${buildQuickDecisionPanel(predArr)}
       <div id="pred-accuracy-badge" style="text-align:center;padding:4px 0 6px;font-size:12px;letter-spacing:.5px"></div>
+      ${buildKalshiDebugPanel()}
       <div class="pred-disclaimer">
         \u26a0 <strong>Not financial advice.</strong> These UP/DOWN calls are algorithmic signals derived from RSI, VWAP deviation, EMA crosses, OBV, order book imbalance, and trade flow analysis on 5-minute candles. They represent statistical probabilities, not certainties. Always manage risk.
       </div>
@@ -5137,25 +5356,33 @@
     // Populate accuracy badge immediately after render
     updateAccuracyBadge();
 
-    // Rerun button
+    // Restore Kalshi debug panel open state (lost on innerHTML replace)
+    if (_debugOpen) {
+      const _dp = document.getElementById('kalshi-debug-panel');
+      if (_dp) _dp.open = true;
+    }
+
+    // Rerun button — clear stuck in-flight so refresh always works
     const rerunBtn = document.getElementById('rerunPreds');
     if (rerunBtn) {
       rerunBtn.addEventListener('click', async () => {
-        if (predictionRunInFlight) return;
+        predictionRunInFlight = null; // cancel any stuck run
+        window.PredictionEngine?.forceReset?.();  // clear hung internal promise
+        predsLoaded = false;
         rerunBtn.textContent = 'Analyzing...';
         rerunBtn.disabled = true;
-        // Show loading screen immediately so browser can paint before heavy work starts
         content.innerHTML = `<div class="loading-screen"><div class="loader-ring"></div><p>Scoring UP/DOWN markets — routing inner shells first, then loading deeper confirmations...</p></div>`;
-        // Yield two frames so the loading state is actually visible before CPU work begins
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        predsLoaded = false;
         await renderPredictions();
       });
     }
 
     content.querySelectorAll('[data-pred-toggle]').forEach(card => {
-      card.addEventListener('click', () => {
-        toggleExpanded(predictionExpanded, card.dataset.predToggle);
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.gs-wrap')) return;
+        const sym = card.dataset.predToggle;
+        if (predictionExpanded.has(sym)) predictionExpanded.delete(sym);
+        else predictionExpanded.add(sym);
         renderPredictions();
       });
     });
@@ -5453,6 +5680,9 @@
                 <span style="color:${isTrade ? 'var(--color-green)' : isSplit ? 'var(--color-orange)' : 'var(--color-text-muted)'}">${alignTag} · <strong>${ki.confidence}%</strong></span>
               </div>
               ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:5px;line-height:1.4;font-family:var(--font-sans)">${ki.humanReason}</div>` : ''}
+               ${ki.sweetSpot    ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — ${ki.minsLeft?.toFixed(1)}m left · ${ki.payoutMult?.toFixed(2)}x payout · prime entry window</div>` : ''}
+              ${ki.crowdFade    ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — ${Math.round(ki.kalshiYesPrice * 100)}% YES extreme · going ${ki.direction}</div>` : ''}
+              ${ki.signalLocked ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">🔒 Signal locked (${ki.humanReason?.match(/\d+s/)?.[0] || '?'} ago) — holding position</div>` : ''}
               ${ki.illiquid ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Low liquidity ($${ki.liquidity?.toFixed(0)}) — size carefully</div>` : ''}
               ${isSplit     ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Kalshi vs model disagree — watch only, do not trade</div>` : ''}
             </div>`;
@@ -6095,24 +6325,26 @@
   // ================================================================
 
   function renderUniverse() {
+    const _t = _universeActiveTab;
     content.innerHTML = `
       <div class="universe-header">
         <h2 style="font-size:18px;font-weight:700;color:var(--color-text)">Market Universe</h2>
         <div class="universe-toggle">
-          <button class="universe-tab active" data-tab="table">Periodic Table</button>
-          <button class="universe-tab" data-tab="orbital">Orbital View</button>
-          <button class="universe-tab" data-tab="cex">CEX Flows</button>
+          <button class="universe-tab ${_t==='table'?'active':''}"   data-tab="table">Periodic Table</button>
+          <button class="universe-tab ${_t==='orbital'?'active':''}" data-tab="orbital">Orbital View</button>
+          <button class="universe-tab ${_t==='cex'?'active':''}"     data-tab="cex">CEX Flows</button>
         </div>
       </div>
-      <div id="universe-table"  class="universe-panel"></div>
-      <div id="universe-orbital" class="universe-panel" style="display:none">
+      <div id="universe-table"   class="universe-panel" style="${_t!=='table'?'display:none':''}"></div>
+      <div id="universe-orbital" class="universe-panel" style="${_t==='orbital'?'display:block':'display:none'}">
         <canvas id="orbital-canvas" width="900" height="620" style="max-width:100%;display:block;margin:0 auto"></canvas>
       </div>
-      <div id="universe-cex" class="universe-panel" style="display:none"></div>
+      <div id="universe-cex" class="universe-panel" style="${_t==='cex'?'display:block':'display:none'}"></div>
     `;
 
     document.querySelectorAll('.universe-tab').forEach(tab => {
       tab.addEventListener('click', () => {
+        _universeActiveTab = tab.dataset.tab; // persist across re-renders
         document.querySelectorAll('.universe-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         const tabName = tab.dataset.tab;
@@ -6126,6 +6358,9 @@
     });
 
     renderPeriodicTable();
+    // Restore the correct panel on re-render
+    if (_universeActiveTab === 'orbital') setTimeout(drawOrbital, 50);
+    if (_universeActiveTab === 'cex') renderCexFlow();
   }
 
   function renderPeriodicTable() {
