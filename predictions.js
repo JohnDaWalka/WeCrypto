@@ -2776,29 +2776,58 @@
           // YES resolves if closePrice ≥ targetPriceNum (meet or exceed).
           // Compute model-implied P(closePrice ≥ ref) using normal CDF over
           // our projected price distribution (mean = target, sigma = ATR-range).
-          const k15m       = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
-          const kalshiRef  = k15m?.targetPriceNum ?? null;   // null while "TBD"
-          const kalshiYes  = k15m?.probability    ?? null;   // market's YES price (0–1)
+          const k15m        = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
+          const kalshiRef   = k15m?.targetPriceNum ?? null;   // null while "TBD"
+          const kalshiYes   = k15m?.probability    ?? null;   // market's YES price (0–1)
+          const kalshiStDir = k15m?.strikeDir       ?? 'above'; // 'above'|'below'
+          const isBelowK    = kalshiStDir === 'below';
 
           if (kalshiRef !== null && kalshiRef > 0) {
             // sigma: one-sigma price move over 15 min based on ATR
             const sigma = (atr * rangeScale) || (lastPrice * 0.003);
             // z: how far our projected target is above/below the reference threshold
             const z = (target - kalshiRef) / sigma;
-            // P(closePrice ≥ kalshiRef) — model-implied YES probability
-            const modelYesPct  = Math.round(normalCDF(z) * 100);
+            // P(closePrice ≥ kalshiRef) via normal CDF
+            // For 'above' contracts: YES = close ≥ ref  → modelYesPct = CDF(z)
+            // For 'below' contracts: YES = close <  ref → modelYesPct = 1 - CDF(z)
+            const pAbove       = normalCDF(z);
+            const modelYesPct  = Math.round((isBelowK ? 1 - pAbove : pAbove) * 100);
             const kalshiYesPct = kalshiYes !== null ? Math.round(kalshiYes * 100) : null;
             const divergence   = kalshiYesPct !== null ? Math.abs(modelYesPct - kalshiYesPct) : null;
             // Distance from current price to reference (+ means we need to rise to meet it)
             const gapPct       = ((kalshiRef - lastPrice) / lastPrice) * 100;
 
+            // Direction consistency check:
+            // modelYesPct ≥ 50 means model thinks YES wins.
+            // For 'above': YES=UP — so modelYesPct ≥ 50 should agree with dir='UP'
+            // For 'below': YES=DOWN — so modelYesPct ≥ 50 should agree with dir='DOWN'
+            const modelYesSide   = modelYesPct >= 50 ? 'YES' : 'NO';
+            const yesDir         = isBelowK ? 'DOWN' : 'UP';
+            const noDir          = isBelowK ? 'UP' : 'DOWN';
+            const cdfImpliedDir  = modelYesPct >= 50 ? yesDir : noDir;
+            const dirConflict    = dir !== 'FLAT' && cdfImpliedDir !== dir;
+            if (dirConflict) {
+              console.warn(
+                `[KalshiAlign] ⚠️ DIR CONFLICT ${options.sym}: ` +
+                `momentum=${dir} but CDF implies ${cdfImpliedDir} ` +
+                `(modelYesPct=${modelYesPct}% strike=${kalshiStDir} ref=${kalshiRef} price=${lastPrice.toFixed(2)})`
+              );
+            }
+
             acc[entry].kalshiAlign = {
-              ref:           kalshiRef,        // settlement threshold (≥ this → YES)
-              gapPct,                          // how far current price is from ref
-              modelYesPct,                     // our model's P(≥ ref)
-              kalshiYesPct,                    // market's YES price
-              divergence,                      // |model - market| in percentage points
-              // aligned = both agree direction; divergent = gap > 20pp (edge opportunity)
+              ref:           kalshiRef,
+              gapPct,
+              modelYesPct,
+              kalshiYesPct,
+              divergence,
+              strikeDir:     kalshiStDir,  // 'above'|'below' — passed through to snapshot
+              floorPrice:    k15m?.floorPrice  ?? kalshiRef,
+              capPrice:      k15m?.capPrice    ?? null,
+              strikeType:    k15m?.strikeType  ?? null,
+              ticker:        k15m?.ticker      ?? null,   // contract ticker for window alignment
+              closeTimeMs:   k15m?.closeTime   ? new Date(k15m.closeTime).getTime() : null,
+              dirConflict,      // true when momentum direction contradicts CDF direction
+              cdfImpliedDir,    // direction implied by model probability
               status: divergence === null ? 'no-market'
                     : divergence <= 12  ? 'aligned'
                     : divergence <= 25  ? 'soft-split'
