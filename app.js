@@ -1255,11 +1255,13 @@
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
         window._lastKalshiSnapshot[coin.sym] = {
-          ref: ka.ref,
-          kYesPct: ka.kalshiYesPct,
-          mYesPct: ka.modelYesPct,
-          modelDir: dir,
-          ts: nowMs,
+          ref:         ka.ref,
+          kYesPct:     ka.kalshiYesPct,
+          mYesPct:     ka.modelYesPct,
+          modelDir:    dir,
+          ts:          nowMs,
+          closeTimeMs: ka.closeTimeMs ?? null,  // Kalshi contract expiry — for window alignment
+          ticker:      ka.ticker     ?? null,   // Kalshi contract ticker — for cross-reference
         };
       }
     });
@@ -1319,26 +1321,66 @@
     // YES resolves if closing price ≥ reference threshold (meet or exceed)
     const kSnap = window._lastKalshiSnapshot[sym];
     if (kSnap?.ref != null && kSnap.ts <= bucketClose) {
-      const yesResolved = bucket.c >= kSnap.ref;
-      const kEntry = {
-        sym, ts: Date.now(), ref: kSnap.ref,
-        outcome:       yesResolved ? 'YES' : 'NO',
-        kYesPct:       kSnap.kYesPct,
-        mYesPct:       kSnap.mYesPct,
-        modelDir:      kSnap.modelDir,
-        closePrice:    +bucket.c.toFixed(6),
-        marketCorrect: (kSnap.kYesPct >= 50) === yesResolved,
-        modelCorrect:  kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
-      };
-      window._kalshiLog.push(kEntry);
-      if (window._kalshiLog.length > 500) window._kalshiLog.shift();
-      saveKalshiLog();
-      console.log(`[KalshiTracker] ${sym} ref≥${kSnap.ref} → ${yesResolved ? 'YES ✓' : 'NO'} | K:${kSnap.kYesPct}% M:${kSnap.mYesPct}% market${kEntry.marketCorrect ? '✓' : '✗'} model${kEntry.modelCorrect ? '✓' : '✗'}`);
+      // Guard: verify this snapshot's Kalshi contract belongs to THIS 15m bucket.
+      // Contracts close on :00/:15/:30/:45 boundaries — closeTimeMs must fall
+      // within ±2 min of bucketClose to ensure we're evaluating the right window.
+      const bucketOpen = bucketClose - 15 * 60_000;
+      const kCloseMs   = kSnap.closeTimeMs;
+      const windowOk   = kCloseMs == null   // legacy snapshot — no closeTime stored; accept
+        || (kCloseMs >= bucketOpen - 120_000 && kCloseMs <= bucketClose + 120_000);
+      if (!windowOk) {
+        console.warn(`[KalshiTracker] ${sym} ticker=${kSnap.ticker} closeTime=${kCloseMs} outside bucket [${bucketOpen}–${bucketClose}] — skipped`);
+      } else {
+        const yesResolved = bucket.c >= kSnap.ref;
+        const kEntry = {
+          sym, ts: Date.now(), ref: kSnap.ref,
+          ticker:        kSnap.ticker ?? null,
+          outcome:       yesResolved ? 'YES' : 'NO',
+          kYesPct:       kSnap.kYesPct,
+          mYesPct:       kSnap.mYesPct,
+          modelDir:      kSnap.modelDir,
+          closePrice:    +bucket.c.toFixed(6),
+          marketCorrect: (kSnap.kYesPct >= 50) === yesResolved,
+          modelCorrect:  kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
+        };
+        window._kalshiLog.push(kEntry);
+        if (window._kalshiLog.length > 500) window._kalshiLog.shift();
+        saveKalshiLog();
+        console.log(`[KalshiTracker] ${sym} ref≥${kSnap.ref} → ${yesResolved ? 'YES ✓' : 'NO'} | K:${kSnap.kYesPct}% M:${kSnap.mYesPct}% market${kEntry.marketCorrect ? '✓' : '✗'} model${kEntry.modelCorrect ? '✓' : '✗'}`);
+      }
     }
 
     // Refresh accuracy display if predictions tab is visible
     if (currentView === 'predictions' && predsLoaded) updateAccuracyBadge();
     console.log(`[PredTracker] ${sym} ${stored.direction} → ${actual} ${entry.correct ? '✓' : '✗'} | ${pctMove.toFixed(3)}%`);
+  });
+
+  // ── Authoritative Kalshi settlement back-fill ─────────────────────────────
+  // market-resolver.js polls the actual Kalshi API after settlement and fires
+  // this event with the ground-truth outcome. Update matching _kalshiLog entries
+  // to replace the candle-close proxy with the official Kalshi result.
+  window.addEventListener('market15m:resolved', (e) => {
+    const { sym, outcome, modelCorrect, marketCorrect, ticker } = e.detail || {};
+    if (!sym || !outcome) return;
+    // Walk backwards — most recent entry for this sym is most likely the match
+    for (let i = window._kalshiLog.length - 1; i >= 0; i--) {
+      const entry = window._kalshiLog[i];
+      if (entry.sym !== sym) continue;
+      if (entry._settled) continue;                             // already authoritative
+      if (ticker && entry.ticker && ticker !== entry.ticker) continue; // wrong contract
+      if (Date.now() - entry.ts > 4 * 3_600_000) break;        // too old (>4h) — stop
+      const proxyMismatch = entry.outcome !== outcome;
+      if (proxyMismatch)
+        console.warn(`[KalshiTracker] ${sym} proxy='${entry.outcome}' → authoritative='${outcome}' (${ticker})`);
+      entry.outcome        = outcome;                           // overwrite with Kalshi API result
+      entry.modelCorrect   = modelCorrect  ?? entry.modelCorrect;
+      entry.marketCorrect  = marketCorrect ?? entry.marketCorrect;
+      entry._settled       = true;                              // mark as ground truth
+      entry._proxyMismatch = proxyMismatch;
+      saveKalshiLog();
+      if (currentView === 'predictions' && predsLoaded) updateAccuracyBadge();
+      break;
+    }
   });
 
   function updateAccuracyBadge() {
