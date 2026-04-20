@@ -11,7 +11,7 @@ BTC · ETH · SOL · XRP · DOGE · BNB · HYPE
 | Tier | Window | Condition | Action |
 |------|--------|-----------|--------|
 | 1 — Sweet Spot | 3–6 min left | Payout ≥ 1.65x + model aligned | ⭐ Prime entry |
-| 2 — Crowd Fade | Last 90s | Kalshi crowd ≥ 80% one side | 🔄 Fade the crowd |
+| 2 — Crowd Fade | Last 90s | Kalshi crowd ≥ 80% on one side | 🔄 Fade the crowd |
 | Lock | Any | Trade committed | 🔒 Hold 45s — no flip |
 
 ## Stack
