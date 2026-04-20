@@ -51,10 +51,11 @@
   let _rv = 0; // render version counter — increment on every render/refresh call so stale async renders can self-cancel
 
   // ── Persistence keys ─────────────────────────────────────────────────────
-  const PRED_LOG_STORE    = 'beta1_pred_log';
-  const KALSHI_LOG_STORE  = 'beta1_kalshi_log';
-  const LAST_PRED_STORE   = 'beta1_last_pred';
-  const LAST_KALSHI_STORE = 'beta1_last_kalshi';
+  const PRED_LOG_STORE      = 'beta1_pred_log';
+  const KALSHI_LOG_STORE    = 'beta1_kalshi_log';
+  const LAST_PRED_STORE     = 'beta1_last_pred';
+  const LAST_KALSHI_STORE   = 'beta1_last_kalshi';
+  const KALSHI_ERR_STORE    = 'beta1_kalshi_errors';
 
   // ── Prediction accuracy tracker ──────────────────────────────────────────
   // window._lastPrediction[sym] = { direction: 'UP'|'DOWN'|'FLAT', price, ts, signal }
@@ -65,6 +66,8 @@
   window._kalshiLog          = window._kalshiLog          || [];
   // Last Kalshi alignment snapshot per coin (for outcome evaluation on bucket close)
   window._lastKalshiSnapshot = window._lastKalshiSnapshot || {};
+  // Contract-level error log — captures mismatches, wick events, fetch failures
+  window._kalshiErrors       = window._kalshiErrors       || [];
 
   // Restore persisted logs from localStorage on startup
   (function restorePersistedData() {
@@ -72,12 +75,25 @@
     try { const r = localStorage.getItem(KALSHI_LOG_STORE);  if (r) window._kalshiLog          = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(LAST_PRED_STORE);   if (r) window._lastPrediction     = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(LAST_KALSHI_STORE); if (r) window._lastKalshiSnapshot = JSON.parse(r); } catch(e) {}
+    try { const r = localStorage.getItem(KALSHI_ERR_STORE);  if (r) window._kalshiErrors       = JSON.parse(r); } catch(e) {}
   })();
 
   function savePredLog()    { try { localStorage.setItem(PRED_LOG_STORE,    JSON.stringify(window._predLog.slice(-200)));           } catch(e) {} }
   function saveKalshiLog()  { try { localStorage.setItem(KALSHI_LOG_STORE,  JSON.stringify(window._kalshiLog.slice(-500)));         } catch(e) {} }
   function saveLastPred()   { try { localStorage.setItem(LAST_PRED_STORE,   JSON.stringify(window._lastPrediction));                } catch(e) {} }
   function saveLastKalshi() { try { localStorage.setItem(LAST_KALSHI_STORE, JSON.stringify(window._lastKalshiSnapshot));            } catch(e) {} }
+  function saveKalshiErrors() { try { localStorage.setItem(KALSHI_ERR_STORE, JSON.stringify(window._kalshiErrors.slice(-100)));     } catch(e) {} }
+
+  // ── Contract error logging helper ─────────────────────────────────────────
+  // Records anomalies (wick events, proxy mismatches, fetch failures) to
+  // window._kalshiErrors for console inspection via KalshiDebug.errors()
+  function logContractError(type, sym, data) {
+    const entry = { type, sym, ts: Date.now(), tsIso: new Date().toISOString(), ...data };
+    window._kalshiErrors.push(entry);
+    if (window._kalshiErrors.length > 100) window._kalshiErrors.shift();
+    saveKalshiErrors();
+    console.error(`[KalshiError] ${type} | ${sym}`, entry);
+  }
 
   // ── Clock-aligned quarter-hour scheduler ─────────────────────────────────
   // Returns ms until the next :00/:15/:30/:45 boundary, minimum 500ms.
@@ -1322,16 +1338,41 @@
     const kSnap = window._lastKalshiSnapshot[sym];
     if (kSnap?.ref != null && kSnap.ts <= bucketClose) {
       // Guard: verify this snapshot's Kalshi contract belongs to THIS 15m bucket.
-      // Contracts close on :00/:15/:30/:45 boundaries — closeTimeMs must fall
-      // within ±2 min of bucketClose to ensure we're evaluating the right window.
       const bucketOpen = bucketClose - 15 * 60_000;
       const kCloseMs   = kSnap.closeTimeMs;
-      const windowOk   = kCloseMs == null   // legacy snapshot — no closeTime stored; accept
+      const windowOk   = kCloseMs == null
         || (kCloseMs >= bucketOpen - 120_000 && kCloseMs <= bucketClose + 120_000);
       if (!windowOk) {
         console.warn(`[KalshiTracker] ${sym} ticker=${kSnap.ticker} closeTime=${kCloseMs} outside bucket [${bucketOpen}–${bucketClose}] — skipped`);
+        logContractError('window_mismatch', sym, {
+          ticker: kSnap.ticker, kCloseMs, bucketOpen, bucketClose,
+        });
       } else {
-        const yesResolved = bucket.c >= kSnap.ref;
+        const yesResolved  = bucket.c >= kSnap.ref;
+        const refDiffPct   = Math.abs(bucket.c - kSnap.ref) / kSnap.ref * 100;
+        // Wick detection: candle H/L straddles the ref price — close is unreliable
+        // proxy for CF Benchmarks 60s TWAP. Flag and defer to authoritative result.
+        const wickStraddle = bucket.l != null && bucket.h != null
+          && bucket.l <= kSnap.ref && bucket.h >= kSnap.ref;
+        // Near-ref: within 0.15% — TWAP and single-price can diverge on thin wicks
+        const nearRef      = refDiffPct < 0.15;
+        const pendingAuth  = wickStraddle || nearRef;
+
+        if (pendingAuth) {
+          const reason = wickStraddle ? 'wick_straddle' : 'near_ref';
+          console.warn(
+            `[KalshiTracker] ⚠️ ${reason.toUpperCase()} ${sym}: close=${bucket.c.toFixed(4)} ` +
+            `ref=${kSnap.ref} gap=${refDiffPct.toFixed(4)}% H=${bucket.h} L=${bucket.l} ` +
+            `ticker=${kSnap.ticker} — deferring to authoritative settlement`
+          );
+          logContractError(reason, sym, {
+            ticker: kSnap.ticker, ref: kSnap.ref,
+            close: bucket.c, high: bucket.h, low: bucket.l,
+            refDiffPct: +refDiffPct.toFixed(4),
+            proxyYES: yesResolved, kYesPct: kSnap.kYesPct, mYesPct: kSnap.mYesPct,
+          });
+        }
+
         const kEntry = {
           sym, ts: Date.now(), ref: kSnap.ref,
           ticker:        kSnap.ticker ?? null,
@@ -1340,14 +1381,29 @@
           mYesPct:       kSnap.mYesPct,
           modelDir:      kSnap.modelDir,
           closePrice:    +bucket.c.toFixed(6),
+          candleH:       bucket.h != null ? +bucket.h.toFixed(6) : null,
+          candleL:       bucket.l != null ? +bucket.l.toFixed(6) : null,
+          refDiffPct:    +refDiffPct.toFixed(4),
           marketCorrect: (kSnap.kYesPct >= 50) === yesResolved,
           modelCorrect:  kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
+          _pendingAuth:  pendingAuth,   // awaiting authoritative Kalshi API result
+          _wickStraddle: wickStraddle,
+          _nearRef:      nearRef,
         };
         window._kalshiLog.push(kEntry);
         if (window._kalshiLog.length > 500) window._kalshiLog.shift();
         saveKalshiLog();
-        console.log(`[KalshiTracker] ${sym} ref≥${kSnap.ref} → ${yesResolved ? 'YES ✓' : 'NO'} | K:${kSnap.kYesPct}% M:${kSnap.mYesPct}% market${kEntry.marketCorrect ? '✓' : '✗'} model${kEntry.modelCorrect ? '✓' : '✗'}`);
+        console.log(
+          `[KalshiTracker] ${sym} ref≥${kSnap.ref} close=${bucket.c.toFixed(4)} ` +
+          `→ ${yesResolved ? 'YES ✓' : 'NO'} gap=${refDiffPct.toFixed(4)}% ` +
+          `${wickStraddle ? '⚠️WICK' : nearRef ? '⚠️NEAR-REF' : ''} ` +
+          `K:${kSnap.kYesPct}% M:${kSnap.mYesPct}% ` +
+          `market${kEntry.marketCorrect ? '✓' : '✗'} model${kEntry.modelCorrect ? '✓' : '✗'} ` +
+          `${pendingAuth ? '[PENDING-AUTH]' : ''}`
+        );
       }
+    } else if (kSnap == null) {
+      console.warn(`[KalshiTracker] ${sym} — no snapshot at bucket close (no Kalshi data polled for this window)`);
     }
 
     // Refresh accuracy display if predictions tab is visible
@@ -1360,23 +1416,64 @@
   // this event with the ground-truth outcome. Update matching _kalshiLog entries
   // to replace the candle-close proxy with the official Kalshi result.
   window.addEventListener('market15m:resolved', (e) => {
-    const { sym, outcome, modelCorrect, marketCorrect, ticker } = e.detail || {};
+    const {
+      sym, outcome, kalshiResult, modelCorrect, marketCorrect, ticker,
+      refPrice, floorPrice, strikeDir, cbSettlePrice,
+    } = e.detail || {};
     if (!sym || !outcome) return;
-    // Walk backwards — most recent entry for this sym is most likely the match
+
+    // outcome arrives as 'UP'|'DOWN' — translate to 'YES'|'NO' for _kalshiLog
+    const authOutcomeYN = outcome === 'UP' ? 'YES' : 'NO';
+
+    console.log(
+      `[KalshiTracker] 🏁 market15m:resolved ${sym}: result=${kalshiResult} → ${outcome}(${authOutcomeYN}) ` +
+      `floor_price=${floorPrice ?? refPrice} strike=${strikeDir ?? 'above'} ` +
+      `cbSettle=${cbSettlePrice} ` +
+      `model=${modelCorrect ? '✓' : modelCorrect === false ? '✗' : '?'} ` +
+      `mkt=${marketCorrect ? '✓' : '✗'} ticker=${ticker}`
+    );
+
+    // Walk backwards — most recent unsettled entry for this sym/ticker
     for (let i = window._kalshiLog.length - 1; i >= 0; i--) {
       const entry = window._kalshiLog[i];
       if (entry.sym !== sym) continue;
-      if (entry._settled) continue;                             // already authoritative
-      if (ticker && entry.ticker && ticker !== entry.ticker) continue; // wrong contract
-      if (Date.now() - entry.ts > 4 * 3_600_000) break;        // too old (>4h) — stop
-      const proxyMismatch = entry.outcome !== outcome;
-      if (proxyMismatch)
-        console.warn(`[KalshiTracker] ${sym} proxy='${entry.outcome}' → authoritative='${outcome}' (${ticker})`);
-      entry.outcome        = outcome;                           // overwrite with Kalshi API result
+      if (entry._settled) continue;
+      if (ticker && entry.ticker && ticker !== entry.ticker) continue;
+      if (Date.now() - entry.ts > 4 * 3_600_000) break;
+
+      const proxyMismatch = entry.outcome !== authOutcomeYN;
+      if (proxyMismatch) {
+        const isFalseWick = entry._wickStraddle || entry._nearRef;
+        console.warn(
+          `[KalshiTracker] ⚠️ PROXY MISMATCH ${sym}: ` +
+          `proxy='${entry.outcome}' → auth='${authOutcomeYN}' (Kalshi ${kalshiResult}) ` +
+          `close=${entry.closePrice} floor_price=${floorPrice ?? refPrice ?? entry.ref} ` +
+          `strike=${strikeDir ?? 'above'} gap=${entry.refDiffPct}% ` +
+          `cbSettle=${cbSettlePrice} ${isFalseWick ? '← WICK/NEAR-REF CAUSED THIS' : ''} ` +
+          `ticker=${ticker}`
+        );
+        logContractError('proxy_mismatch', sym, {
+          ticker, proxy: entry.outcome, authoritative: authOutcomeYN,
+          kalshiResult,
+          refPrice:        floorPrice ?? refPrice ?? entry.ref,  // floor_price preferred
+          floorPrice:      floorPrice ?? null,
+          strikeDir:       strikeDir  ?? 'above',
+          proxyClosePrice: entry.closePrice, cbSettlePrice,
+          refDiffPct: entry.refDiffPct, wickStraddle: entry._wickStraddle,
+          nearRef: entry._nearRef, kYesPct: entry.kYesPct, mYesPct: entry.mYesPct,
+        });
+      }
+
+      entry.outcome        = authOutcomeYN;          // canonical YES/NO
       entry.modelCorrect   = modelCorrect  ?? entry.modelCorrect;
       entry.marketCorrect  = marketCorrect ?? entry.marketCorrect;
-      entry._settled       = true;                              // mark as ground truth
+      entry._settled       = true;
       entry._proxyMismatch = proxyMismatch;
+      entry._refPrice      = floorPrice ?? refPrice ?? entry.ref;  // floor_price preferred
+      entry._floorPrice    = floorPrice   ?? null;
+      entry._strikeDir     = strikeDir    ?? 'above';
+      entry._cbSettlePrice = cbSettlePrice ?? null;
+      entry._kalshiResult  = kalshiResult  ?? null;  // raw 'yes'/'no'
       saveKalshiLog();
       if (currentView === 'predictions' && predsLoaded) updateAccuracyBadge();
       break;
