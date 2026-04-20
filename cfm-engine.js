@@ -40,7 +40,10 @@
     DEX:  { budget: 20, used: 0, resetAt: 0, label: 'DexScreener',  color: '#a259ff' },
     BIN:  { budget: 120, used: 0, resetAt: 0, label: 'Binance',     color: '#f3ba2f' },
     OKX:  { budget: 60, used: 0, resetAt: 0, label: 'OKX',          color: '#ffffff' },
-    KRK:  { budget: 30, used: 0, resetAt: 0, label: 'Kraken',       color: '#5741d9' },
+    KRK:  { budget: 30, used: 0, resetAt: 0, label: 'Kraken',        color: '#5741d9' },
+    HYP:  { budget: 20, used: 0, resetAt: 0, label: 'Hyperliquid',   color: '#5ee7b0' },
+    BIF:  { budget: 60, used: 0, resetAt: 0, label: 'Binance Futures', color: '#f0b90b' },
+    BYB:  { budget: 30, used: 0, resetAt: 0, label: 'Bybit',          color: '#f7a600' },
   };
 
   // DexScreener search queries per coin
@@ -77,6 +80,9 @@
   // State
   const sampleBuf = {};  // sym → [ { t, sources:{CDC,CB,GKO,DEX}, vol, bid, ask } ]
   window._cfm = {};
+  // Funding rates from perp sources — stored separately so they survive the
+  // per-cycle window._cfm[sym] = computeCFM(sym) overwrite in runCycle().
+  const _fundingRates = {};
   let timer = null;
   let cycle = 0;
   let lastMs = 0;
@@ -277,6 +283,139 @@
     } catch { return null; }
   }
 
+  // ---- New perp / derivative data sources --------------------------------
+
+  // Hyperliquid: mark prices + funding rates via POST (no auth, free)
+  // fetchWithTimeout only supports GET, so we use AbortController directly.
+  async function fetchHYP() {
+    if (!can('HYP')) return [];
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch('https://api.hyperliquid.xyz/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
+        signal: ctrl.signal,
+      });
+      clearTimeout(tid);
+      if (!res.ok) return [];
+      const [meta, assetCtxs] = await res.json();
+      hit('HYP');
+      const MAP = { BTC: 'BTC', ETH: 'ETH', SOL: 'SOL', XRP: 'XRP', DOGE: 'DOGE', BNB: 'BNB', HYPE: 'HYPE' };
+      const samples = [];
+      meta.universe.forEach((info, i) => {
+        const sym = MAP[info.name];
+        if (!sym) return;
+        const ctx = assetCtxs[i];
+        const price   = parseFloat(ctx.markPx);
+        const funding = parseFloat(ctx.funding);
+        if (!isFinite(price)) return;
+        if (!_fundingRates[sym]) _fundingRates[sym] = {};
+        _fundingRates[sym].hypFunding = isFinite(funding) ? funding : null;
+        samples.push({ sym, price, vol: null, src: 'HYP' });
+      });
+      return samples;
+    } catch (e) { return []; }
+  }
+
+  // Binance Futures: OI-weighted mark prices + hourly funding rates (free, no auth)
+  async function fetchBIF() {
+    if (!can('BIF')) return [];
+    try {
+      const res = await fetchWithTimeout('https://fapi.binance.com/fapi/v1/premiumIndex', 8000);
+      if (!res.ok) return [];
+      const data = await res.json();
+      hit('BIF');
+      const SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT', HYPE: 'HYPEUSDT' };
+      const lookup = {};
+      data.forEach(item => { lookup[item.symbol] = item; });
+      const samples = [];
+      Object.entries(SYMS).forEach(([sym, fsym]) => {
+        const item = lookup[fsym];
+        if (!item) return; // HYPE may not exist on Binance futures — skip gracefully
+        const price   = parseFloat(item.markPrice);
+        const funding = parseFloat(item.lastFundingRate);
+        if (!isFinite(price)) return;
+        if (!_fundingRates[sym]) _fundingRates[sym] = {};
+        _fundingRates[sym].binFunding = isFinite(funding) ? funding : null;
+        samples.push({ sym, price, vol: null, src: 'BIF' });
+      });
+      return samples;
+    } catch (e) { return []; }
+  }
+
+  // Bybit: linear perp mark prices + funding rates (free, no auth)
+  async function fetchBYB() {
+    if (!can('BYB')) return [];
+    try {
+      const res = await fetchWithTimeout('https://api.bybit.com/v5/market/tickers?category=linear', 8000);
+      if (!res.ok) return [];
+      const data = await res.json();
+      hit('BYB');
+      const SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT', HYPE: 'HYPEUSDT' };
+      const list = data?.result?.list || [];
+      const lookup = {};
+      list.forEach(item => { lookup[item.symbol] = item; });
+      const samples = [];
+      Object.entries(SYMS).forEach(([sym, bsym]) => {
+        const item = lookup[bsym];
+        if (!item) return; // symbol absent on Bybit — skip gracefully
+        const price   = parseFloat(item.lastPrice);
+        const funding = parseFloat(item.fundingRate);
+        if (!isFinite(price)) return;
+        if (!_fundingRates[sym]) _fundingRates[sym] = {};
+        _fundingRates[sym].bybFunding = isFinite(funding) ? funding : null;
+        samples.push({ sym, price, vol: null, src: 'BYB' });
+      });
+      return samples;
+    } catch (e) { return []; }
+  }
+
+  // Fear & Greed Index (Alternative.me) — self-throttled to one fetch per 5 minutes.
+  // Writes to window._cfm._fng; that key is never overwritten by computeCFM.
+  let _fngLastFetch = 0;
+  async function fetchFNG() {
+    const now = Date.now();
+    if (now - _fngLastFetch < 5 * 60 * 1000) return; // respect 5-min minimum interval
+    try {
+      const res = await fetchWithTimeout('https://api.alternative.me/fng/?limit=1', 8000);
+      if (!res.ok) return;
+      const data = await res.json();
+      _fngLastFetch = now;
+      const entry = data?.data?.[0];
+      if (!entry) return;
+      window._cfm._fng = {
+        value: parseInt(entry.value, 10),
+        label: entry.value_classification,
+        ts:    parseInt(entry.timestamp, 10),
+      };
+    } catch (e) { /* silent fail — non-critical indicator */ }
+  }
+
+  // Aggregate funding rates from HYP / BIF / BYB into a per-coin bias signal.
+  // Called AFTER computeCFM has replaced window._cfm[sym], so reads from
+  // _fundingRates (the persistent cache) and writes fundingBias onto the new object.
+  //
+  // Interpretation:
+  //   avg > 0.03 % → longs paying shorts → market is long-heavy → contrarian BEARISH
+  //   avg < -0.01 % → shorts paying longs → market is short-heavy → contrarian BULLISH
+  function _computeFundingBias() {
+    const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
+    COINS.forEach(sym => {
+      const c = _fundingRates[sym] || {};
+      const rates = [c.hypFunding, c.binFunding, c.bybFunding].filter(r => r != null && isFinite(r));
+      if (!rates.length) return;
+      const avg      = rates.reduce((a, b) => a + b, 0) / rates.length;
+      const bias     = avg > 0.0003 ? 'bearish' : avg < -0.0001 ? 'bullish' : 'neutral';
+      const strength = Math.min(1, Math.abs(avg) / 0.001); // 0–1 normalised against 0.1 % threshold
+      // window._cfm[sym] was just written by computeCFM — safe to annotate it now
+      if (window._cfm[sym]) {
+        window._cfm[sym].fundingBias = { avg, bias, strength, sources: rates.length };
+      }
+    });
+  }
+
   // ---- Sampling orchestrator (staggered) ----
   async function sampleAll() {
     const now = Date.now();
@@ -304,6 +443,12 @@
       const r = await fetchBIN(c.sym);
       if (r) binResults[c.sym] = r;
     }));
+
+    // New perp sources: Hyperliquid + Binance Futures + Bybit run in parallel every cycle.
+    // Side-effects (funding rates) land in _fundingRates; return values not needed here.
+    await Promise.allSettled([fetchHYP(), fetchBIF(), fetchBYB()]);
+    // Fear & Greed: fire-and-forget — internally throttled to one request per 5 minutes.
+    fetchFNG();
 
     // Phase 3: CoinGecko (every 4th cycle = every 60s, only after 3-min warmup)
     // First 3 minutes: faster CEX sources (Binance, Coinbase, CDC) warm up instead.
@@ -552,6 +697,9 @@
     cycle++;
     await sampleAll();
     PREDICTION_COINS.forEach(c => { window._cfm[c.sym] = computeCFM(c.sym); });
+    // Annotate each coin's CFM result with a funding-rate bias signal.
+    // Must run AFTER computeCFM because that call replaces window._cfm[sym].
+    _computeFundingBias();
     lastMs = Date.now() - t0;
   }
 
