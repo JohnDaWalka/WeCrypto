@@ -987,6 +987,9 @@
     return poolMinuteCandles(...[cbSeries, ...fallbackSeries].filter(s => s?.length));
   }
 
+  // ── Phase 1: fast initial load (Coinbase + Binance, ~1-3 s) ─────────────────
+  // Populates candleCache so runAll() can score immediately.  Results include
+  // raw _cb*/_bin* arrays so Phase 2 enrichment can merge without re-fetching.
   async function loadCoinData(coin) {
     try {
       const existing = candleCache[coin.sym] || {};
@@ -995,19 +998,109 @@
         && (Date.now() - (existing.ts || 0) < LIVE_DATA_TTL_MS);
       if (hasFreshLiveData) return;
       const hasLongHistory = Array.isArray(existing.longHistory) && existing.longHistory.length >= 90 && (Date.now() - (existing.longHistoryTs || 0) < 12 * 60 * 60 * 1000);
+
       if (GECKO_ONLY.has(coin.sym)) {
-        const [market, bin1m, bin5m, bin15m, mexc1m, mexc5m, mexc15m, cb1m, cb5m, cb15m, cbBook, bybit1m, bybit5m, bybit15m, bybitBook, kucoin1m, kucoin5m, kucoin15m, kucoinBook, bfnx1m, bfnx5m, bfnx15m, bfnxBook, krk1m, krk5m, krk15m, krkBook, longHistory] = await Promise.all([
+        // HYPE / BNB: Gecko market data + Coinbase + Binance
+        const [market, bin1m, bin5m, bin15m, cb1m, cb5m, cb15m, cbBook, longHistory] = await Promise.all([
           fetchGeckoJSON(`/coins/${coin.geckoId}/market_chart?vs_currency=usd&days=1`).catch(() => null),
           fetchBINCandles(coin.sym, '1m', 180).catch(() => []),
           fetchBINCandles(coin.sym, '5m', 300).catch(() => []),
           fetchBINCandles(coin.sym, '15m', 300).catch(() => []),
-          fetchMEXCCandles(coin, '1m', 180).catch(() => []),
-          fetchMEXCCandles(coin, '5m', 300).catch(() => []),
-          fetchMEXCCandles(coin, '15m', 300).catch(() => []),
           fetchCBExchCandles(coin.sym, 60, 180).catch(() => []),
           fetchCBExchCandles(coin.sym, 300, 300).catch(() => []),
           fetchCBExchCandles(coin.sym, 900, 300).catch(() => []),
           fetchCBExchBook(coin.sym).catch(() => null),
+          hasLongHistory ? Promise.resolve(existing.longHistory) : fetchGeckoMaxHistory(coin.geckoId).catch(() => existing.longHistory || []),
+        ]);
+        const prices  = Array.isArray(market?.prices)        ? market.prices        : [];
+        const volumes = Array.isArray(market?.total_volumes) ? market.total_volumes : [];
+        const gecko5m  = bucketGeckoSeries(prices, volumes, geckoBucketMs('5m'));
+        const gecko15m = bucketGeckoSeries(prices, volumes, geckoBucketMs('15m'));
+        const ws15m = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws1m  = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
+        const candles    = anchoredPoolCandles(cb5m, gecko5m, bin5m);
+        const candles15m = anchoredPoolCandles(ws15m, cb15m, gecko15m, bin15m);
+        const candles1m  = anchoredPoolCandles(ws1m, cb1m, bin1m);
+        if (!candles.length && Array.isArray(existing.candles) && existing.candles.length) {
+          candleCache[coin.sym] = existing;
+          return;
+        }
+        const latestPrice = cb5m.length ? cb5m[cb5m.length - 1].c
+          : prices.length ? Number(prices[prices.length - 1][1]) : (candles[candles.length - 1]?.c || existing.ticker?.usd || 0);
+        const firstPrice  = prices.length ? Number(prices[0][1]) : (candles[0]?.o || latestPrice);
+        const totalVolume = volumes.length
+          ? volumes.reduce((s, p) => s + Number(p?.[1] || 0), 0)
+          : candles.reduce((s, c) => s + Number(c.v || 0), 0);
+        const ticker = { usd: latestPrice, usd_24h_change: firstPrice > 0 ? ((latestPrice - firstPrice) / firstPrice) * 100 : 0, usd_24h_vol: totalVolume };
+        const book = cbBook?.bids?.length ? cbBook : null;
+        const sourceParts = ['coingecko'];
+        if (cb5m.length || cb1m.length) sourceParts.unshift('coinbase');
+        if (bin5m.length || bin1m.length) sourceParts.push('binance');
+        candleCache[coin.sym] = {
+          candles, candles15m, candles1m, ticker, book, trades: [],
+          source: sourceParts.filter(Boolean).join(' + '),
+          ts: Date.now(), longHistory,
+          longHistoryTs: longHistory?.length ? Date.now() : (existing.longHistoryTs || 0),
+          _cb1m: cb1m, _cb5m: cb5m, _cb15m: cb15m,
+          _bin1m: bin1m, _bin5m: bin5m, _bin15m: bin15m,
+          _gecko5m: gecko5m, _gecko15m: gecko15m,
+        };
+      } else {
+        // BTC / ETH / SOL / XRP / DOGE: Coinbase + Binance only
+        const [bin1m, bin5m, bin15m, cb1m, cb5m, cb15m, cbBook, cbTrades] = await Promise.all([
+          fetchBINCandles(coin.sym, '1m', 180).catch(() => []),
+          fetchBINCandles(coin.sym, '5m', 300).catch(() => []),
+          fetchBINCandles(coin.sym, '15m', 300).catch(() => []),
+          fetchCBExchCandles(coin.sym, 60, 180).catch(() => []),
+          fetchCBExchCandles(coin.sym, 300, 300).catch(() => []),
+          fetchCBExchCandles(coin.sym, 900, 300).catch(() => []),
+          fetchCBExchBook(coin.sym).catch(() => null),
+          fetchCBExchTrades(coin.sym).catch(() => []),
+        ]);
+        const ws15m_b = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws1m    = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
+        const candles5m  = anchoredPoolCandles(cb5m, bin5m);
+        const candles15m = anchoredPoolCandles(ws15m_b, cb15m, bin15m);
+        const candles1m  = anchoredPoolCandles(ws1m, cb1m, bin1m);
+        if (!candles5m.length) throw new Error('No exchange candles available');
+        const sourceParts = [];
+        if (cb5m.length || cb1m.length) sourceParts.push('coinbase');
+        if (bin5m.length || bin1m.length) sourceParts.push('binance');
+        candleCache[coin.sym] = {
+          candles: candles5m, candles15m, candles1m,
+          book: cbBook, trades: cbTrades,
+          source: sourceParts.join(' + '),
+          ts: Date.now(),
+          longHistory: existing.longHistory || [],
+          longHistoryTs: existing.longHistoryTs || 0,
+          _cb1m: cb1m, _cb5m: cb5m, _cb15m: cb15m,
+          _bin1m: bin1m, _bin5m: bin5m, _bin15m: bin15m,
+        };
+      }
+    } catch (err) {
+      console.warn(`[loadCoinData] ${coin.sym}:`, err.message);
+    }
+  }
+
+  // ── Phase 2: background enrichment (slow proxy-routed sources, 30 s later) ──
+  // Merges CDC / MEXC / Bybit / KuCoin / Bitfinex / Kraken data with the CB+BIN
+  // anchor already in candleCache, then re-scores the coin silently.
+  async function enrichCoinDataBackground(coin) {
+    try {
+      const existing = candleCache[coin.sym] || {};
+      const cb1m  = existing._cb1m  || [];
+      const cb5m  = existing._cb5m  || [];
+      const cb15m = existing._cb15m || [];
+      const bin1m  = existing._bin1m  || [];
+      const bin5m  = existing._bin5m  || [];
+      const bin15m = existing._bin15m || [];
+
+      if (GECKO_ONLY.has(coin.sym)) {
+        const [mexc1m, mexc5m, mexc15m, mexcBook, bybit1m, bybit5m, bybit15m, bybitBook, kucoin1m, kucoin5m, kucoin15m, kucoinBook, bfnx1m, bfnx5m, bfnx15m, bfnxBook, krk1m, krk5m, krk15m, krkBook] = await Promise.all([
+          fetchMEXCCandles(coin, '1m', 180).catch(() => []),
+          fetchMEXCCandles(coin, '5m', 300).catch(() => []),
+          fetchMEXCCandles(coin, '15m', 300).catch(() => []),
+          fetchMEXCBook(coin).catch(() => null),
           fetchBybitCandles(coin.sym, '1m', 180).catch(() => []),
           fetchBybitCandles(coin.sym, '5m', 300).catch(() => []),
           fetchBybitCandles(coin.sym, '15m', 300).catch(() => []),
@@ -1024,56 +1117,29 @@
           fetchKrakenCandles(coin.sym, '5m', 300).catch(() => []),
           fetchKrakenCandles(coin.sym, '15m', 300).catch(() => []),
           fetchKrakenBook(coin.sym).catch(() => null),
-          hasLongHistory ? Promise.resolve(existing.longHistory) : fetchGeckoMaxHistory(coin.geckoId).catch(() => existing.longHistory || []),
         ]);
-        const prices = Array.isArray(market?.prices) ? market.prices : [];
-        const volumes = Array.isArray(market?.total_volumes) ? market.total_volumes : [];
-        const gecko5m = bucketGeckoSeries(prices, volumes, geckoBucketMs('5m'));
-        const gecko15m = bucketGeckoSeries(prices, volumes, geckoBucketMs('15m'));
-        // Merge WS live 15m buckets as highest-priority anchor
-        const ws15m  = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
-        const ws1m   = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
-        const candles = anchoredPoolCandles(cb5m, gecko5m, bin5m, mexc5m, bybit5m, kucoin5m, bfnx5m, krk5m);
+        const gecko5m  = existing._gecko5m  || [];
+        const gecko15m = existing._gecko15m || [];
+        const ws15m = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
+        const ws1m  = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
+        const candles    = anchoredPoolCandles(cb5m, gecko5m, bin5m, mexc5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m, cb15m, gecko15m, bin15m, mexc15m, bybit15m, kucoin15m, bfnx15m, krk15m);
-        const candles1m = anchoredPoolCandles(ws1m, cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
-        if (!candles.length && Array.isArray(existing.candles) && existing.candles.length) {
-          candleCache[coin.sym] = existing;
-          return;
-        }
-        const latestPrice = cb5m.length ? cb5m[cb5m.length - 1].c
-          : prices.length ? Number(prices[prices.length - 1][1]) : (candles[candles.length - 1]?.c || existing.ticker?.usd || 0);
-        const firstPrice = prices.length ? Number(prices[0][1]) : (candles[0]?.o || latestPrice);
-        const totalVolume = volumes.length
-          ? volumes.reduce((sum, point) => sum + Number(point?.[1] || 0), 0)
-          : candles.reduce((sum, candle) => sum + Number(candle.v || 0), 0);
-        const ticker = {
-          usd: latestPrice,
-          usd_24h_change: firstPrice > 0 ? ((latestPrice - firstPrice) / firstPrice) * 100 : 0,
-          usd_24h_vol: totalVolume,
-        };
-        const book = cbBook?.bids?.length ? cbBook : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
-        const sourceParts = ['coingecko'];
-        if (cb5m.length || cb1m.length) sourceParts.unshift('coinbase');
-        if (bin5m.length || bin1m.length) sourceParts.push('binance');
-        if (mexc5m.length || mexc1m.length) sourceParts.push('mexc');
-        if (bybit5m.length || bybit1m.length) sourceParts.push('bybit');
-        if (kucoin5m.length || kucoin1m.length) sourceParts.push('kucoin');
-        if (bfnx5m.length || bfnx1m.length) sourceParts.push('bitfinex');
-        if (krk5m.length || krk1m.length) sourceParts.push('kraken');
-        candleCache[coin.sym] = {
-          candles,
-          candles15m,
-          candles1m,
-          ticker,
-          book,
-          trades: [],
-          source: sourceParts.filter(Boolean).join(' + '),
-          ts: Date.now(),
-          longHistory,
-          longHistoryTs: longHistory?.length ? Date.now() : (existing.longHistoryTs || 0),
-        };
+        const candles1m  = anchoredPoolCandles(ws1m, cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        if (!candles.length) return;
+        const book = existing.book?.bids?.length ? existing.book
+          : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook
+          : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
+        const srcBase = (existing.source || '').split(' + ');
+        if (mexc5m.length || mexc1m.length) srcBase.push('mexc');
+        if (bybit5m.length || bybit1m.length) srcBase.push('bybit');
+        if (kucoin5m.length || kucoin1m.length) srcBase.push('kucoin');
+        if (bfnx5m.length || bfnx1m.length) srcBase.push('bitfinex');
+        if (krk5m.length || krk1m.length) srcBase.push('kraken');
+        candleCache[coin.sym] = { ...existing, candles, candles15m, candles1m, book,
+          source: [...new Set(srcBase)].filter(Boolean).join(' + '), ts: Date.now() };
       } else {
-        const [cdc1m, cdc5m, cdc15m, cdcBook, cdcTrades, mexc1m, mexc5m, mexc15m, mexcBook, mexcTrades, bin1m, bin5m, bin15m, cb1m, cb5m, cb15m, cbBook, cbTrades, bybit1m, bybit5m, bybit15m, bybitBook, bybitTrades, kucoin1m, kucoin5m, kucoin15m, kucoinBook, kucoinTrades, bfnx1m, bfnx5m, bfnx15m, bfnxBook, bfnxTrades, krk1m, krk5m, krk15m, krkBook, krkTrades, longHistory] = await Promise.all([
+        const hasLongHistory = Array.isArray(existing.longHistory) && existing.longHistory.length >= 90 && (Date.now() - (existing.longHistoryTs || 0) < 12 * 60 * 60 * 1000);
+        const [cdc1m, cdc5m, cdc15m, cdcBook, cdcTrades, mexc1m, mexc5m, mexc15m, mexcBook, mexcTrades, bybit1m, bybit5m, bybit15m, bybitBook, bybitTrades, kucoin1m, kucoin5m, kucoin15m, kucoinBook, kucoinTrades, bfnx1m, bfnx5m, bfnx15m, bfnxBook, bfnxTrades, krk1m, krk5m, krk15m, krkBook, krkTrades, longHistory] = await Promise.all([
           fetchCDCCandles(coin.instrument, '1m', 180).catch(() => []),
           fetchCDCCandles(coin.instrument, '5m', 300).catch(() => []),
           fetchCDCCandles(coin.instrument, '15m', 300).catch(() => []),
@@ -1084,14 +1150,6 @@
           fetchMEXCCandles(coin, '15m', 300).catch(() => []),
           fetchMEXCBook(coin).catch(() => null),
           fetchMEXCTrades(coin).catch(() => []),
-          fetchBINCandles(coin.sym, '1m', 180).catch(() => []),
-          fetchBINCandles(coin.sym, '5m', 300).catch(() => []),
-          fetchBINCandles(coin.sym, '15m', 300).catch(() => []),
-          fetchCBExchCandles(coin.sym, 60, 180).catch(() => []),
-          fetchCBExchCandles(coin.sym, 300, 300).catch(() => []),
-          fetchCBExchCandles(coin.sym, 900, 300).catch(() => []),
-          fetchCBExchBook(coin.sym).catch(() => null),
-          fetchCBExchTrades(coin.sym).catch(() => []),
           fetchBybitCandles(coin.sym, '1m', 180).catch(() => []),
           fetchBybitCandles(coin.sym, '5m', 300).catch(() => []),
           fetchBybitCandles(coin.sym, '15m', 300).catch(() => []),
@@ -1116,37 +1174,37 @@
         ]);
         const ws15m_b = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
         const ws1m    = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
-        const candles1m  = anchoredPoolCandles(ws1m, cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
         const candles5m  = anchoredPoolCandles(cb5m, cdc5m, mexc5m, bin5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m_b, cb15m, cdc15m, mexc15m, bin15m, bybit15m, kucoin15m, bfnx15m, krk15m);
-        // Book priority: Coinbase → CDC → MEXC → ByBit → KuCoin → Bitfinex → Kraken
-        const book = cbBook?.bids?.length ? cbBook : cdcBook?.bids?.length ? cdcBook : mexcBook?.bids?.length ? mexcBook : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
-        // Trades priority: Coinbase → CDC → MEXC → ByBit → KuCoin → Bitfinex → Kraken
-        const trades = cbTrades.length ? cbTrades : cdcTrades.length ? cdcTrades : mexcTrades.length ? mexcTrades : bybitTrades.length ? bybitTrades : kucoinTrades.length ? kucoinTrades : bfnxTrades.length ? bfnxTrades : krkTrades;
-        const sourceParts = [];
-        if (cb5m.length || cb1m.length) sourceParts.push('coinbase');
-        if (cdc1m.length || cdc5m.length || cdc15m.length) sourceParts.push('crypto.com');
-        if (mexc1m.length || mexc5m.length || mexc15m.length) sourceParts.push('mexc');
-        if (bin1m.length || bin5m.length || bin15m.length) sourceParts.push('binance');
-        if (bybit1m.length || bybit5m.length || bybit15m.length) sourceParts.push('bybit');
-        if (kucoin1m.length || kucoin5m.length || kucoin15m.length) sourceParts.push('kucoin');
-        if (bfnx1m.length || bfnx5m.length || bfnx15m.length) sourceParts.push('bitfinex');
-        if (krk1m.length || krk5m.length || krk15m.length) sourceParts.push('kraken');
-        if (!candles5m.length) throw new Error('No exchange candles available');
-        candleCache[coin.sym] = {
-          candles: candles5m,
-          candles15m,
-          candles1m,
-          book,
-          trades,
-          source: sourceParts.join(' + ') || 'mexc',
-          ts: Date.now(),
-          longHistory,
+        const candles1m  = anchoredPoolCandles(ws1m, cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        if (!candles5m.length) return;
+        const book = existing.book?.bids?.length ? existing.book
+          : cdcBook?.bids?.length ? cdcBook : mexcBook?.bids?.length ? mexcBook
+          : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook
+          : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
+        const trades = existing.trades?.length ? existing.trades
+          : cdcTrades.length ? cdcTrades : mexcTrades.length ? mexcTrades
+          : bybitTrades.length ? bybitTrades : kucoinTrades.length ? kucoinTrades
+          : bfnxTrades.length ? bfnxTrades : krkTrades;
+        const sourceParts = (existing.source || '').split(' + ');
+        if (cdc5m.length || cdc1m.length) sourceParts.push('crypto.com');
+        if (mexc5m.length || mexc1m.length) sourceParts.push('mexc');
+        if (bybit5m.length || bybit1m.length) sourceParts.push('bybit');
+        if (kucoin5m.length || kucoin1m.length) sourceParts.push('kucoin');
+        if (bfnx5m.length || bfnx1m.length) sourceParts.push('bitfinex');
+        if (krk5m.length || krk1m.length) sourceParts.push('kraken');
+        candleCache[coin.sym] = { ...existing,
+          candles: candles5m, candles15m, candles1m, book, trades,
+          source: [...new Set(sourceParts)].filter(Boolean).join(' + '),
+          ts: Date.now(), longHistory,
           longHistoryTs: longHistory?.length ? Date.now() : (existing.longHistoryTs || 0),
         };
       }
+      // Re-score this coin with the enriched data
+      window._backtests[coin.sym]   = runWalkForwardBacktest(coin);
+      window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
     } catch (err) {
-      console.warn(`Prediction data failed for ${coin.sym}:`, err.message);
+      console.warn(`[enrichCoinDataBackground] ${coin.sym}:`, err.message);
     }
   }
 
@@ -3922,6 +3980,12 @@
           window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
         });
         warmAdvancedBacktests().catch(() => {});
+        // Phase 2: enrich with slow proxy-routed sources 30 s after initial score.
+        // Fires and forgets — each coin re-scores itself, then dispatches predictionsEnriched.
+        setTimeout(() => {
+          Promise.allSettled(PREDICTION_COINS.map(c => enrichCoinDataBackground(c).catch(() => {})))
+            .then(() => { saveBtCache(); window.dispatchEvent(new CustomEvent('predictionsEnriched')); });
+        }, 30000);
         return window._predictions;
       })();
       try {
