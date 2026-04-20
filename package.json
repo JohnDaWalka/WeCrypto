@@ -1,6 +1,6 @@
 {
   "name": "we-cfm-orchestrator",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "private": true,
   "description": "WalkerEnterprise CFM benchmark orchestration engine",
   "main": "main.js",
@@ -12,7 +12,7 @@
     "appId": "com.walkerenterprise.wecfmorchestrator",
     "productName": "WE--CRYPTO--BETA2",
     "electronVersion": "37.2.0",
-    "artifactName": "WECRYPTO-PATCH-2.1.1.exe",
+    "artifactName": "WECRYPTO-portable.exe",
     "files": [
       "index.html",
       "styles.css",
@@ -30,6 +30,7 @@
       "manifest.webmanifest",
       "sw.js",
       "proxy-fetch.js",
+      "throttled-fetch.js",
       "social-sentiment.js",
       "candle-ws.js",
       "orderbook.js",
@@ -42,6 +43,9 @@
       "blockchain-scan.js",
       "data-logger.js",
       "tauri-bridge.js",
+      "chart.umd.min.js",
+      "chartjs-adapter-date-fns.bundle.min.js",
+      "lightweight-charts.standalone.production.js",
       "we-crypto-proxy.exe",
       "package.json"
     ],

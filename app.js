@@ -2914,11 +2914,13 @@
       const total = series.length;
       const show  = ZOOM_WINDOW[chartTf];
       const bs    = BAR_SPACING[chartTf];
-      if (bs) candleChart.timeScale().applyOptions({ barSpacing: bs });
-      if (show && total > show) {
-        candleChart.timeScale().setVisibleLogicalRange({ from: total - show - 1, to: total - 1 });
-      } else {
-        candleChart.timeScale().fitContent();
+      if (candleChart) {
+        if (bs) candleChart.timeScale().applyOptions({ barSpacing: bs });
+        if (show && total > show) {
+          candleChart.timeScale().setVisibleLogicalRange({ from: total - show - 1, to: total - 1 });
+        } else {
+          candleChart.timeScale().fitContent();
+        }
       }
       setChartLoading(false);
 
