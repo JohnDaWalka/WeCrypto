@@ -144,13 +144,20 @@
       probability = Math.min(0.99, Math.max(0.01, probability));
 
     // ── Reference price: structured API fields only, no text parsing ────────
-    // floor_price = the contract's strike price as a numeric field from the API.
-    // cap_price   = upper bound for range contracts.
-    // strike_type = 'above' | 'below' | 'between' | 'exactly' | 'at_least' | null
-    //   'above' / 'at_least' → YES resolves if close >= floor_price → YES = UP
-    //   'below'              → YES resolves if close <  floor_price → YES = DOWN
-    const floorPrice = m.floor_price != null ? parseFloat(m.floor_price) : null;
-    const capPrice   = m.cap_price   != null ? parseFloat(m.cap_price)   : null;
+    // Kalshi API note: as of 2026-04, `floor_price` became an empty string and
+    // the strike value moved to `floor_strike` (a raw number). We read both.
+    // cap_price / cap_strike — upper bound for range contracts.
+    // strike_type variants: 'above' | 'below' | 'at_least' | 'greater_or_equal' | 'exactly' | null
+    //   'above' / 'at_least' / 'greater_or_equal' → YES = close >= strike → YES = UP
+    //   'below'                                    → YES = close <  strike → YES = DOWN
+    const floorStrike = m.floor_strike != null ? parseFloat(m.floor_strike) : null;
+    const floorPriceRaw = m.floor_price != null ? parseFloat(m.floor_price) : null;
+    const floorPrice = (Number.isFinite(floorStrike) && floorStrike > 0) ? floorStrike
+                     : (Number.isFinite(floorPriceRaw) && floorPriceRaw > 0) ? floorPriceRaw : null;
+    const capStrike  = m.cap_strike != null ? parseFloat(m.cap_strike) : null;
+    const capPriceRaw = m.cap_price != null ? parseFloat(m.cap_price) : null;
+    const capPrice   = (Number.isFinite(capStrike) && capStrike > 0) ? capStrike
+                     : (Number.isFinite(capPriceRaw) && capPriceRaw > 0) ? capPriceRaw : null;
     const rawStrike  = m.strike_type ? String(m.strike_type).toLowerCase() : null;
     const subtitle   = (m.yes_sub_title || m.subtitle || '');
 
@@ -160,7 +167,7 @@
     let strikeDir = null;
     if (rawStrike) {
       if (rawStrike === 'below' || rawStrike === 'under') strikeDir = 'below';
-      else if (rawStrike === 'above' || rawStrike === 'over' || rawStrike === 'at_least') strikeDir = 'above';
+      else if (rawStrike === 'above' || rawStrike === 'over' || rawStrike === 'at_least' || rawStrike === 'greater_or_equal') strikeDir = 'above';
     }
     if (!strikeDir) {
       // subtitle fallback — last resort, never primary
@@ -168,8 +175,8 @@
       strikeDir = (sub.includes('below') || sub.includes('under')) ? 'below' : 'above';
     }
 
-    // Resolved reference price: prefer floor_price (direct numeric API field).
-    // Only fall back to subtitle number extraction if floor_price is absent/zero.
+    // Resolved reference price: prefer floor_strike/floor_price (direct numeric API fields).
+    // Only fall back to subtitle number extraction if both are absent/zero.
     let targetPriceNum = (Number.isFinite(floorPrice) && floorPrice > 0) ? floorPrice : null;
     if (targetPriceNum == null) {
       const numMatch = subtitle.replace(/[$,]/g, '').match(/\d+\.?\d*/);
@@ -248,12 +255,18 @@
           if (probability !== null)
             probability = Math.min(0.99, Math.max(0.01, probability));
           const subtitle   = (m.yes_sub_title || m.subtitle || '');
-          const rawStrike  = m.strike_type ?? null;
+          const rawStrike  = m.strike_type ? String(m.strike_type).toLowerCase() : null;
           const strikeDir  = rawStrike
-            ? (rawStrike === 'below' ? 'below' : 'above')
+            ? (rawStrike === 'below' || rawStrike === 'under' ? 'below' : 'above')
             : subtitle.toLowerCase().includes('below') ? 'below' : 'above';
-          const floorPrice = m.floor_price != null ? parseFloat(m.floor_price) : null;
-          const capPrice   = m.cap_price   != null ? parseFloat(m.cap_price)   : null;
+          const floorStrike5m = m.floor_strike != null ? parseFloat(m.floor_strike) : null;
+          const floorPrice5m  = m.floor_price  != null ? parseFloat(m.floor_price)  : null;
+          const floorPrice = (Number.isFinite(floorStrike5m) && floorStrike5m > 0) ? floorStrike5m
+                           : (Number.isFinite(floorPrice5m)  && floorPrice5m  > 0) ? floorPrice5m : null;
+          const capStrike5m = m.cap_strike != null ? parseFloat(m.cap_strike) : null;
+          const capPrice5m  = m.cap_price  != null ? parseFloat(m.cap_price)  : null;
+          const capPrice    = (Number.isFinite(capStrike5m) && capStrike5m > 0) ? capStrike5m
+                           : (Number.isFinite(capPrice5m)   && capPrice5m  > 0) ? capPrice5m : null;
           let targetPriceNum = (Number.isFinite(floorPrice) && floorPrice > 0) ? floorPrice : null;
           if (targetPriceNum == null) {
             const nm = subtitle.replace(/[$,]/g, '').match(/\d+\.?\d*/);
