@@ -3972,12 +3972,29 @@
         ]);
         // Yield between each coin's backtest to keep the UI thread responsive
         for (const coin of PREDICTION_COINS) {
-          window._backtests[coin.sym] = runWalkForwardBacktest(coin);
+          try {
+            window._backtests[coin.sym] = runWalkForwardBacktest(coin);
+          } catch (btErr) {
+            console.error('[runAll] runWalkForwardBacktest crash:', coin.sym, btErr);
+            window._backtests[coin.sym] = null;
+          }
           await new Promise(r => setTimeout(r, 0));
         }
         saveBtCache();
         PREDICTION_COINS.forEach(coin => {
-          window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
+          try {
+            window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
+          } catch (cpErr) {
+            console.error('[runAll] computePrediction crash:', coin.sym, cpErr);
+            window._predictions[coin.sym] = {
+              sym: coin.sym, name: coin.name, color: coin.color, icon: coin.icon,
+              price: 0, signal: 'neutral', confidence: 0, score: 0,
+              source: 'error', candleCount: 0, updatedAt: new Date().toLocaleTimeString(),
+              error: cpErr.message || 'Compute error',
+              indicators: {}, diagnostics: {}, volatility: { label: 'Unknown', atrPct: 0 },
+              projections: {}, reversalFlags: [], scalpSetups: [],
+            };
+          }
         });
         warmAdvancedBacktests().catch(() => {});
         // Phase 2: enrich with slow proxy-routed sources 30 s after initial score.
