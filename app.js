@@ -1193,6 +1193,13 @@
     renderPredictions();
   });
 
+  // Phase 2 enrichment complete — re-snapshot and re-render predictions with full exchange data
+  window.addEventListener('predictionsEnriched', () => {
+    snapshotPredictions();
+    if (currentView !== 'predictions' || !predsLoaded || predictionRunInFlight) return;
+    renderPredictions();
+  });
+
   // ================================================================
   // HELPERS
   // ================================================================
