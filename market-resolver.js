@@ -506,12 +506,15 @@
 
   // ── DEBUG API ─────────────────────────────────────────────────────
   // Available from the DevTools console:
-  //   KalshiDebug.audit()          — full contract audit log
-  //   KalshiDebug.audit('BTC')     — BTC-only audit entries
-  //   KalshiDebug.errors()         — proxy mismatches, wick events, fetch failures
-  //   KalshiDebug.pending()        — contracts waiting to settle
-  //   KalshiDebug.last('BTC')      — latest resolution for BTC
-  //   KalshiDebug.contract('BTC')  — snapshot + pending state for BTC
+  //   KalshiDebug.audit('ETH')     — step-by-step contract audit trail
+  //   KalshiDebug.errors()         — proxy mismatches, wick, dir_conflict events
+  //   KalshiDebug.pending()        — contracts currently waiting to settle
+  //   KalshiDebug.last('ETH')      — latest authoritative resolution for ETH
+  //   KalshiDebug.log('ETH')       — raw _kalshiLog entries for ETH
+  //   KalshiDebug.snap('ETH')      — current snapshot for ETH
+  //   KalshiDebug.contract('ETH')  — full state: snap + pending + resolved
+  //   KalshiDebug.conflicts()      — all entries where model dir ≠ CDF direction
+  //   KalshiDebug.summary()        — accuracy summary across all coins
   window.KalshiDebug = {
     audit(sym) {
       const log = window._contractAuditLog || [];
@@ -520,7 +523,7 @@
         time: e.tsIso?.slice(11,19), ticker: e.ticker, event: e.event,
         sym: e.sym, result: e.result, outcome: e.actualOutcome,
         floor_price: e.floor_price, strike: e.apiStrikeDir ?? e.strikeDir,
-        modelDir: e.modelDir, modelOk: e.modelCorrect,
+        confidence: e.confidence, modelDir: e.modelDir, modelOk: e.modelCorrect,
       })));
       return rows;
     },
@@ -531,6 +534,7 @@
         ticker: e.ticker, proxy: e.proxy, auth: e.authoritative,
         ref: e.refPrice, close: e.proxyClosePrice, cbSettle: e.cbSettlePrice,
         gap: e.refDiffPct, wick: e.wickStraddle, nearRef: e.nearRef,
+        dirConflict: e.dirConflict, momentumDir: e.momentumDir, cdfDir: e.cdfImpliedDir,
       })));
       return errs;
     },
@@ -553,19 +557,59 @@
         outcome: r.actualOutcome, strikeDir: r.strikeDir,
         floor_price: r.floorPrice, ref: r.refPrice, cbSettle: r.cbSettlePrice,
         model: r.modelDir, modelOk: r.modelCorrect, mktOk: r.marketCorrect,
-        settledAt: new Date(r.settledTs).toISOString().slice(11,19),
+        confidence: r.confidence, settledAt: new Date(r.settledTs).toISOString().slice(11,19),
       }]);
       return r;
+    },
+    log(sym) {
+      const entries = (window._kalshiLog || []).filter(e => !sym || e.sym === sym);
+      console.table(entries.slice(-20).map(e => ({
+        sym: e.sym, outcome: e.outcome, proxy: e.proxyOutcome, conf: e.proxyConfidence,
+        ref: e.ref, close: e.closePrice, gap: e.refDiffPct,
+        modelDir: e.modelDir, mYes: e.mYesPct, kYes: e.kYesPct,
+        settled: e._settled, mismatch: e._proxyMismatch,
+        wick: e._wickStraddle, nearRef: e._nearRef, conflict: e._dirConflict,
+      })));
+      return entries;
+    },
+    snap(sym) {
+      const snaps = window._lastKalshiSnapshot || {};
+      const s = sym ? snaps[sym] : snaps;
+      console.log(sym ? `=== ${sym} snapshot ===` : '=== all snapshots ===', s);
+      return s;
     },
     contract(sym) {
       const snap = window._lastKalshiSnapshot?.[sym];
       const pend = [..._pending.values()].find(e => e.sym === sym);
       const res  = window._resolutionMap?.[sym];
-      console.log(`=== ${sym} contract state ===`);
-      snap && console.log('snapshot:', snap);
-      pend && console.log('pending: ', pend);
-      res  && console.log('resolved:', res);
-      return { snap, pend, res };
+      const errs = (window._kalshiErrors || []).filter(e => e.sym === sym).slice(-5);
+      console.log(`\n=== ${sym} FULL CONTRACT STATE ===`);
+      console.log('📸 snapshot:', snap ?? 'NONE');
+      console.log('⏳ pending: ', pend ?? 'NONE');
+      console.log('✅ resolved:', res  ?? 'NONE');
+      errs.length && console.log('❌ errors:  ', errs);
+      return { snap, pend, res, errs };
+    },
+    conflicts() {
+      const entries = (window._kalshiLog || []).filter(e => e._dirConflict || e.dirConflict);
+      console.table(entries.map(e => ({
+        sym: e.sym, modelDir: e.modelDir, cdfDir: e.cdfImpliedDir,
+        mYes: e.mYesPct, outcome: e.outcome, settled: e._settled,
+        kalshiAuth: e._kalshiResult, mismatch: e._proxyMismatch,
+      })));
+      return entries;
+    },
+    summary() {
+      const coins = [...new Set((window._kalshiLog||[]).map(e=>e.sym))];
+      const rows = coins.map(sym => {
+        const entries = (window._kalshiLog||[]).filter(e=>e.sym===sym && e._settled);
+        const correct = entries.filter(e=>!e._proxyMismatch).length;
+        const conflicts = entries.filter(e=>e._dirConflict).length;
+        const wicks = entries.filter(e=>e._wickStraddle).length;
+        return { sym, settled: entries.length, correct, accuracy: entries.length ? `${(correct/entries.length*100).toFixed(0)}%` : '–', conflicts, wicks };
+      });
+      console.table(rows);
+      return rows;
     },
   };
 
