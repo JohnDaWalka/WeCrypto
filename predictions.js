@@ -389,7 +389,7 @@
   }
 
   async function fetchGeckoJSON(path, options = {}) {
-    const { minGapMs = 1800, retries = 4 } = options;
+    const { minGapMs = 1800, retries = 1 } = options;  // max 1 retry — 4 retries created 22s+ backlog
     const run = async (attempt = 0) => {
       const now = Date.now();
       const waitMs = Math.max(0, minGapMs - (now - lastGeckoRequestAt));
@@ -397,7 +397,7 @@
       lastGeckoRequestAt = Date.now();
       const res = await fetchWithTimeout(`${GECKO_BASE}${path}`, 4500);
       if (res.status === 429 && attempt < retries) {
-        await wait((attempt + 1) * 2200);
+        await wait(1500);   // flat 1.5s backoff instead of compounding
         return run(attempt + 1);
       }
       if (!res.ok) throw new Error(`Gecko ${res.status}`);
@@ -3884,9 +3884,17 @@
     forceReset() {
       // Unstick a hung predictionRunPromise so the next runAll() starts fresh.
       predictionRunPromise = null;
+      geckoRequestQueue  = Promise.resolve();  // abandon backed-up serial gecko chain
+      lastGeckoRequestAt = 0;
+      window.throttledFetchReset?.();          // drain stale throttle waitQueue
     },
     async runAll() {
       if (predictionRunPromise) return predictionRunPromise;
+      // Reset gecko serial queue and throttle waiters so stale calls from prior
+      // runs (e.g. after Refresh clicks) don't block this fresh run.
+      geckoRequestQueue  = Promise.resolve();
+      lastGeckoRequestAt = 0;
+      window.throttledFetchReset?.();
       predictionRunPromise = (async () => {
         // Per-coin 12s hard cap — if a coin's exchange batch hangs past this,
         // runAll proceeds with whatever partial data landed rather than freezing.
