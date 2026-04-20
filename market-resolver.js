@@ -38,30 +38,36 @@
   const POLL_INTERVAL  = 60_000;  // poll for settlements every 60s
   const MAX_PENDING    = 50;      // max pending snapshots queued at once
   const PERSIST_KEY    = 'beta1_15m_resolution_log';
+  const AUDIT_KEY      = 'beta1_contract_audit';
+  const AUDIT_MAX      = 300;
 
   // ── State ────────────────────────────────────────────────────────
   // Pending: markets we've snapshotted and are waiting to settle
-  // Structure: { sym, ticker, type, snapshotTs, closeTimeMs, entryProb, modelDir }
-  const _pending   = new Map();   // ticker → pending entry
+  const _pending   = new Map();
   let   _pollTimer = null;
 
   // Initialise global stores
   window._15mResolutionLog = window._15mResolutionLog || [];
   window._resolutionMap    = window._resolutionMap    || {};
+  window._contractAuditLog = window._contractAuditLog || [];
 
-  // Restore persisted log
-  try {
-    const saved = localStorage.getItem(PERSIST_KEY);
-    if (saved) window._15mResolutionLog = JSON.parse(saved);
-  } catch (_) {}
+  // Restore persisted logs
+  try { const s = localStorage.getItem(PERSIST_KEY); if (s) window._15mResolutionLog = JSON.parse(s); } catch (_) {}
+  try { const s = localStorage.getItem(AUDIT_KEY);   if (s) window._contractAuditLog = JSON.parse(s); } catch (_) {}
 
   function saveLog() {
-    try {
-      localStorage.setItem(
-        PERSIST_KEY,
-        JSON.stringify(window._15mResolutionLog.slice(-LOG_MAX))
-      );
-    } catch (_) {}
+    try { localStorage.setItem(PERSIST_KEY, JSON.stringify(window._15mResolutionLog.slice(-LOG_MAX))); } catch (_) {}
+  }
+  function saveAudit() {
+    try { localStorage.setItem(AUDIT_KEY, JSON.stringify(window._contractAuditLog.slice(-AUDIT_MAX))); } catch (_) {}
+  }
+
+  // Per-contract audit trail — every snapshot, poll, settle, and error is recorded.
+  // Inspect via: KalshiDebug.audit(sym) or KalshiDebug.audit() for all entries.
+  function addAudit(ticker, event, data) {
+    window._contractAuditLog.push({ ticker, event, ts: Date.now(), tsIso: new Date().toISOString(), ...data });
+    if (window._contractAuditLog.length > AUDIT_MAX) window._contractAuditLog.shift();
+    saveAudit();
   }
 
   // ── Fetch helpers ────────────────────────────────────────────────
@@ -145,16 +151,33 @@
         entryProb,
         modelDir,
         title:       k15.title ?? null,
-        targetPrice: k15.targetPriceNum ?? null,
-        // Snapshot EV data from orchestrator at the moment of prediction
+        subtitle:    k15.subtitle ?? null,
+        // Structured contract fields — from Kalshi API directly, not text-parsed
+        targetPrice: k15.targetPriceNum ?? null,   // resolved ref (floorPrice preferred)
+        floorPrice:  k15.floorPrice     ?? null,   // direct numeric API field
+        capPrice:    k15.capPrice       ?? null,
+        strikeDir:   k15.strikeDir      ?? 'above', // 'above'|'below' — YES direction
+        strikeType:  k15.strikeType     ?? null,    // raw API strike_type
         edgeCents:            window.KalshiOrchestrator?.getIntent?.(sym)?.edgeCents   ?? null,
         entryPrice:           window.KalshiOrchestrator?.getIntent?.(sym)?.entryPrice  ?? null,
         side:                 window.KalshiOrchestrator?.getIntent?.(sym)?.side        ?? null,
         modelProbUp:          window.KalshiOrchestrator?.getIntent?.(sym)?.modelProbUp ?? null,
-        // Capture action+alignment so we can detect missed opportunities at settlement
         orchestratorAction:   window.KalshiOrchestrator?.getIntent?.(sym)?.action      ?? null,
         orchestratorAlign:    window.KalshiOrchestrator?.getIntent?.(sym)?.alignment   ?? null,
       });
+
+      const secsToClose = Math.round((closeMs - now) / 1000);
+      addAudit(k15.ticker, 'captured', {
+        sym, closeTime: k15.closeTime, secsToClose, entryProb, modelDir,
+        floorPrice: k15.floorPrice, strikeDir: k15.strikeDir, strikeType: k15.strikeType,
+        targetPrice: k15.targetPriceNum, title: k15.title,
+      });
+      console.log(
+        `[Resolver] 📸 captured ${sym} ${k15.ticker} | ` +
+        `closes in ${Math.floor(secsToClose/60)}m${secsToClose%60}s | ` +
+        `ref=$${k15.targetPriceNum} (floor_price=${k15.floorPrice}) ` +
+        `strike=${k15.strikeDir ?? 'above'} prob=${entryProb != null ? (entryProb*100).toFixed(0)+'%' : 'n/a'} model=${modelDir}`
+      );
     }
   }
 
@@ -168,15 +191,21 @@
       .filter(e => now >= e.closeTimeMs + SETTLE_GRACE);
 
     for (const entry of expired) {
+      const secsPast = Math.round((now - entry.closeTimeMs) / 1000);
+      console.log(`[Resolver] ⏳ polling ${entry.sym} ${entry.ticker} (${secsPast}s past close)`);
+      addAudit(entry.ticker, 'poll_attempt', { sym: entry.sym, secsPast });
+
       const settled = await resolveKalshiMarket(entry);
       if (settled) {
         _pending.delete(entry.ticker);
         recordResolution(settled);
       } else {
-        // If the market isn't settled yet, wait one more cycle.
-        // After 10 min past close_time, drop from pending (stale).
         if (now - entry.closeTimeMs > 10 * 60_000) {
+          console.warn(`[Resolver] ⚠️ ${entry.sym} ${entry.ticker} timed out 10m+ — dropping`);
+          addAudit(entry.ticker, 'dropped', { sym: entry.sym, reason: 'timeout_10min' });
           _pending.delete(entry.ticker);
+        } else {
+          console.log(`[Resolver] 🔄 ${entry.sym} ${entry.ticker} not settled yet — retry next cycle`);
         }
       }
     }
@@ -186,27 +215,108 @@
   // Returns a resolution record or null if not yet settled.
 
   async function resolveKalshiMarket(entry) {
-    const d = await kalshiFetch(`${KALSHI_BASE}/markets/${entry.ticker}`);
+    const url = `${KALSHI_BASE}/markets/${entry.ticker}`;
+    const d   = await kalshiFetch(url);
+
+    if (!d) {
+      console.error(`[Resolver] ❌ ${entry.sym} ${entry.ticker} — fetch returned null (network/rate-limit?)`);
+      addAudit(entry.ticker, 'fetch_failed', { sym: entry.sym, url });
+      return null;
+    }
     const m = d?.market;
-    if (!m) return null;
+    if (!m) {
+      console.error(`[Resolver] ❌ ${entry.sym} ${entry.ticker} — no 'market' key in response`, Object.keys(d));
+      addAudit(entry.ticker, 'no_market_key', { sym: entry.sym, responseKeys: Object.keys(d) });
+      return null;
+    }
+    if (m.status !== 'settled') {
+      console.log(`[Resolver] ⏳ ${entry.sym} ${entry.ticker} status='${m.status}' result='${m.result}' — not settled yet`);
+      return null;
+    }
+    if (!m.result) {
+      console.warn(`[Resolver] ⚠️ ${entry.sym} ${entry.ticker} settled but result is empty — status=${m.status}`);
+      addAudit(entry.ticker, 'empty_result', { sym: entry.sym, status: m.status });
+      return null;
+    }
 
-    // Only process settled markets with a definitive result
-    if (m.status !== 'settled' || !m.result) return null;
+    // ── Authoritative contract details from Kalshi API ─────────────────────
+    // Use the actual structured fields — floor_price, strike_type, result.
+    // strikeDir determines which side of floor_price makes YES win:
+    //   'above' (default for KXBTC15M): YES = close >= floor_price → UP
+    //   'below':                        YES = close <  floor_price → DOWN
+    const apiFloorPrice = m.floor_price != null ? parseFloat(m.floor_price) : null;
+    const apiCapPrice   = m.cap_price   != null ? parseFloat(m.cap_price)   : null;
+    const apiStrikeType = m.strike_type ?? null;
+    const apiStrikeDir  = entry.strikeDir  // from snapshot (captured at open time)
+      ?? (apiStrikeType === 'below' ? 'below' : 'above');
 
-    // result: 'yes' → price closed ABOVE reference → UP
-    // result: 'no'  → price closed BELOW reference → DOWN
-    const actualOutcome = m.result === 'yes' ? 'UP' : 'DOWN';
+    // Resolved reference price: API floor_price takes priority over snapshot's targetPrice
+    const refPrice = (Number.isFinite(apiFloorPrice) && apiFloorPrice > 0)
+      ? apiFloorPrice
+      : entry.targetPrice ?? null;
+
+    // Map Kalshi result → UP/DOWN using the contract's actual strike direction
+    // YES on an 'above' contract = price rose above ref = UP
+    // YES on a 'below' contract = price stayed below ref = DOWN
+    const actualOutcome = m.result === 'yes'
+      ? (apiStrikeDir === 'below' ? 'DOWN' : 'UP')
+      : (apiStrikeDir === 'below' ? 'UP'   : 'DOWN');
+
+    // Market direction: prob >= 50% says market thinks YES will win
+    // Translate to UP/DOWN via same strikeDir logic
     const entryProb     = entry.entryProb ?? 0.5;
-    const marketDir     = entryProb >= 0.50 ? 'UP' : 'DOWN';
-    const modelDir      = entry.modelDir;
+    const yesWins       = entryProb >= 0.50;
+    const marketDir     = yesWins
+      ? (apiStrikeDir === 'below' ? 'DOWN' : 'UP')
+      : (apiStrikeDir === 'below' ? 'UP'   : 'DOWN');
 
-    const modelCorrect  = modelDir && modelDir !== 'FLAT'
-      ? modelDir === actualOutcome
-      : null;
+    const modelDir      = entry.modelDir;
+    const modelCorrect  = modelDir && modelDir !== 'FLAT' ? modelDir === actualOutcome : null;
     const marketCorrect = marketDir === actualOutcome;
 
-    // Fetch actual Coinbase settlement price (CF Benchmarks source)
+    // Full contract audit — every field from the Kalshi API response
+    addAudit(entry.ticker, 'contract_settled', {
+      sym:           entry.sym,
+      // Raw Kalshi API fields
+      result:        m.result,
+      status:        m.status,
+      floor_price:   m.floor_price,
+      cap_price:     m.cap_price,
+      strike_type:   m.strike_type,
+      close_time:    m.close_time,
+      title:         m.title,
+      yes_sub_title: m.yes_sub_title,
+      // Derived
+      apiStrikeDir,
+      refPrice,
+      actualOutcome,
+      marketDir,
+      modelDir,
+      modelCorrect,
+      marketCorrect,
+      entryProb,
+    });
+
+    console.log(
+      `[Resolver] ✅ ${entry.sym} ${entry.ticker} | result=${m.result} → ${actualOutcome} | ` +
+      `floor_price=${m.floor_price ?? 'null'} strike=${apiStrikeDir} | ` +
+      `snapshot_ref=${entry.targetPrice} | model=${modelDir} ${modelCorrect ? '✓' : modelCorrect === false ? '✗' : '?'} | ` +
+      `mktProb=${(entryProb*100).toFixed(0)}% mktOk=${marketCorrect}`
+    );
+
     const cbSettlePrice = await fetchCoinbaseSettlement(entry.sym, entry.closeTimeMs);
+    if (cbSettlePrice != null && refPrice != null) {
+      const cbSide = cbSettlePrice >= refPrice ? 'UP' : 'DOWN';
+      if (cbSide !== actualOutcome) {
+        console.warn(
+          `[Resolver] ⚠️ CB price diverges from Kalshi result for ${entry.sym}: ` +
+          `CB=${cbSettlePrice} vs ref=${refPrice} → ${cbSide} but Kalshi=${actualOutcome} (wick/TWAP spread)`
+        );
+        addAudit(entry.ticker, 'cb_divergence', {
+          sym: entry.sym, cbSettlePrice, refPrice, cbSide, kalshiResult: actualOutcome,
+        });
+      }
+    }
 
     return {
       sym:           entry.sym,
@@ -218,21 +328,23 @@
       entryProb,
       marketDir,
       actualOutcome,
-      refPrice:        entry.targetPrice ?? null,
-      cbSettlePrice,                          // actual Coinbase price at settlement
-      modelDir:        modelDir ?? null,
+      kalshiResult:  m.result,          // raw 'yes'/'no' from Kalshi API
+      refPrice,                         // authoritative ref from floor_price
+      floorPrice:    apiFloorPrice,
+      capPrice:      apiCapPrice,
+      strikeDir:     apiStrikeDir,
+      strikeType:    apiStrikeType,
+      cbSettlePrice,
+      modelDir:      modelDir ?? null,
       modelCorrect,
       marketCorrect,
-      correct:         modelCorrect,
-      // EV data captured at snapshot time — used by equity curve
-      edgeCents:       entry.edgeCents          ?? null,
-      entryPrice:      entry.entryPrice         ?? null,
-      side:            entry.side               ?? null,
-      modelProbUp:     entry.modelProbUp        ?? null,
-      // Orchestrator decision at prediction time
+      correct:       modelCorrect,
+      edgeCents:     entry.edgeCents          ?? null,
+      entryPrice:    entry.entryPrice         ?? null,
+      side:          entry.side               ?? null,
+      modelProbUp:   entry.modelProbUp        ?? null,
       orchestratorAction: entry.orchestratorAction ?? null,
       orchestratorAlign:  entry.orchestratorAlign  ?? null,
-      // Missed opportunity: model was correct but orchestrator passed
       missedOpportunity: (
         modelCorrect === true &&
         (entry.orchestratorAction === 'skip' || entry.orchestratorAction === 'watch')
@@ -260,11 +372,16 @@
       window.dispatchEvent(new CustomEvent('market15m:resolved', {
         detail: {
           sym:           res.sym,
-          outcome:       res.actualOutcome,
+          outcome:       res.actualOutcome,   // 'UP' | 'DOWN'
+          kalshiResult:  res.kalshiResult,    // raw 'yes' | 'no' from Kalshi API
           modelCorrect:  res.modelCorrect,
           marketCorrect: res.marketCorrect,
           prob:          res.entryProb,
           ticker:        res.ticker,
+          refPrice:      res.refPrice,        // authoritative floor_price
+          floorPrice:    res.floorPrice,
+          strikeDir:     res.strikeDir,
+          cbSettlePrice: res.cbSettlePrice,
         },
       }));
     } catch (_) {}
@@ -273,10 +390,10 @@
                : res.modelCorrect === false ? '\u274c'
                : '\u2753';
     console.log(
-      `[Resolver] ${res.sym} 15M settled ${res.actualOutcome} ` +
-      `| model:${res.modelDir ?? 'N/A'} ${icon} ` +
-      `| mktProb:${(res.entryProb * 100).toFixed(0)}% ` +
-      `| mkCorrect:${res.marketCorrect}`
+      `[Resolver] ${res.sym} 15M settled result=${res.kalshiResult} → ${res.actualOutcome} ${icon} ` +
+      `| model=${res.modelDir ?? 'N/A'} | ref=$${res.refPrice} floor_price=${res.floorPrice} ` +
+      `| mktProb:${(res.entryProb * 100).toFixed(0)}% mktOk:${res.marketCorrect} ` +
+      `| cbSettle=${res.cbSettlePrice}`
     );
   }
 
@@ -347,21 +464,13 @@
     getLog:               () => window._15mResolutionLog,
     getResolutionAccuracy,
     getLatest:            sym => window._resolutionMap[sym] ?? null,
-    // Called by signal-router-cfm.js for CFM calibration
-    buildCalibration(sym, n = 30) {
-      return getResolutionAccuracy(sym, n);
-    },
-    // Returns entries where model was correct but orchestrator said skip/watch
+    buildCalibration(sym, n = 30) { return getResolutionAccuracy(sym, n); },
     getMissedOpps(n = 50) {
-      return (window._15mResolutionLog || [])
-        .filter(e => e.missedOpportunity != null)
-        .slice(-n);
+      return (window._15mResolutionLog || []).filter(e => e.missedOpportunity != null).slice(-n);
     },
-    // Win rate analysis by edge bucket — reveals the safe buffer zone threshold
     getBufferZones(n = 100) {
       const log = (window._15mResolutionLog || [])
-        .filter(e => e.edgeCents != null && e.modelCorrect !== null)
-        .slice(-n);
+        .filter(e => e.edgeCents != null && e.modelCorrect !== null).slice(-n);
       const buckets = [
         { label: 'Neg edge',  min: -Infinity, max: 0  },
         { label: '0–5¢',      min: 0,         max: 5  },
@@ -374,13 +483,76 @@
         const entries = log.filter(e => e.edgeCents >= b.min && e.edgeCents < b.max);
         const wins    = entries.filter(e => e.modelCorrect);
         return {
-          label:   b.label,
-          trades:  entries.length,
-          wins:    wins.length,
+          label: b.label, trades: entries.length, wins: wins.length,
           winRate: entries.length ? +(wins.length / entries.length * 100).toFixed(1) : null,
           avgEdge: entries.length ? +(entries.reduce((s, e) => s + e.edgeCents, 0) / entries.length).toFixed(1) : null,
         };
       });
+    },
+  };
+
+  // ── DEBUG API ─────────────────────────────────────────────────────
+  // Available from the DevTools console:
+  //   KalshiDebug.audit()          — full contract audit log
+  //   KalshiDebug.audit('BTC')     — BTC-only audit entries
+  //   KalshiDebug.errors()         — proxy mismatches, wick events, fetch failures
+  //   KalshiDebug.pending()        — contracts waiting to settle
+  //   KalshiDebug.last('BTC')      — latest resolution for BTC
+  //   KalshiDebug.contract('BTC')  — snapshot + pending state for BTC
+  window.KalshiDebug = {
+    audit(sym) {
+      const log = window._contractAuditLog || [];
+      const rows = sym ? log.filter(e => e.sym === sym || (e.ticker || '').includes(sym)) : log;
+      console.table(rows.map(e => ({
+        time: e.tsIso?.slice(11,19), ticker: e.ticker, event: e.event,
+        sym: e.sym, result: e.result, outcome: e.actualOutcome,
+        floor_price: e.floor_price, strike: e.apiStrikeDir ?? e.strikeDir,
+        modelDir: e.modelDir, modelOk: e.modelCorrect,
+      })));
+      return rows;
+    },
+    errors() {
+      const errs = window._kalshiErrors || [];
+      console.table(errs.map(e => ({
+        time: e.tsIso?.slice(11,19), type: e.type, sym: e.sym,
+        ticker: e.ticker, proxy: e.proxy, auth: e.authoritative,
+        ref: e.refPrice, close: e.proxyClosePrice, cbSettle: e.cbSettlePrice,
+        gap: e.refDiffPct, wick: e.wickStraddle, nearRef: e.nearRef,
+      })));
+      return errs;
+    },
+    pending() {
+      const p = [..._pending.values()];
+      console.table(p.map(e => ({
+        sym: e.sym, ticker: e.ticker,
+        closesAt: new Date(e.closeTimeMs).toISOString().slice(11,19),
+        secsLeft: Math.round((e.closeTimeMs - Date.now()) / 1000),
+        floorPrice: e.floorPrice, strikeDir: e.strikeDir,
+        model: e.modelDir, prob: e.entryProb != null ? `${(e.entryProb*100).toFixed(0)}%` : null,
+      })));
+      return p;
+    },
+    last(sym) {
+      const r = window._resolutionMap?.[sym];
+      if (!r) { console.log(`No resolution yet for ${sym}`); return null; }
+      console.table([{
+        sym: r.sym, ticker: r.ticker, result: r.kalshiResult,
+        outcome: r.actualOutcome, strikeDir: r.strikeDir,
+        floor_price: r.floorPrice, ref: r.refPrice, cbSettle: r.cbSettlePrice,
+        model: r.modelDir, modelOk: r.modelCorrect, mktOk: r.marketCorrect,
+        settledAt: new Date(r.settledTs).toISOString().slice(11,19),
+      }]);
+      return r;
+    },
+    contract(sym) {
+      const snap = window._lastKalshiSnapshot?.[sym];
+      const pend = [..._pending.values()].find(e => e.sym === sym);
+      const res  = window._resolutionMap?.[sym];
+      console.log(`=== ${sym} contract state ===`);
+      snap && console.log('snapshot:', snap);
+      pend && console.log('pending: ', pend);
+      res  && console.log('resolved:', res);
+      return { snap, pend, res };
     },
   };
 

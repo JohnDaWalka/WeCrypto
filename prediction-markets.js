@@ -143,19 +143,45 @@
     if (probability !== null)
       probability = Math.min(0.99, Math.max(0.01, probability));
 
-    const subtitle      = (m.yes_sub_title || m.subtitle || '');
-    const tMatch        = subtitle.match(/\$[\d,]+\.?\d*/);
-    const targetPrice    = tMatch ? tMatch[0] : null;
-    const targetPriceNum = targetPrice ? parseFloat(targetPrice.replace(/[$,]/g, '')) : null;
+    // ── Reference price: structured API fields only, no text parsing ────────
+    // floor_price = the contract's strike price as a numeric field from the API.
+    // cap_price   = upper bound for range contracts.
+    // strike_type = 'above' | 'below' | 'between' | 'exactly' | 'at_least' | null
+    //   'above' / 'at_least' → YES resolves if close >= floor_price → YES = UP
+    //   'below'              → YES resolves if close <  floor_price → YES = DOWN
+    const floorPrice = m.floor_price != null ? parseFloat(m.floor_price) : null;
+    const capPrice   = m.cap_price   != null ? parseFloat(m.cap_price)   : null;
+    const rawStrike  = m.strike_type ?? null;
+    const subtitle   = (m.yes_sub_title || m.subtitle || '');
+
+    // Derive YES-side direction from the API field. Fall back to subtitle scan only
+    // when strike_type is absent — never use subtitle as primary extraction source.
+    const strikeDir = rawStrike
+      ? (rawStrike === 'below' ? 'below' : 'above')
+      : subtitle.toLowerCase().includes('below') ? 'below' : 'above';
+
+    // Resolved reference price: prefer floor_price (direct numeric API field).
+    // Only fall back to subtitle number extraction if floor_price is absent/zero.
+    let targetPriceNum = (Number.isFinite(floorPrice) && floorPrice > 0) ? floorPrice : null;
+    if (targetPriceNum == null) {
+      const numMatch = subtitle.replace(/[$,]/g, '').match(/\d+\.?\d*/);
+      if (numMatch) targetPriceNum = parseFloat(numMatch[0]);
+    }
+    const targetPrice = targetPriceNum != null ? `$${targetPriceNum.toLocaleString()}` : null;
 
     return {
       probability, yesAsk, yesBid, last,
-      status:        m.status,
-      closeTime:     m.close_time,
-      openTime:      m.open_time,
-      ticker:        m.ticker,
-      title:         m.title,
-      targetPrice, targetPriceNum,
+      status:      m.status,
+      closeTime:   m.close_time,
+      openTime:    m.open_time,
+      ticker:      m.ticker,
+      title:       m.title,
+      subtitle,
+      strikeDir,        // 'above' | 'below' — which side of floor_price resolves YES
+      strikeType: rawStrike,   // raw strike_type from Kalshi API
+      floorPrice,       // direct numeric reference price from API
+      capPrice,         // upper bound for range contracts (null for above/below)
+      targetPrice, targetPriceNum,  // resolved ref price for downstream use
       volume:       parseFloat(m.volume_fp        || 0),
       liquidity:    parseFloat(m.liquidity_dollars || 0),
       openInterest: parseFloat(m.open_interest_fp  || 0),
@@ -213,18 +239,30 @@
           else if (last > 0)                 probability = last;
           if (probability !== null)
             probability = Math.min(0.99, Math.max(0.01, probability));
-          const subtitle    = (m.yes_sub_title || m.subtitle || '');
-          const tMatch      = subtitle.match(/\$[\d,]+\.?\d*/);
-          const targetPrice = tMatch ? tMatch[0] : null;
+          const subtitle   = (m.yes_sub_title || m.subtitle || '');
+          const rawStrike  = m.strike_type ?? null;
+          const strikeDir  = rawStrike
+            ? (rawStrike === 'below' ? 'below' : 'above')
+            : subtitle.toLowerCase().includes('below') ? 'below' : 'above';
+          const floorPrice = m.floor_price != null ? parseFloat(m.floor_price) : null;
+          const capPrice   = m.cap_price   != null ? parseFloat(m.cap_price)   : null;
+          let targetPriceNum = (Number.isFinite(floorPrice) && floorPrice > 0) ? floorPrice : null;
+          if (targetPriceNum == null) {
+            const nm = subtitle.replace(/[$,]/g, '').match(/\d+\.?\d*/);
+            if (nm) targetPriceNum = parseFloat(nm[0]);
+          }
           data = {
             probability, yesAsk, yesBid, last,
             status: m.status, closeTime: m.close_time, openTime: m.open_time,
-            ticker: m.ticker, title: m.title, targetPrice,
-            targetPriceNum: targetPrice ? parseFloat(targetPrice.replace(/[$,]/g, '')) : null,
+            ticker: m.ticker, title: m.title, subtitle,
+            strikeDir, strikeType: rawStrike,
+            floorPrice, capPrice,
+            targetPrice:    targetPriceNum != null ? `$${targetPriceNum.toLocaleString()}` : null,
+            targetPriceNum,
             volume:       parseFloat(m.volume_fp        || 0),
             liquidity:    parseFloat(m.liquidity_dollars || 0),
             openInterest: parseFloat(m.open_interest_fp  || 0),
-            _proxy15m: true, // using nearest-expiry 15M market as 5M proxy
+            _proxy15m: true,
           };
         }
       }
