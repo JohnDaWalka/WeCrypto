@@ -80,8 +80,22 @@
     setTimeout(runSerialQueue, 65);   // 65 ms breathing room between calls
   }
 
-  window.throttledFetch = throttledFetch;
-  window.queuedFetch    = queuedFetch;
+  // ── 3. RESET (call on each new runAll to drain stale queue) ─────────────
+  // Resolves all pending waiters immediately so they abort (their callers have
+  // .catch(() => []) guards).  Resets activeFetches so new requests get fresh slots.
+  function throttledFetchReset() {
+    const drained = waitQueue.length;
+    // Resolve all waiters — they will attempt to proceed but the underlying
+    // fetch calls they were waiting on belong to the abandoned prior run.
+    // Their individual coin-level timeouts will catch anything that slips through.
+    while (waitQueue.length) waitQueue.shift()();
+    activeFetches = 0;
+    if (drained) console.info(`[ThrottledFetch] reset — drained ${drained} stale queue entries`);
+  }
 
-  console.info(`[ThrottledFetch] v1.1 ready — concurrent: ${MAX_CONCURRENT} | timeout: ${FETCH_TIMEOUT_MS}ms | gap: ${SLOT_GAP_MS}ms`);
+  window.throttledFetch      = throttledFetch;
+  window.queuedFetch         = queuedFetch;
+  window.throttledFetchReset = throttledFetchReset;
+
+  console.info(`[ThrottledFetch] v1.2 ready — concurrent: ${MAX_CONCURRENT} | timeout: ${FETCH_TIMEOUT_MS}ms | gap: ${SLOT_GAP_MS}ms`);
 })();
