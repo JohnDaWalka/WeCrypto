@@ -1,32 +1,227 @@
 # WE|||CRYPTO
 
-**Predictions dashboard for Kalshi UP/DOWN crypto binary contracts.**
+> **Predictions dashboard for Kalshi UP/DOWN crypto binary contracts**
+> Built on a subatomic orbital model — signal packets orbit each coin's nucleus, weighted by orbital profile, fused into a single EV-optimised trade intent.
 
-Built on a subatomic orbital model — each coin maps to a periodic table element, layering benchmark, microstructure, and conviction signals to issue short-horizon UP/DOWN calls.
+![Version](https://img.shields.io/badge/version-2.1.1-blue)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![Electron](https://img.shields.io/badge/Electron-37-47848F?logo=electron)
+![Kalshi](https://img.shields.io/badge/exchange-Kalshi-green)
 
-## Coins Covered
-BTC · ETH · SOL · XRP · DOGE · BNB · HYPE
+---
 
-## Signal System
-| Tier | Window | Condition | Action |
-|------|--------|-----------|--------|
-| 1 — Sweet Spot | 3–6 min left | Payout ≥ 1.65x + model aligned | ⭐ Prime entry |
-| 2 — Crowd Fade | Last 90s | Kalshi crowd ≥ 80% on one side | 🔄 Fade the crowd |
-| Lock | Any | Trade committed | 🔒 Hold 45s — no flip |
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph feeds["📡 Market Feeds"]
+        A1[Coinbase Exchange]
+        A2[Binance · Kraken]
+        A3[Bybit · KuCoin · MEXC]
+        A4[CoinGecko]
+    end
+
+    subgraph kalshi["🏛️ Kalshi API"]
+        K1[UP/DOWN 15M markets]
+        K2[floor_strike · yes_pct]
+        K3[liquidity · close_time]
+    end
+
+    subgraph engine["⚛️ Orbital Signal Engine"]
+        B[candleCache\nOHLCV ring buffer]
+        C[Technical Indicators\nRSI · EMA · VWAP · OBV · CVD]
+        D[Order Book\nbid/ask imbalance]
+        E[Shell Router\ncross-coin propagation]
+        F[Orbital Router\nper-coin weight profiles]
+        G[buildSignalModel\nscore → modelProbUp]
+    end
+
+    subgraph orchestrator["🎯 Floating Orchestrator"]
+        H[EV Engine\nmodelProbUp vs kalshiYesPrice]
+        I{3-Tier Decision}
+        J["⭐ Tier 1 — Sweet Spot\n3–6 min · payout ≥1.65x"]
+        L["🔄 Tier 2 — Crowd Fade\nlast 90s · crowd ≥80%"]
+        M["🔒 Lock\n45s hold · no flip"]
+        N[Trade Intent\nUP / DOWN / WAIT]
+    end
+
+    feeds -->|OHLCV candles| B
+    B --> C
+    B --> D
+    C --> F
+    D --> F
+    E --> F
+    F --> G
+    kalshi --> G
+    G --> H
+    H --> I
+    I --> J --> N
+    I --> L --> N
+    I --> M --> N
+```
+
+---
+
+## Orbital Model
+
+Each coin is assigned an **orbital profile** that weights signal packets before fusion. Based on atomic shell physics — stable nuclei vs reactive outer shells.
+
+| Coin | Profile | Benchmark | Momentum | Timing | Risk Tolerance |
+|------|---------|-----------|----------|--------|----------------|
+| BTC  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
+| ETH  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
+| BNB  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
+| XRP  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
+| SOL  | `momentum`  | ×0.98 | ×1.08 | ×1.12 | Aggressive   |
+| HYPE | `momentum`  | ×0.98 | ×1.08 | ×1.12 | Aggressive   |
+| DOGE | `highBeta`  | ×0.98 | ×1.10 | ×1.02 | High-Risk    |
+
+**Shell Router** — when one coin's shell ionises (sell threshold crossed), a signal packet propagates to correlated coins after a configured delay. Momentum coins (SOL/HYPE) amplify shell events ×1.12; core coins (BTC/ETH) absorb them quietly at ×0.78.
+
+---
+
+## Signal Flow
+
+```mermaid
+flowchart LR
+    subgraph layers["Signal Layers"]
+        L1[Benchmark\nBTC dominance · macro]
+        L2[Trend\nEMA cross · price structure]
+        L3[Momentum\nRSI · rate-of-change]
+        L4[Microstructure\nOBV · CVD · trade flow]
+        L5[Timing\nSession · volatility regime]
+        L6[Derivatives\nfunding · OI]
+        L7[History\nbacktest regime fit]
+    end
+
+    subgraph fusion["Orbital Fusion"]
+        R[Orbital Router\nweight × profile]
+        S[Score  −1 → +1]
+        P[modelProbUp\nclamp 0.02–0.98]
+    end
+
+    subgraph kalshi_ev["EV Calculation"]
+        KP[kalshiYesPrice]
+        EV["EV = modelProbUp − kalshiYesPrice\nedgeCents = EV × 100"]
+        KF[Kelly fraction\ncapped 25%]
+    end
+
+    layers --> R --> S --> P
+    P --> EV
+    KP --> EV
+    EV --> KF
+```
+
+---
+
+## 3-Tier Decision Engine
+
+```mermaid
+flowchart TD
+    START([New contract tick]) --> CHK{edgeCents\n≥ 8c?}
+    CHK -- No --> WATCH[WATCH / SKIP]
+    CHK -- Yes --> LOCK{Signal\nlocked 45s?}
+    LOCK -- Yes --> HOLD[🔒 HOLD previous]
+    LOCK -- No --> T1{Tier 1\n3–6 min left\npayout ≥1.65x?}
+    T1 -- Yes --> SWEET[⭐ PRIME ENTRY\nlog sweet-spot alert]
+    T1 -- No --> T2{Tier 2\nlast 90s AND\ncrowd ≥80%?}
+    T2 -- Yes --> FADE[🔄 FADE CROWD\nreverse direction]
+    T2 -- No --> NORMAL[TRADE\nnormal signal]
+    SWEET --> OUT([Trade Intent\nside · direction · confidence · Kelly%])
+    FADE  --> OUT
+    NORMAL --> OUT
+```
+
+| Tier | Trigger | Logic |
+|------|---------|-------|
+| 1 — Sweet Spot | 3–6 min left, payout ≥ 1.65× | Model and Kalshi aligned, good odds, time to fill |
+| 2 — Crowd Fade | Last 90s, crowd ≥ 80% one side | Extreme crowd bias → fade (house pricing is wrong) |
+| Lock | Signal committed | Hold 45s — prevents signal flip in final minutes |
+
+---
+
+## Alignment States
+
+| State | Meaning | Action |
+|-------|---------|--------|
+| `ALIGNED` | Model + Kalshi agree direction | Trade if edge ≥ 8¢ |
+| `DIVERGENT` | Model disagrees with Kalshi | Inversion — buy cheap side, house mispriced |
+| `MODEL_LEADS` | Kalshi ~50/50, model has conviction | Trade if edge ≥ 8¢ |
+| `MODEL_ONLY` | No Kalshi data | Trade on model alone |
+| `KALSHI_ONLY` | Model below threshold | Watch only |
+| `SHELL_EVAL` | Shell wall evaluating (3 ticks) | Hold — collecting data |
+
+---
+
+## Coins
+
+`BTC · ETH · SOL · XRP · DOGE · BNB · HYPE`
+
+All served by Kalshi 15-minute UP/DOWN binary contracts (`KXBTC15M`, `KXETH15M`, etc.).
+Price feeds: Coinbase Exchange (BTC/ETH/SOL/XRP/DOGE) · CoinGecko (BNB/HYPE).
+
+---
+
+## API Routing
+
+```mermaid
+graph LR
+    APP[Electron App]
+
+    subgraph direct["Direct  no proxy"]
+        D1[Kalshi\nelections.kalshi.com]
+        D2[Coinbase Exchange]
+        D3[Binance · Kraken]
+    end
+
+    subgraph proxied["Via local proxy  rate-limited"]
+        P1[CoinGecko]
+        P2[Bybit · OKX]
+        P3[Bitfinex · KuCoin · MEXC]
+    end
+
+    APP -->|Bucket C| direct
+    APP -->|throttledFetch| proxied
+```
+
+---
 
 ## Stack
-- **Electron 37** portable `.exe` (Windows)
-- **Kalshi API** — crypto UP/DOWN contract data
-- **Multi-exchange feeds** — Coinbase, Binance, Kraken, Bybit, KuCoin, Bitfinex, CDC, MEXC
-- **CoinGecko** — price + market data for HYPE/BNB
-- Prediction engine: RSI · VWAP · EMA · OBV · order book imbalance · CVD · trade flow
+
+| Layer | Technology |
+|-------|-----------|
+| App shell | Electron 37 — portable `.exe`, no install required |
+| UI renderer | Vanilla JS + Canvas (no framework) |
+| Signal engine | `predictions.js` — RSI, EMA, VWAP, OBV, CVD, order book |
+| Orchestrator | `floating-orchestrator.js` — EV engine, Kelly sizing |
+| Market data | `prediction-markets.js` — Kalshi 15M + 5M feeds |
+| Cross-coin | `shell-router.js` — orbital propagation |
+| API proxy | `proxy-fetch.js` + `throttled-fetch.js` |
+
+---
 
 ## Build
+
 ```bash
 npm install
 npm run build
-# → dist/WECRYPTO-PATCH-2.1.1.exe
+# → dist/WECRYPTO-PATCH-2.1.1.exe   (portable, no install)
 ```
 
+Kill any running instance before rebuilding — the exe locks the output file.
+
+---
+
+## Docs
+
+| Doc | Contents |
+|-----|---------|
+| [Architecture](docs/architecture.md) | Full system component map |
+| [Orbital Model](docs/orbital-model.md) | Shell physics, profiles, propagation |
+| [Signal Engine](docs/signal-engine.md) | EV math, Kelly criterion, alignment states |
+
+---
+
 ## Disclaimer
-Not financial advice. These UP/DOWN calls are algorithmic signals. Always manage risk.
+
+Not financial advice. These UP/DOWN calls are algorithmic signals based on market data. Binary contracts carry full risk of loss. Always size positions appropriately and never trade more than you can afford to lose.
