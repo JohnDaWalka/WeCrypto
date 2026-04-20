@@ -18,8 +18,8 @@
   'use strict';
 
   // ── 1. CONCURRENT THROTTLE ────────────────────────────────────────────────
-  const MAX_CONCURRENT  = 5;      // lowered: fewer simultaneous proxy hits
-  const FETCH_TIMEOUT_MS = 4500;  // hard deadline per request (4.5 s)
+  const MAX_CONCURRENT  = 20;     // allows 7-coin parallel fetch without queue build-up
+  const FETCH_TIMEOUT_MS = 10000; // hard deadline per request (10 s) — proxy sources need room
   const SLOT_GAP_MS      = 30;    // breathing room between slot releases
 
   let activeFetches = 0;
