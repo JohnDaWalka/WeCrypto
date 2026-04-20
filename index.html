@@ -15,8 +15,7 @@
   <link rel="apple-touch-icon" href="pwa-icon.svg">
   <!-- Preconnect to all external origins for faster first-byte -->
   <link rel="preconnect" href="https://api.fontshare.com">
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+  <!-- chart libs bundled locally — no CDN required -->
   <link rel="preconnect" href="https://api.crypto.com">
   <link rel="preconnect" href="https://api.coinbase.com">
   <link rel="preconnect" href="https://api.coingecko.com">
@@ -46,9 +45,9 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Symbols+2&display=swap">
   <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&f[]=jetbrains-mono@400,500&display=swap" rel="stylesheet">
   <!-- Chart libs (defer — not needed until Charts tab) -->
-  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-  <script defer src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script defer src="chart.umd.min.js"></script>
+  <script defer src="chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script defer src="lightweight-charts.standalone.production.js"></script>
   <!-- Styles -->
   <link rel="stylesheet" href="styles.css">
 </head>
