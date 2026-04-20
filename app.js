@@ -1914,7 +1914,7 @@
     }
     function _side(prob, large) {
       if (prob == null) return '<span style="color:var(--color-text-faint)">—</span>';
-      const sz = large ? 'font-size:17px;font-weight:800' : 'font-size:13px;font-weight:700';
+      const sz = large ? 'font-size:20px;font-weight:800' : 'font-size:13px;font-weight:700';
       if (prob >= 0.55) return `<span class="badge-up" style="${sz}">▲ BUY YES</span>`;
       if (prob <= 0.45) return `<span class="badge-down" style="${sz}">▼ BUY NO</span>`;
       return `<span style="color:var(--color-text-faint);${sz}">NEUTRAL</span>`;
@@ -2908,9 +2908,13 @@
 
       // Zoom: short TFs show a tight window so candles are large and readable.
       // Longer TFs show all data (fitContent).
-      const ZOOM_WINDOW = { '1m': 60, '3m': 60, '5m': 80, '15m': 120 };
+      // barSpacing is set explicitly per-TF so candle widths look right regardless of chart width.
+      const ZOOM_WINDOW  = { '1m': 60, '3m': 60, '5m': 80, '15m': 120 };
+      const BAR_SPACING  = { '1m': 5,  '3m': 7,  '5m': 9,  '15m': 9  };
       const total = series.length;
       const show  = ZOOM_WINDOW[chartTf];
+      const bs    = BAR_SPACING[chartTf];
+      if (bs) candleChart.timeScale().applyOptions({ barSpacing: bs });
       if (show && total > show) {
         candleChart.timeScale().setVisibleLogicalRange({ from: total - show - 1, to: total - 1 });
       } else {
@@ -3843,10 +3847,13 @@
     `;
   }
 
-  // ---- Profitability calculator: does the expected move beat fees? ----
-  // Round-trip fee estimate (buy + sell). Coinbase: ~0.6% standard, ~0.1% advanced.
-  // Position-size agnostic — all verdicts shown as pure % edge.
-  const FEE_PCT = 0.60;
+  // ---- Volatility edge calculator: is the underlying moving enough for a confident binary? ----
+  // Kalshi binary contracts have near-zero platform fees (~$0.01/contract, negligible).
+  // The only real friction cost is the underlying bid-ask spread — which affects where
+  // spot sits vs the strike at expiry. FEE_PCT = 0 intentionally.
+  // NOTE: low-priced contracts (e.g. YES at $0.10) carry implicit leverage — a thin edge
+  // at that price point can still wipe a position. Wider gap = safer entry.
+  const FEE_PCT = 0;
 
   function calcEdge(coin, cfm, pred) {
     const price = cfm.cfmRate || cfm.lastPrice || 0;
@@ -3862,8 +3869,9 @@
     // Expected move in next 60 min
     const expected60m = atrPct * Math.sqrt(12);
 
-    // Total cost to play: fees + bid-ask spread + slippage estimate
-    const totalCostPct = FEE_PCT + bidAsk + 0.05; // 0.05% slippage estimate
+    // Real friction cost for Kalshi binary contracts: only the underlying bid-ask spread
+    // matters (affects where spot sits vs the strike at expiry). No platform fee.
+    const totalCostPct = bidAsk + 0.02; // 0.02% underlying slippage, zero platform fee
 
     // Edge = expected move - cost
     const edge15 = expected15m - totalCostPct;
@@ -3876,20 +3884,39 @@
     // How many confirming signals does this coin have?
     const signalCount = countConfirmingSignals(coin, cfm, pred);
 
+    // Kalshi contract price — detects tail-risk (too expensive) and leverage (too cheap)
+    const pm = window.PredictionMarkets?.getCoin?.(coin?.sym);
+    const kalshiYesPrice = pm?.kalshi15m?.probability ?? null;
+    const entryIsTailRisk  = kalshiYesPrice !== null && kalshiYesPrice >= 0.85; // paying 85¢+ to win ≤15¢
+    const entryIsLeveraged = kalshiYesPrice !== null && kalshiYesPrice <= 0.15; // paying ≤15¢, high variance
+    const lossErasesWins   = entryIsTailRisk
+      ? Math.round(kalshiYesPrice / (1 - kalshiYesPrice))   // 1 loss wipes N wins
+      : null;
+
     // Conviction tier
     let tier, tierColor, tierDesc;
-    if (edge15 > 0.3 && signalCount >= 3) {
+
+    // Tail-risk override: contract priced so high that one loss destroys many wins
+    if (entryIsTailRisk) {
+      tier = 'TAIL RISK'; tierColor = 'var(--color-red)';
+      tierDesc = `YES at ${Math.round(kalshiYesPrice * 100)}¢ — 1 loss erases ${lossErasesWins} wins. Need overwhelming edge to justify.`;
+    // Leveraged-entry override: tiny YES price = high variance, wide gap required
+    } else if (entryIsLeveraged) {
+      tier = edge15 > 0.25 && signalCount >= 3 ? 'HIGH CONVICTION' : 'LEVERAGED';
+      tierColor = edge15 > 0.25 && signalCount >= 3 ? 'var(--color-green)' : 'var(--color-orange)';
+      tierDesc = `YES at ${Math.round(kalshiYesPrice * 100)}¢ — ${Math.round(1 / kalshiYesPrice)}x payout but high variance. ${signalCount} signals, need wider gap.`;
+    } else if (edge15 > 0.25 && signalCount >= 3) {
       tier = 'HIGH CONVICTION'; tierColor = 'var(--color-green)';
-      tierDesc = `${signalCount} indicators aligned, edge ${edge15.toFixed(2)}% > fees`;
-    } else if (edge15 > 0.1 && signalCount >= 2) {
+      tierDesc = `${signalCount} indicators aligned — strong directional move expected, ${edge15.toFixed(2)}% edge`;
+    } else if (edge15 > 0.08 && signalCount >= 2) {
       tier = 'MARGINAL'; tierColor = 'var(--color-orange)';
-      tierDesc = `Edge exists but thin \u2014 ${edge15.toFixed(2)}% after fees, ${signalCount} signals`;
+      tierDesc = `Thin edge — ${edge15.toFixed(2)}% expected move, ${signalCount} signals. Widen gap or wait for confirmation.`;
     } else if (edge15 < 0) {
-      tier = 'NOT WORTH IT'; tierColor = 'var(--color-red)';
-      tierDesc = `Expected move ${expected15m.toFixed(2)}% < cost ${totalCostPct.toFixed(2)}% \u2014 fees eat the profit`;
+      tier = 'LOW VOLATILITY'; tierColor = 'var(--color-red)';
+      tierDesc = `Expected move ${expected15m.toFixed(2)}% < spread ${totalCostPct.toFixed(2)}% — underlying too quiet for a clear binary direction`;
     } else {
-      tier = 'BREAK EVEN'; tierColor = 'var(--color-text-faint)';
-      tierDesc = `Edge ~0 \u2014 coin flip after fees, need more data`;
+      tier = 'WATCH'; tierColor = 'var(--color-text-faint)';
+      tierDesc = `Edge ~0 — market flat, no directional conviction yet`;
     }
 
     // Reliability gate: downgrade HIGH CONVICTION if backtest quality is too low
@@ -4066,7 +4093,7 @@
       <div class="opp-panel" style="border-left:3px solid ${highConv.length > 0 ? 'var(--color-green)' : marginal.length > 0 ? 'var(--color-orange)' : 'var(--color-text-faint)'}">
         <div class="card-title" style="color:var(--color-gold)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-          Trade Verdicts \u2014 ~${FEE_PCT}% Round-Trip Fee Assumed
+          Trade Verdicts \u2014 Kalshi Binary Contracts
         </div>
 
         ${verdicts.length === 0 ? '<div style="font-size:12px;color:var(--color-text-muted);padding:12px 0">Warming up \u2014 accumulating price data...</div>' : ''}
@@ -6848,6 +6875,14 @@
         console.info('[WE] ⚡ Settlement pulse scheduler armed — fires at :00/:15/:30/:45');
       }, 4500); // arm after all modules are up
     });
+  });
+
+  // ── 5M Markets auto-refresh: re-render the view when prediction data arrives ──
+  // PredictionMarkets fetches async; if the user opens the 5M view before the
+  // first fetch completes, the cards show "No active contract". This listener
+  // re-renders the view as soon as fresh data is available.
+  window.addEventListener('predictionmarketsready', () => {
+    if (currentView === 'markets5m') renderMarkets5M();
   });
 
   // ── Order Book HUD — initialise after DOM is ready ──────────────
