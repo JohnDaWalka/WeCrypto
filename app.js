@@ -1348,55 +1348,72 @@
           ticker: kSnap.ticker, kCloseMs, bucketOpen, bucketClose,
         });
       } else {
-        const yesResolved  = bucket.c >= kSnap.ref;
-        const refDiffPct   = Math.abs(bucket.c - kSnap.ref) / kSnap.ref * 100;
+        const refPrice     = kSnap.floorPrice ?? kSnap.ref;
+        const strikeDir    = kSnap.strikeDir ?? 'above';
+        const isBelowContract = strikeDir === 'below';
+
+        // Direction-aware resolution: below contracts flip the yes/no comparison
+        const yesResolved  = isBelowContract ? (bucket.c < refPrice) : (bucket.c >= refPrice);
+        const refDiffPct   = Math.abs(bucket.c - refPrice) / refPrice * 100;
         // Wick detection: candle H/L straddles the ref price — close is unreliable
         // proxy for CF Benchmarks 60s TWAP. Flag and defer to authoritative result.
         const wickStraddle = bucket.l != null && bucket.h != null
-          && bucket.l <= kSnap.ref && bucket.h >= kSnap.ref;
+          && bucket.l <= refPrice && bucket.h >= refPrice;
+        // wickSize: how far the wick went through the ref as % of price — larger = more dangerous
+        const wickSize = wickStraddle
+          ? Math.max(bucket.h - refPrice, refPrice - bucket.l) / refPrice * 100
+          : 0;
         // Near-ref: within 0.15% — TWAP and single-price can diverge on thin wicks
         const nearRef      = refDiffPct < 0.15;
         const pendingAuth  = wickStraddle || nearRef;
+
+        // Proxy confidence: lower when wick straddles ref or price is very close
+        const proxyConfidence = wickStraddle ? 45 : (refDiffPct < 0.30 ? 72 : 88);
 
         if (pendingAuth) {
           const reason = wickStraddle ? 'wick_straddle' : 'near_ref';
           console.warn(
             `[KalshiTracker] ⚠️ ${reason.toUpperCase()} ${sym}: close=${bucket.c.toFixed(4)} ` +
-            `ref=${kSnap.ref} gap=${refDiffPct.toFixed(4)}% H=${bucket.h} L=${bucket.l} ` +
-            `ticker=${kSnap.ticker} — deferring to authoritative settlement`
+            `ref=${refPrice} gap=${refDiffPct.toFixed(4)}% ${wickStraddle ? `wickSize=${wickSize.toFixed(3)}%` : ''} ` +
+            `H=${bucket.h} L=${bucket.l} strike=${strikeDir} ticker=${kSnap.ticker} ` +
+            `— deferring to authoritative settlement`
           );
           logContractError(reason, sym, {
-            ticker: kSnap.ticker, ref: kSnap.ref,
+            ticker: kSnap.ticker, ref: refPrice, strikeDir,
             close: bucket.c, high: bucket.h, low: bucket.l,
-            refDiffPct: +refDiffPct.toFixed(4),
+            refDiffPct: +refDiffPct.toFixed(4), wickSize: +wickSize.toFixed(4),
             proxyYES: yesResolved, kYesPct: kSnap.kYesPct, mYesPct: kSnap.mYesPct,
           });
         }
 
         const kEntry = {
-          sym, ts: Date.now(), ref: kSnap.ref,
-          ticker:        kSnap.ticker ?? null,
-          outcome:       yesResolved ? 'YES' : 'NO',
-          kYesPct:       kSnap.kYesPct,
-          mYesPct:       kSnap.mYesPct,
-          modelDir:      kSnap.modelDir,
-          closePrice:    +bucket.c.toFixed(6),
-          candleH:       bucket.h != null ? +bucket.h.toFixed(6) : null,
-          candleL:       bucket.l != null ? +bucket.l.toFixed(6) : null,
-          refDiffPct:    +refDiffPct.toFixed(4),
-          marketCorrect: (kSnap.kYesPct >= 50) === yesResolved,
-          modelCorrect:  kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
-          _pendingAuth:  pendingAuth,   // awaiting authoritative Kalshi API result
-          _wickStraddle: wickStraddle,
-          _nearRef:      nearRef,
+          sym, ts: Date.now(), ref: refPrice,
+          ticker:          kSnap.ticker ?? null,
+          strikeDir,
+          outcome:         yesResolved ? 'YES' : 'NO',
+          proxyOutcome:    yesResolved ? 'YES' : 'NO', // stored for resolver cross-check
+          proxyConfidence,
+          kYesPct:         kSnap.kYesPct,
+          mYesPct:         kSnap.mYesPct,
+          modelDir:        kSnap.modelDir,
+          closePrice:      +bucket.c.toFixed(6),
+          candleH:         bucket.h != null ? +bucket.h.toFixed(6) : null,
+          candleL:         bucket.l != null ? +bucket.l.toFixed(6) : null,
+          refDiffPct:      +refDiffPct.toFixed(4),
+          wickSize:        +wickSize.toFixed(4),
+          marketCorrect:   (kSnap.kYesPct >= 50) === yesResolved,
+          modelCorrect:    kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
+          _pendingAuth:    pendingAuth,
+          _wickStraddle:   wickStraddle,
+          _nearRef:        nearRef,
         };
         window._kalshiLog.push(kEntry);
         if (window._kalshiLog.length > 500) window._kalshiLog.shift();
         saveKalshiLog();
         console.log(
-          `[KalshiTracker] ${sym} ref≥${kSnap.ref} close=${bucket.c.toFixed(4)} ` +
-          `→ ${yesResolved ? 'YES ✓' : 'NO'} gap=${refDiffPct.toFixed(4)}% ` +
-          `${wickStraddle ? '⚠️WICK' : nearRef ? '⚠️NEAR-REF' : ''} ` +
+          `[KalshiTracker] ${sym} strike=${strikeDir} ref=${refPrice} close=${bucket.c.toFixed(4)} ` +
+          `→ ${yesResolved ? 'YES ✓' : 'NO'} gap=${refDiffPct.toFixed(4)}% conf=${proxyConfidence} ` +
+          `${wickStraddle ? `⚠️WICK(${wickSize.toFixed(2)}%)` : nearRef ? '⚠️NEAR-REF' : ''} ` +
           `K:${kSnap.kYesPct}% M:${kSnap.mYesPct}% ` +
           `market${kEntry.marketCorrect ? '✓' : '✗'} model${kEntry.modelCorrect ? '✓' : '✗'} ` +
           `${pendingAuth ? '[PENDING-AUTH]' : ''}`

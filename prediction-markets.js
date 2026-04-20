@@ -151,14 +151,22 @@
     //   'below'              → YES resolves if close <  floor_price → YES = DOWN
     const floorPrice = m.floor_price != null ? parseFloat(m.floor_price) : null;
     const capPrice   = m.cap_price   != null ? parseFloat(m.cap_price)   : null;
-    const rawStrike  = m.strike_type ?? null;
+    const rawStrike  = m.strike_type ? String(m.strike_type).toLowerCase() : null;
     const subtitle   = (m.yes_sub_title || m.subtitle || '');
 
-    // Derive YES-side direction from the API field. Fall back to subtitle scan only
-    // when strike_type is absent — never use subtitle as primary extraction source.
-    const strikeDir = rawStrike
-      ? (rawStrike === 'below' ? 'below' : 'above')
-      : subtitle.toLowerCase().includes('below') ? 'below' : 'above';
+    // Derive YES-side direction from the API field.
+    // Normalize all known Kalshi strike_type variants to 'above' | 'below'.
+    // Fall back to subtitle keyword scan only when strike_type is absent.
+    let strikeDir = null;
+    if (rawStrike) {
+      if (rawStrike === 'below' || rawStrike === 'under') strikeDir = 'below';
+      else if (rawStrike === 'above' || rawStrike === 'over' || rawStrike === 'at_least') strikeDir = 'above';
+    }
+    if (!strikeDir) {
+      // subtitle fallback — last resort, never primary
+      const sub = subtitle.toLowerCase();
+      strikeDir = (sub.includes('below') || sub.includes('under')) ? 'below' : 'above';
+    }
 
     // Resolved reference price: prefer floor_price (direct numeric API field).
     // Only fall back to subtitle number extraction if floor_price is absent/zero.
