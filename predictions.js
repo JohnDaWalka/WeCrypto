@@ -3710,7 +3710,15 @@
   function computePrediction(coin, backtest = null) {
     const cache = candleCache[coin.sym];
     if (!cache || !cache.candles || cache.candles.length < 20) {
-      return { sym: coin.sym, signal: 'neutral', confidence: 0, error: 'Insufficient data' };
+      return {
+        sym: coin.sym, name: coin.name, color: coin.color, icon: coin.icon,
+        price: cache?.ticker?.usd || 0,
+        signal: 'neutral', confidence: 0, score: 0,
+        source: 'loading', candleCount: 0, updatedAt: '–',
+        error: 'Insufficient data',
+        indicators: {}, diagnostics: {}, volatility: { label: 'Unknown', atrPct: 0 },
+        projections: {}, reversalFlags: [], scalpSetups: [],
+      };
     }
 
     const baseModel = buildSignalModel(cache.candles, cache.book, cache.trades, {
