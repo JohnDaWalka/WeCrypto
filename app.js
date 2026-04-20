@@ -5385,7 +5385,16 @@
         <button class="btn-sm" id="rerunPreds" style="font-size:10px;padding:4px 10px">Refresh Analysis</button>
       </div>
       <div class="pred-grid">
-        ${predArr.map(p => predictionCard(p)).join('')}
+        ${predArr.map(p => {
+          try { return predictionCard(p); }
+          catch (cardErr) {
+            console.error('[predictionCard] crash:', p?.sym, cardErr);
+            return `<div class="pred-card" style="padding:20px 16px;border-left:4px solid var(--color-red,#ff4444)">
+              <div style="font-weight:700;color:var(--color-red,#ff4444);font-size:13px">⚠ ${p?.sym || '?'} — Render Error</div>
+              <div style="font-size:11px;color:var(--color-text-muted,#aaa);margin-top:6px;font-family:monospace;white-space:pre-wrap">${cardErr.message}</div>
+            </div>`;
+          }
+        }).join('')}
       </div>
     `;
 
