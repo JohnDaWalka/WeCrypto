@@ -3,18 +3,25 @@
 // being overwhelmed by 30+ simultaneous requests during prediction engine runs.
 //
 // Two modes exposed on window:
-//   throttledFetch(url, options)  — concurrent cap (MAX_CONCURRENT=6), drops-in for fetch()
+//   throttledFetch(url, options)  — concurrent cap, hard timeout per request
 //   queuedFetch(url)              — strict serial queue with 65ms breathing room between calls
 //
 // Load order: AFTER proxy-fetch.js (so throttle wraps the already-proxied fetch).
+//
+// WHY Promise.race instead of AbortController:
+//   proxy-fetch.js routes CF-protected domains through a local XHR proxy that
+//   does not forward AbortController signals — so requests through the proxy
+//   can hang forever.  Promise.race gives us a hard wall-clock deadline that
+//   fires regardless, properly releasing the slot via finally.
 
 (function () {
   'use strict';
 
   // ── 1. CONCURRENT THROTTLE ────────────────────────────────────────────────
-  // Caps simultaneous outbound requests.  fetchWithTimeout in predictions.js
-  // uses this instead of raw fetch — prevents 30+ simultaneous proxy hits.
-  const MAX_CONCURRENT = 6;
+  const MAX_CONCURRENT  = 5;      // lowered: fewer simultaneous proxy hits
+  const FETCH_TIMEOUT_MS = 4500;  // hard deadline per request (4.5 s)
+  const SLOT_GAP_MS      = 30;    // breathing room between slot releases
+
   let activeFetches = 0;
   const waitQueue = [];
 
@@ -23,11 +30,26 @@
       await new Promise(resolve => waitQueue.push(resolve));
     }
     activeFetches++;
+
+    // Promise.race provides a hard deadline even when the proxy ignores
+    // the AbortController signal.  The underlying fetch may keep running
+    // in the background but it won't hold a throttle slot.
+    const hardTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('[throttle] timeout')), FETCH_TIMEOUT_MS)
+    );
+
     try {
-      return await fetch(url, options);   // fetch here = proxy-patched fetch
+      const res = await Promise.race([fetch(url, options), hardTimeout]);
+      return res;   // ← return raw Response; callers use .ok / .json() themselves
+    } catch (err) {
+      console.warn('[ThrottledFetch] timeout/error:', url.slice(0, 100));
+      throw err;    // ← re-throw so caller's .catch(() => []) handles it gracefully
     } finally {
       activeFetches--;
-      if (waitQueue.length > 0) waitQueue.shift()();
+      // Small gap before waking the next queued request — reduces proxy burst
+      if (waitQueue.length > 0) {
+        setTimeout(() => { if (waitQueue.length) waitQueue.shift()(); }, SLOT_GAP_MS);
+      }
     }
   }
 
@@ -61,5 +83,5 @@
   window.throttledFetch = throttledFetch;
   window.queuedFetch    = queuedFetch;
 
-  console.info(`[ThrottledFetch] v1.0 ready — concurrent cap: ${MAX_CONCURRENT} | serial gap: 65ms`);
+  console.info(`[ThrottledFetch] v1.1 ready — concurrent: ${MAX_CONCURRENT} | timeout: ${FETCH_TIMEOUT_MS}ms | gap: ${SLOT_GAP_MS}ms`);
 })();

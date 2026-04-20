@@ -363,7 +363,7 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  async function fetchWithTimeout(url, timeoutMs = 8000, options = {}) {
+  async function fetchWithTimeout(url, timeoutMs = 4000, options = {}) {
     if (typeof AbortController === 'undefined') {
       return (window.throttledFetch ?? fetch)(url, options);
     }
@@ -3884,8 +3884,12 @@
     async runAll() {
       if (predictionRunPromise) return predictionRunPromise;
       predictionRunPromise = (async () => {
+        // Per-coin 12s hard cap — if a coin's exchange batch hangs past this,
+        // runAll proceeds with whatever partial data landed rather than freezing.
+        const withCoinTimeout = (p) =>
+          Promise.race([p, new Promise(r => setTimeout(r, 12000))]);
         await Promise.allSettled([
-          ...PREDICTION_COINS.map(c => loadCoinData(c)),
+          ...PREDICTION_COINS.map(c => withCoinTimeout(loadCoinData(c))),
           fetchDerivatives()
         ]);
         // Yield between each coin's backtest to keep the UI thread responsive
