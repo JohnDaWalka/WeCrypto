@@ -6152,19 +6152,118 @@
             // ki is stale cache — if closeTimeMs is in the past, new contract not yet listed.
             const contractExpired = ki.closeTimeMs && (Date.now() - ki.closeTimeMs) > 5_000;
             if (contractExpired) {
-              return `<div style="margin-top:6px;padding:8px 10px;border-radius:5px;background:rgba(100,100,100,0.06);border:1px solid rgba(120,120,120,0.15);font-family:var(--font-mono)">
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                  <span style="color:var(--color-text-muted);font-size:11px;font-weight:700">⏳ Awaiting next contract</span>
-                  <span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px">
-                    <span style="color:var(--color-text-muted);font-size:10px">Model</span>
-                    <strong style="color:${modelColor}">${modelLeanStr}</strong>
-                    <span style="color:var(--color-text-faint)">↔</span>
-                    <span style="color:var(--color-text-muted);font-size:10px">Kalshi</span>
-                    <strong style="color:${kalshiColor}">${kalshiLeanStr}</strong>
-                    ${liveKPct != null ? `<span style="color:var(--color-text-faint);font-size:10px">(prev)</span>` : ''}
-                    ${alignBadge}
-                  </span>
+              // ── Build rotating insight carousel ──────────────────────────────
+              const _ins = [];
+
+              // 1. Model direction + score
+              _ins.push({
+                label: 'MODEL SIGNAL',
+                icon:  modelLean === 'up' ? '▲' : modelLean === 'down' ? '▼' : '◆',
+                value: modelLeanStr,
+                color: modelColor,
+                detail: `score ${(p.score > 0 ? '+' : '') + (p.score?.toFixed(2) ?? '—')}`,
+              });
+
+              // 2. Agree / Fade alignment vs Kalshi
+              if (liveKPct != null) {
+                _ins.push({
+                  label: proAgree ? 'AGREE W/ KALSHI' : proFade ? 'FADE SIGNAL' : 'NEUTRAL',
+                  icon:  proAgree ? '✓' : proFade ? '⚡' : '—',
+                  value: `Model ${modelLeanStr}  ↔  Kalshi ${kalshiLeanStr}`,
+                  color: proAgree ? 'var(--color-green)' : proFade ? '#ff9800' : 'var(--color-text-muted)',
+                  detail: edgePp != null ? edgePp + 'pp gap' : '',
+                });
+              }
+
+              // 3. Last settled contract for this coin
+              const _lastRes = window._resolutionMap?.[p.sym];
+              if (_lastRes) {
+                const _icon = _lastRes.modelCorrect === true ? '✅' : _lastRes.modelCorrect === false ? '❌' : '—';
+                _ins.push({
+                  label: 'LAST CONTRACT',
+                  icon:  _icon,
+                  value: (_lastRes.actualOutcome ?? '—') + '  ·  K: ' + (_lastRes.kalshiResult?.toUpperCase() ?? '—'),
+                  color: _lastRes.modelCorrect === true ? 'var(--color-green)' : _lastRes.modelCorrect === false ? 'var(--color-red)' : 'var(--color-text-muted)',
+                  detail: _lastRes.wickedOut ? '⚡ wicked out' : `entry K: ${Math.round((_lastRes.entryProb ?? 0) * 100)}%`,
+                });
+              }
+
+              // 4. Session accuracy for this coin
+              const _resLog = (window._15mResolutionLog || []).filter(e => e.sym === p.sym);
+              if (_resLog.length >= 2) {
+                const _corr  = _resLog.filter(e => e.modelCorrect === true).length;
+                const _wr    = Math.round(_corr / _resLog.length * 100);
+                const _trd   = _resLog.filter(e => e.orchestratorAction === 'trade');
+                const _tWr   = _trd.length ? Math.round(_trd.filter(e => e.modelCorrect).length / _trd.length * 100) : null;
+                _ins.push({
+                  label: 'SESSION ACCURACY',
+                  icon:  _wr >= 55 ? '📈' : _wr >= 45 ? '📊' : '📉',
+                  value: `${_wr}%  (${_corr}/${_resLog.length} calls)`,
+                  color: _wr >= 55 ? 'var(--color-green)' : _wr >= 45 ? '#ffd700' : 'var(--color-red)',
+                  detail: _tWr != null ? `Traded WR: ${_tWr}%` : '',
+                });
+              }
+
+              // 5. CFM momentum
+              const _cfm = (window._cfmAll || window._lastCfm || {})[p.sym];
+              if (_cfm?.momentum != null) {
+                const _mom = _cfm.momentum;
+                _ins.push({
+                  label: 'CFM MOMENTUM',
+                  icon:  _mom > 0.008 ? '⚡' : _mom < -0.008 ? '⬇' : '◆',
+                  value: (_mom > 0 ? '+' : '') + _mom.toFixed(4) + '  ·  ' + (_cfm.trend ?? 'neutral'),
+                  color: _mom > 0.004 ? 'var(--color-green)' : _mom < -0.004 ? 'var(--color-red)' : 'var(--color-text-muted)',
+                  detail: (_cfm.sourceCount ?? 0) + ' sources',
+                });
+              }
+
+              // 6. Wick warning if recent wicks exist
+              const _wicks = _resLog.filter(e => e.wickedOut).length;
+              if (_wicks > 0) {
+                _ins.push({
+                  label: 'WICK ALERT',
+                  icon:  '⚡',
+                  value: `${_wicks} wick${_wicks > 1 ? 's' : ''} this session — enter early`,
+                  color: '#ff9800',
+                  detail: 'last-45s price manipulation risk',
+                });
+              }
+
+              // 7. Sweet spot window hint
+              _ins.push({
+                label: 'SWEET SPOT WINDOW',
+                icon:  '⭐',
+                value: '3 – 6 min after contract opens',
+                color: '#ffd700',
+                detail: 'payout ≥1.65×  ·  best entry window',
+              });
+
+              // 8. Trade recommendation preview
+              if (modelLean !== 'neutral' && (proAgree || proFade)) {
+                const _rec = proFade
+                  ? `Fade the crowd — bet ${modelLean === 'up' ? 'YES' : 'NO'} when contract opens`
+                  : `${modelLean === 'up' ? 'YES' : 'NO'} side favoured — watch for entry`;
+                _ins.push({
+                  label: proFade ? 'FADE OPPORTUNITY' : 'ENTRY WATCH',
+                  icon:  proFade ? '🔄' : '👁',
+                  value: _rec,
+                  color: proFade ? '#ff9800' : 'var(--color-text)',
+                  detail: `confidence ready when contract lists`,
+                });
+              }
+
+              // Store in global map for the rotation interval to read
+              window._kiInsights = window._kiInsights || {};
+              window._kiInsights[p.sym] = _ins;
+
+              const _insFirst = _ins[0];
+              return `<div id="ki-await-${p.sym}" style="margin-top:6px;padding:8px 10px;border-radius:5px;background:rgba(100,100,100,0.06);border:1px solid rgba(120,120,120,0.15);font-family:var(--font-mono);transition:opacity 0.25s ease">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span style="font-size:9px;font-weight:700;color:var(--color-text-faint);letter-spacing:.5px;text-transform:uppercase;min-width:110px">${_insFirst.label}</span>
+                  <strong style="font-size:13px;color:${_insFirst.color}">${_insFirst.icon} ${_insFirst.value}</strong>
+                  ${_insFirst.detail ? `<span style="margin-left:auto;font-size:10px;color:var(--color-text-faint)">${_insFirst.detail}</span>` : ''}
                 </div>
+                <div style="display:flex;gap:3px;margin-top:4px">${_ins.map((_, j) => `<span style="width:16px;height:2px;border-radius:1px;background:${j === 0 ? 'var(--color-primary,#7c6aff)' : 'rgba(255,255,255,0.12)'}" id="ki-dot-${p.sym}-${j}"></span>`).join('')}</div>
               </div>`;
             }
 
@@ -7506,6 +7605,37 @@
       }
     }
   }, 100);
+
+
+  // ── Awaiting-card insight carousel (3s rotation) ──────────────────────────
+  setInterval(() => {
+    const map = window._kiInsights;
+    if (!map) return;
+    document.querySelectorAll('[id^="ki-await-"]').forEach(el => {
+      const sym = el.id.replace('ki-await-', '');
+      const ins = map[sym];
+      if (!ins?.length) return;
+      let idx = ((el._awaitIdx ?? -1) + 1) % ins.length;
+      el._awaitIdx = idx;
+      const cur = ins[idx];
+      // Fade out → swap content → fade in
+      el.style.opacity = '0.15';
+      setTimeout(() => {
+        try {
+          const dots = ins.map((_, j) =>
+            `<span style="width:16px;height:2px;border-radius:1px;background:${j === idx ? 'var(--color-primary,#7c6aff)' : 'rgba(255,255,255,0.12)'}" id="ki-dot-${sym}-${j}"></span>`
+          ).join('');
+          el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:9px;font-weight:700;color:var(--color-text-faint);letter-spacing:.5px;text-transform:uppercase;min-width:110px">${cur.label}</span>
+            <strong style="font-size:13px;color:${cur.color}">${cur.icon} ${cur.value}</strong>
+            ${cur.detail ? `<span style="margin-left:auto;font-size:10px;color:var(--color-text-faint)">${cur.detail}</span>` : ''}
+          </div>
+          <div style="display:flex;gap:3px;margin-top:4px">${dots}</div>`;
+          el.style.opacity = '1';
+        } catch (_) {}
+      }, 220);
+    });
+  }, 3000);
 
   // ── Market Divergence live refresh (every 5s) ────────────────────────────
   // Keeps _marketDivergence state fresh between prediction engine cycles using
