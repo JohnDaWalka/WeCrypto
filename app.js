@@ -69,6 +69,9 @@
   window._lastKalshiSnapshot = window._lastKalshiSnapshot || {};
   // Contract-level error log — captures mismatches, wick events, fetch failures
   window._kalshiErrors       = window._kalshiErrors       || [];
+  // Market Divergence: per-coin divergence timing state (model vs Kalshi crowd)
+  // Tracks how long model has been ahead of Kalshi odds so user can time fade entries.
+  window._marketDivergence   = window._marketDivergence   || {};
 
   // Restore persisted logs from localStorage on startup
   (function restorePersistedData() {
@@ -1278,6 +1281,18 @@
       // Snapshot Kalshi alignment state so we can evaluate outcome on bucket close
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
+        // ── Compute fade state ───────────────────────────────────────────────
+        const _modelScore  = p.score ?? 0;
+        const _modelConf   = p.confidence ?? null;
+        const _modelDir    = _modelScore > 0.12 ? 'up' : _modelScore < -0.12 ? 'down' : 'wait';
+        const _kalshiDir   = ka.kalshiYesPct >= 50 ? 'up' : 'down';
+        const _fadeActive  = _modelDir !== 'wait' && _modelDir !== _kalshiDir;
+        const _fadeSolid   = _fadeActive && Math.abs(_modelScore) >= 0.20;
+        const _betAction   = _modelDir === 'up' ? 'YES' : _modelDir === 'down' ? 'NO' : null;
+
+        // ── Update Market Divergence tracker for this coin ──────────────────
+        const _mdiv = updateMarketDivergence(coin.sym, _modelDir, _kalshiDir, ka.kalshiYesPct, _modelScore);
+
         window._lastKalshiSnapshot[coin.sym] = {
           ref:          ka.ref,
           kYesPct:      ka.kalshiYesPct,
@@ -1294,6 +1309,16 @@
           // Diagnostic flags
           dirConflict:  ka.dirConflict   ?? false,
           cdfImpliedDir: ka.cdfImpliedDir ?? null,
+          // Fade & model state
+          fadeActive:   _fadeActive,
+          fadeSolid:    _fadeSolid,
+          betAction:    _betAction,
+          modelScore:   _modelScore,
+          modelConf:    _modelConf,
+          // Market Divergence state
+          mdivPhase:     _mdiv.phase     ?? 'STALE',
+          mdivDurationMs: _mdiv.durationMs ?? 0,
+          mdivCatchupDelta: _mdiv.catchupDelta ?? 0,
         };
         if (ka.dirConflict) {
           console.warn(
@@ -1305,6 +1330,66 @@
     });
     saveLastPred();
     saveLastKalshi();
+  }
+
+  // ── Market Divergence ─────────────────────────────────────────────────────
+  // Tracks per-coin divergence state: how long the model has been calling a
+  // direction OPPOSITE to Kalshi crowd odds.  The divergence window is the
+  // period BEFORE the crowd catches up — optimal timing for a fade bet.
+  //
+  // Phases:
+  //   PRIME    — 0-60s, strong model (|score|≥0.20), market not yet moving → best entry
+  //   ACTIVE   — 60-150s, still diverging cleanly
+  //   CATCHING — Kalshi odds drifting ≥5pp toward model → entry window closing
+  //   DIVERGING— Kalshi doubling down against model (≥8pp away) → elevated risk
+  //   LATE     — >150s diverging → model may be wrong or contract expiring
+  //   STALE    — no divergence (model aligns with crowd or model is neutral)
+  function updateMarketDivergence(sym, modelDir, kalshiDir, kalshiPct, score) {
+    const now = Date.now();
+    const buf = window._marketDivergence[sym] || {};
+    const isDiverging = modelDir !== 'wait' && kalshiDir !== null && modelDir !== kalshiDir;
+
+    if (isDiverging) {
+      if (!buf.active || !buf.firstDivTs) {
+        buf.active         = true;
+        buf.firstDivTs     = now;
+        buf.entryKalshiPct = kalshiPct ?? 50;
+        buf.entryScore     = score;
+        buf.entryModelDir  = modelDir;
+        buf.peakScore      = Math.abs(score);
+      }
+      buf.durationMs       = now - buf.firstDivTs;
+      buf.currentKalshiPct = kalshiPct ?? 50;
+      buf.currentScore     = score;
+      buf.peakScore        = Math.max(buf.peakScore ?? 0, Math.abs(score));
+
+      // catchupDelta > 0 means Kalshi is moving TOWARD the model's direction
+      // (market catching up). Negative means diverging further.
+      const catchupDelta = modelDir === 'up'
+        ? buf.currentKalshiPct - buf.entryKalshiPct   // UP call → want YES% to rise
+        : buf.entryKalshiPct   - buf.currentKalshiPct; // DOWN call → want YES% to fall
+      buf.catchupDelta = catchupDelta;
+
+      const sec = buf.durationMs / 1000;
+      if      (catchupDelta >= 5)                              buf.phase = 'CATCHING';
+      else if (catchupDelta <= -8)                             buf.phase = 'DIVERGING';
+      else if (sec < 60 && Math.abs(score) >= 0.20)           buf.phase = 'PRIME';
+      else if (sec < 150)                                      buf.phase = 'ACTIVE';
+      else                                                     buf.phase = 'LATE';
+    } else {
+      if (buf.active && buf.firstDivTs) {
+        buf.resolvedTs    = now;
+        buf.resolvedInMs  = now - buf.firstDivTs;
+        buf.resolvedPhase = buf.phase;
+      }
+      buf.active       = false;
+      buf.firstDivTs   = null;
+      buf.phase        = 'STALE';
+      buf.durationMs   = 0;
+      buf.catchupDelta = 0;
+    }
+    window._marketDivergence[sym] = buf;
+    return buf;
   }
 
   // Returns rolling accuracy stats from _predLog
@@ -1444,6 +1529,16 @@
           _wickStraddle:   wickStraddle,
           _nearRef:        nearRef,
           _dirConflict:    dirConflict,
+          // Fade & market divergence state (filled from snapshot; fadeCorrect back-filled on authoritative settle)
+          fadeActive:      kSnap.fadeActive      ?? false,
+          fadeSolid:       kSnap.fadeSolid       ?? false,
+          betAction:       kSnap.betAction       ?? null,
+          modelScore:      kSnap.modelScore      ?? null,
+          modelConf:       kSnap.modelConf       ?? null,
+          mdivPhase:       kSnap.mdivPhase       ?? 'STALE',
+          mdivDurationMs:  kSnap.mdivDurationMs  ?? 0,
+          mdivCatchupDelta: kSnap.mdivCatchupDelta ?? 0,
+          fadeCorrect:     null, // back-filled by market15m:resolved
         };
         window._kalshiLog.push(kEntry);
         if (window._kalshiLog.length > 500) window._kalshiLog.shift();
@@ -1551,6 +1646,15 @@
       entry.outcome        = authOutcomeYN;          // canonical YES/NO
       entry.modelCorrect   = modelCorrect  ?? entry.modelCorrect;
       entry.marketCorrect  = marketCorrect ?? entry.marketCorrect;
+      // Back-fill fadeCorrect: was the model's fade bet right?
+      if (entry.fadeActive && entry.betAction) {
+        entry.fadeCorrect = entry.betAction === authOutcomeYN;
+        console.log(
+          `[FadeTracker] ${entry.fadeCorrect ? '✓ FADE CORRECT' : '✗ FADE WRONG'} ` +
+          `${sym}: bet=${entry.betAction} auth=${authOutcomeYN} score=${entry.modelScore?.toFixed(2) ?? '?'} ` +
+          `mdivPhase=${entry.mdivPhase ?? '?'}`
+        );
+      }
       entry._settled       = true;
       entry._proxyMismatch = proxyMismatch;
       entry._refPrice      = floorPrice ?? refPrice ?? entry.ref;  // floor_price preferred
@@ -5442,36 +5546,45 @@
   }
 
   function predictionCard(p) {
-    // ── Kalshi-primary verdict ────────────────────────────────────────────
-    // Per Kalshi contract spec: YES price = market-implied probability that
-    // price ≥ CF Benchmarks 60-sec average at expiry ("at least X" criterion).
-    // Kalshi ≥55% → UP  |  ≤45% → DOWN  |  45-55% → model score breaks tie.
+    // ── Model-primary verdict ─────────────────────────────────────────────
+    // Model score drives the direction call. Kalshi odds are displayed as
+    // a secondary overlay — the FADE/CONFIRM banner shows when they disagree.
+    // Kalshi fills in ONLY when the model is neutral (score in ±0.12 band)
+    // AND Kalshi has meaningful edge (≥15pp from 50%).
     const _k15mCV    = window.PredictionMarkets?.getCoin(p.sym);
     const _k15mV     = _k15mCV?.kalshi15m ?? null;
     const kalshiProb = _k15mV?.probability ?? _k15mCV?.combinedProb ?? null;
     const kalshiPct  = kalshiProb !== null ? Math.round(kalshiProb * 100) : null;
     const kalshiEdge = kalshiProb !== null ? Math.abs(kalshiProb - 0.5)  : null;
 
+    const modelDir  = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'wait';
+    const kalshiDir = kalshiProb !== null ? (kalshiProb >= 0.5 ? 'up' : 'down') : null;
+
     let verdictDir, verdictSource;
-    if (kalshiProb !== null) {
-      if      (kalshiProb >= 0.55) { verdictDir = 'up';   verdictSource = 'kalshi'; }
-      else if (kalshiProb <= 0.45) { verdictDir = 'down'; verdictSource = 'kalshi'; }
-      else {
-        // Kalshi near 50/50 — model score breaks the tie
-        verdictDir    = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'wait';
-        verdictSource = 'model';
-      }
-    } else {
-      // No Kalshi data — fall back to model with tightened threshold
-      verdictDir    = p.score > 0.18 ? 'up' : p.score < -0.18 ? 'down' : 'wait';
+    if (modelDir !== 'wait') {
+      // Model has conviction — it leads
+      verdictDir    = modelDir;
       verdictSource = 'model';
+    } else if (kalshiProb !== null && kalshiEdge >= 0.15) {
+      // Model neutral, but Kalshi has strong edge — use Kalshi as tiebreak
+      verdictDir    = kalshiDir;
+      verdictSource = 'kalshi';
+    } else {
+      verdictDir    = 'wait';
+      verdictSource = 'neutral';
     }
+
+    // Fade flags: model calling opposite of Kalshi crowd
+    const _fadeActive = kalshiDir !== null && modelDir !== 'wait' && modelDir !== kalshiDir;
+    const _fadeSolid  = _fadeActive && Math.abs(p.score) >= 0.20;
+    const _fadeSoft   = _fadeActive && !_fadeSolid;
+    // Bet action: YES = price ≥ strike (UP); NO = price < strike (DOWN)
+    const _betAction  = verdictDir === 'up' ? 'YES' : verdictDir === 'down' ? 'NO' : null;
+    const compositeEdge = 0.75 * Math.abs(p.score) + 0.25 * (kalshiEdge ?? 0);
 
     const verdictMain = verdictDir === 'up' ? '▲ UP' : verdictDir === 'down' ? '▼ DOWN' : '◆ WAIT';
     const strength    = verdictDir === 'wait' ? 'NEUTRAL'
-      : kalshiEdge !== null
-        ? (kalshiEdge >= 0.20 ? 'STRONG' : kalshiEdge >= 0.10 ? 'MODERATE' : 'LIGHT')
-        : (Math.abs(p.score) >= 0.5 ? 'STRONG' : Math.abs(p.score) >= 0.25 ? 'MODERATE' : 'WEAK');
+      : compositeEdge >= 0.42 ? 'STRONG' : compositeEdge >= 0.22 ? 'MODERATE' : 'LIGHT';
     const scoreStr  = Number.isFinite(p.score) ? (p.score > 0 ? '+' : '') + p.score.toFixed(2) : '—';
 
     // Session quality badge — London open (UTC 7–12) is consistently worst session (-7-10% WR)
@@ -5673,9 +5786,10 @@
             <span class="pred-verdict-strength">${strength}</span>
           </div>
           <div class="pred-verdict-meta">
+            <span class="pred-source-badge model">MODEL</span>
             ${kalshiPct !== null
-              ? `<span class="pred-source-badge ${verdictSource}">${verdictSource === 'kalshi' ? `KALSHI ${kalshiPct}% YES` : `KALSHI ~50/50`}</span>`
-              : `<span class="pred-source-badge model">MODEL</span>`}
+              ? `<span class="pred-source-badge ${_fadeActive ? 'kalshi-fade' : 'kalshi-align'}">KALSHI ${kalshiPct}% YES</span>`
+              : ''}
             <span>Score ${scoreStr}</span>
             <span>·</span>
             <span>${p.confidence}% conf</span>
@@ -5686,6 +5800,60 @@
             <div class="pred-verdict-bar-fill ${verdictDir}" style="width:${p.confidence}%"></div>
           </div>
           ${kalshi15mRow}
+          ${(() => {
+            // ── Market Divergence row ─────────────────────────────────────
+            const _md = window._marketDivergence?.[p.sym];
+            if (!_md?.active || _md.phase === 'STALE') return '';
+
+            const phaseColors = {
+              PRIME:    ['rgba(38,212,126,0.10)', 'rgba(38,212,126,0.40)', 'var(--color-green)'],
+              ACTIVE:   ['rgba(0,150,255,0.09)',  'rgba(0,150,255,0.35)', '#4f9eff'],
+              CATCHING: ['rgba(255,215,0,0.10)',  'rgba(255,215,0,0.40)', '#ffd700'],
+              DIVERGING:['rgba(220,60,60,0.09)',  'rgba(220,60,60,0.35)', 'var(--color-red)'],
+              LATE:     ['rgba(130,130,130,0.07)','rgba(130,130,130,0.25)','var(--color-text-muted)'],
+            };
+            const [bg, border, textColor] = phaseColors[_md.phase] || phaseColors.LATE;
+
+            const phaseLabels = {
+              PRIME:    '🟢 PRIME WINDOW',
+              ACTIVE:   '🔵 ACTIVE',
+              CATCHING: '🟡 CROWD CATCHING',
+              DIVERGING:'🔴 CROWD DOUBLING DOWN',
+              LATE:     '⬜ LATE',
+            };
+
+            const secElapsed = _md.durationMs > 0 ? Math.floor(_md.durationMs / 1000) : 0;
+            const minSec     = secElapsed >= 60
+              ? Math.floor(secElapsed / 60) + 'm ' + (secElapsed % 60) + 's'
+              : secElapsed + 's';
+
+            const deltaStr = _md.catchupDelta != null && Math.abs(_md.catchupDelta) >= 0.5
+              ? (_md.catchupDelta > 0
+                  ? `+${_md.catchupDelta.toFixed(1)}pp crowd → model`
+                  : `${_md.catchupDelta.toFixed(1)}pp crowd away`)
+              : '';
+
+            const entryHint = _md.phase === 'PRIME'
+              ? 'Best entry window — model ahead of crowd'
+              : _md.phase === 'ACTIVE'
+              ? 'Divergence holding — monitor for catchup'
+              : _md.phase === 'CATCHING'
+              ? 'Crowd moving toward model — entry closing'
+              : _md.phase === 'DIVERGING'
+              ? 'Crowd opposing model — elevated risk'
+              : 'Signal aging — verify before entry';
+
+            return `
+              <div style="margin-top:5px;padding:7px 10px;border-radius:4px;background:${bg};border:1px solid ${border};font-size:11px;font-family:var(--font-mono)">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span style="font-weight:900;letter-spacing:.3px;color:${textColor}">MKT DIV</span>
+                  <span style="font-weight:800;color:${textColor}">${phaseLabels[_md.phase] ?? _md.phase}</span>
+                  <span style="font-weight:700;color:var(--color-text)" data-mdiv-ts="${_md.firstDivTs ?? ''}">${minSec}</span>
+                  ${deltaStr ? `<span style="margin-left:auto;color:var(--color-text-muted)">${deltaStr}</span>` : ''}
+                </div>
+                <div style="margin-top:3px;color:var(--color-text-muted);font-size:10px;font-family:var(--font-sans)">${entryHint}${_md.entryKalshiPct != null ? ` · Entry K: ${_md.entryKalshiPct.toFixed(0)}% → now ${_md.currentKalshiPct?.toFixed(0) ?? '?'}%` : ''}</div>
+              </div>`;
+          })()}
           ${(() => {
             const ki = window.KalshiOrchestrator?.getIntent?.(p.sym);
             if (!ki || ki.action === 'skip') return '';
@@ -6360,6 +6528,18 @@
     // Re-render HUD every 3 seconds
     setInterval(renderHud, 3000);
     renderHud();
+
+    // Live Market Divergence timer — update elapsed time on cards every 3s
+    setInterval(() => {
+      document.querySelectorAll('[data-mdiv-ts]').forEach(el => {
+        const ts = parseInt(el.dataset.mdivTs, 10);
+        if (!ts || isNaN(ts)) return;
+        const sec = Math.floor((Date.now() - ts) / 1000);
+        el.textContent = sec >= 60
+          ? Math.floor(sec / 60) + 'm ' + (sec % 60) + 's'
+          : sec + 's';
+      });
+    }, 3000);
 
     // Re-render immediately on alert
     window.OB?.onAlert(() => renderHud());

@@ -1378,8 +1378,11 @@ input, select { font: inherit; color: inherit; }
   text-transform: uppercase;
   font-family: var(--font-mono);
 }
-.pred-source-badge.model  { background: var(--color-surface-3); color: var(--color-text-muted); border: 1px solid var(--color-border); }
-.pred-source-badge.kalshi { background: rgba(79,158,255,0.12); color: var(--color-primary); border: 1px solid rgba(79,158,255,0.28); }
+.pred-source-badge.model        { background: var(--color-surface-3); color: var(--color-text-muted); border: 1px solid var(--color-border); }
+.pred-source-badge.kalshi       { background: rgba(79,158,255,0.12); color: var(--color-primary); border: 1px solid rgba(79,158,255,0.28); }
+.pred-source-badge.kalshi-align { background: rgba(38,212,126,0.12); color: var(--color-green);  border: 1px solid rgba(38,212,126,0.30); }
+.pred-source-badge.kalshi-fade  { background: rgba(255,75,110,0.12); color: var(--color-red);    border: 1px solid rgba(255,75,110,0.30); }
+.pred-source-badge.fade-badge   { background: rgba(255,152,0,0.14);  color: #ff9800;             border: 1px solid rgba(255,152,0,0.40); font-weight: 900; }
 .pred-verdict.up   .pred-source-badge.kalshi { background: rgba(38,212,126,0.14); color: var(--color-green); border-color: rgba(38,212,126,0.3); }
 .pred-verdict.down .pred-source-badge.kalshi { background: rgba(255,75,110,0.14); color: var(--color-red);   border-color: rgba(255,75,110,0.3); }
 .pred-session-warn{display:inline-block;background:rgba(255,165,0,0.15);color:#e8a020;border:1px solid rgba(255,165,0,0.3);border-radius:3px;font-size:9px;font-weight:700;padding:1px 5px;margin-left:5px;letter-spacing:.4px;vertical-align:middle}
@@ -2624,3 +2627,66 @@ input, select { font: inherit; color: inherit; }
   font-family: var(--font-mono);
   padding: 0 2px;
 }
+
+/* ── Market Divergence ──────────────────────────────────────────────────── */
+.mdiv-row {
+  margin-top: 5px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mdiv-row.mdiv-prime    { background: rgba(38,212,126,0.09);  border: 1px solid rgba(38,212,126,0.35); }
+.mdiv-row.mdiv-active   { background: rgba(0,150,255,0.09);   border: 1px solid rgba(0,150,255,0.30); }
+.mdiv-row.mdiv-catching { background: rgba(255,215,0,0.09);   border: 1px solid rgba(255,215,0,0.35); }
+.mdiv-row.mdiv-diverging{ background: rgba(220,60,60,0.08);   border: 1px solid rgba(220,60,60,0.30); }
+.mdiv-row.mdiv-late     { background: rgba(150,150,150,0.07); border: 1px solid rgba(150,150,150,0.22); }
+.mdiv-label { font-weight: 800; letter-spacing: .3px; font-family: var(--font-mono); }
+.mdiv-timer { font-weight: 700; font-family: var(--font-mono); color: var(--color-text); }
+.mdiv-phase { font-weight: 700; }
+.mdiv-delta { margin-left: auto; color: var(--color-text-muted); }
+
+/* ── Fade/Confirm action banner ─────────────────────────────────────────── */
+.fade-banner { margin-top: 6px; padding: 9px 12px; border-radius: 5px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fade-banner.fade-solid    { background: rgba(255,152,0,0.13); border: 1.5px solid rgba(255,152,0,0.50); }
+.fade-banner.fade-soft     { background: rgba(255,152,0,0.07); border: 1px   solid rgba(255,152,0,0.25); }
+.fade-banner.fade-confirm  { background: rgba(38,212,126,0.07); border: 1px  solid rgba(38,212,126,0.22); }
+.fade-banner-label { font-size: 13px; font-weight: 900; letter-spacing: .5px; }
+.fade-banner-bet   { padding: 3px 14px; border-radius: 4px; font-size: 15px; font-weight: 900; letter-spacing: .8px; }
+.fade-banner-bet.yes { background: rgba(38,212,126,0.22); color: var(--color-green); }
+.fade-banner-bet.no  { background: rgba(255,75,110,0.22);  color: var(--color-red); }
+.fade-banner-meta  { font-size: 11px; color: var(--color-text-muted); margin-left: auto; }
+
+/* ── Contract Report Log ────────────────────────────────────────────────── */
+.contract-log { margin-top: 18px; }
+.contract-log-hdr {
+  font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--color-text-muted); padding: 5px 0 4px;
+  border-bottom: 1px solid var(--color-border); margin-bottom: 4px;
+  display: grid; grid-template-columns: 50px 60px 1fr 1fr 1fr 1fr 1fr 1fr;
+  gap: 4px; align-items: center;
+}
+.contract-log-row {
+  display: grid; grid-template-columns: 50px 60px 1fr 1fr 1fr 1fr 1fr 1fr;
+  gap: 4px; font-size: 11px; padding: 3px 0;
+  border-bottom: 1px solid var(--color-surface-3); align-items: center;
+  font-family: var(--font-mono);
+}
+.contract-log-row.cl-yes  { border-left: 3px solid var(--color-green); padding-left: 4px; }
+.contract-log-row.cl-no   { border-left: 3px solid var(--color-red);   padding-left: 4px; }
+.contract-log-row.cl-pend { border-left: 3px solid var(--color-border); padding-left: 4px; }
+.cl-ok  { color: var(--color-green); font-weight: 700; }
+.cl-bad { color: var(--color-red);   font-weight: 700; }
+.cl-na  { color: var(--color-text-faint); }
+.cl-fade-ok  { color: #ff9800; font-weight: 700; }
+.cl-fade-bad { color: var(--color-red); }
+.contract-log-stats {
+  display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; padding: 8px 10px;
+  background: var(--color-surface-2); border-radius: 5px; font-size: 11px;
+}
+.cls-item { display: flex; flex-direction: column; gap: 2px; }
+.cls-val  { font-size: 14px; font-weight: 700; font-family: var(--font-mono); }
+.cls-lbl  { font-size: 10px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .05em; }
