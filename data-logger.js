@@ -1,10 +1,11 @@
-// data-logger.js  v1.0
+// data-logger.js  v2.0
 // ══════════════════════════════════════════════════════════════════════════════
-// Dual-path JSONL logger + Ctrl+D debug overlay
+// Hybrid JSONL logger + Ctrl+D debug overlay
 //
 // Writes every 60s to:
-//   F:\WECRYP\data\YYYY-MM-DD\{category}.jsonl   (local)
-//   W:\My Drive\WECRYP0-data\YYYY-MM-DD\{category}.jsonl  (Google Drive)
+//   F:\WECRYP\data\YYYY-MM-DD\{category}.jsonl              (local)
+//   Z:\WeCrypto-data\YYYY-MM-DD\{category}.jsonl            (Google Drive primary)
+//   W:\My Drive\WECRYP0-data\YYYY-MM-DD\{category}.jsonl   (Google Drive fallback)
 //
 // Categories: predictions · decisions · cfm_snapshots · shell_events ·
 //             resolver_outcomes · errors
@@ -13,9 +14,9 @@
 (function () {
   'use strict';
 
-  const LOCAL_ROOT = 'F:\\WECRYP\\data';
-  const DRIVE_ROOT = 'W:\\My Drive\\WECRYP0-data';
-  const FLUSH_MS   = 60_000;
+  const LOCAL_ROOT  = 'F:\\WECRYP\\data';
+  const DRIVE_PATHS = ['Z:\\WeCrypto-data', 'W:\\My Drive\\WECRYP0-data'];
+  const FLUSH_MS    = 60_000;
 
   // ── Buffer + Stats ──────────────────────────────────────────────────────────
   const _buf = {};   // category → string[]
@@ -34,10 +35,9 @@
 
   function filePaths(category) {
     const day = todayStr();
-    return [
-      `${LOCAL_ROOT}\\${day}\\${category}.jsonl`,
-      `${DRIVE_ROOT}\\${day}\\${category}.jsonl`,
-    ];
+    const paths = [`${LOCAL_ROOT}\\${day}\\${category}.jsonl`];
+    for (const d of DRIVE_PATHS) paths.push(`${d}\\${day}\\${category}.jsonl`);
+    return paths;
   }
 
   function push(category, obj) {
@@ -121,25 +121,73 @@
     if (type === 'vol_ionize')     s.volSpikes++;
   }
 
-  function logResolverOutcome(sym, outcome, modelCorrect, prob) {
+  function logResolverOutcome(sym, res) {
+    // Accept full resolution object or legacy (sym, outcome, modelCorrect, prob) signature
+    const isFullObj = res && typeof res === 'object' && ('actualOutcome' in res || 'outcome' in res);
+    const outcome     = isFullObj ? (res.actualOutcome ?? res.outcome) : res;
+    const modelCorrect= isFullObj ? res.modelCorrect : arguments[2];
+    const prob        = isFullObj ? (res.entryProb ?? arguments[3]) : arguments[3];
+
     const intent = window.KalshiOrchestrator?.getIntent?.(sym);
     push('resolver_outcomes', {
-      sym, outcome,
+      sym,
+      outcome,
       modelCorrect,
-      prob: Math.round((prob || 0.5) * 100),
-      action: intent?.action ?? null,
+      prob:           Math.round((prob || 0.5) * 100),
+      action:         isFullObj ? (res.orchestratorAction ?? intent?.action ?? null) : (intent?.action ?? null),
+      // Extended fields from full resolution object
+      modelScore:     isFullObj ? (res.modelScore     ?? null) : null,
+      alignment:      isFullObj ? (res.orchestratorAlign ?? null) : null,
+      sweetSpot:      isFullObj ? (res.sweetSpot      ?? false) : false,
+      crowdFade:      isFullObj ? (res.crowdFade       ?? false) : false,
+      edgeCents:      isFullObj ? (res.edgeCents       ?? null) : null,
+      entryPrice:     isFullObj ? (res.entryPrice      ?? null) : null,
+      wickedOut:      isFullObj ? (res.wickedOut        ?? false) : false,
+      lateEntry:      isFullObj ? (res.lateEntry        ?? false) : false,
+      closeSnapshots: isFullObj ? (res.closeSnapshots  ?? []) : [],
+      confidence:     isFullObj ? (res.confidence      ?? null) : null,
+      ticker:         isFullObj ? (res.ticker          ?? null) : null,
+      strikeDir:      isFullObj ? (res.strikeDir       ?? null) : null,
+      floorPrice:     isFullObj ? (res.floorPrice      ?? null) : null,
     });
+
     if (!_stats.resolverOutcomes[sym])
       _stats.resolverOutcomes[sym] = { correct: 0, wrong: 0, total: 0 };
     const r = _stats.resolverOutcomes[sym];
     r.total++;
     if (modelCorrect === true)  r.correct++;
     if (modelCorrect === false) r.wrong++;
+
+    // ── localStorage summary cache (last 100 contracts, compact) ────────────
+    try {
+      const cacheKey = 'wc_contract_log';
+      let cache = [];
+      try { cache = JSON.parse(localStorage.getItem(cacheKey) || '[]'); } catch (_) {}
+      const compact = {
+        sym,
+        ts:         Date.now(),
+        dir:        isFullObj ? (res.modelDir ?? null) : null,
+        outcome,
+        correct:    modelCorrect,
+        score:      isFullObj ? (res.modelScore ?? null) : null,
+        kalshiPct:  Math.round((prob || 0.5) * 100),
+        sweetSpot:  isFullObj ? (res.sweetSpot ?? false) : false,
+        wickedOut:  isFullObj ? (res.wickedOut ?? false) : false,
+        alignment:  isFullObj ? (res.orchestratorAlign ?? null) : null,
+        edgeCents:  isFullObj ? (res.edgeCents ?? null) : null,
+      };
+      cache.push(compact);
+      if (cache.length > 100) cache = cache.slice(-100);
+      localStorage.setItem(cacheKey, JSON.stringify(cache));
+    } catch (_) {}
+
     flushCat('resolver_outcomes');
   }
 
-  function logError(source, err) {
+  function logError(source, err, { sym, ticker } = {}) {
     const entry = { source, msg: String(err?.message || err).slice(0, 200), ts: Date.now() };
+    if (sym)    entry.sym    = sym;
+    if (ticker) entry.ticker = ticker;
     push('errors', entry);
     _stats.errors.push(entry);
     if (_stats.errors.length > 30) _stats.errors.shift();
@@ -221,7 +269,7 @@
       <span style="font-size:15px;font-weight:800;color:var(--color-primary,#7c6aff)">⚙ WeCrypto Debug Metrics</span>
       <span style="font-size:10px;color:var(--color-text-muted)">
         Uptime <b>${upMin}m</b> · <b>${s.session.flushCount}</b> flushes · <b>${kb} KB</b> written ·
-        F:\\WECRYP\\data + W:\\My Drive\\WECRYP0-data · <kbd style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">Ctrl+D</kbd> close
+        F:\\WECRYP\\data + Z:\\WeCrypto-data + W:\\My Drive\\WECRYP0-data · <kbd style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">Ctrl+D</kbd> close
       </span>
     </div>
 
@@ -279,7 +327,8 @@
         <div style="margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;font-size:10px;color:var(--color-text-muted);line-height:1.9">
           <div style="font-weight:700;color:var(--color-text,#e2e8f0);margin-bottom:4px">💾 Storage Paths</div>
           <div>📁 Local: <code>F:\\WECRYP\\data\\${todayStr()}</code></div>
-          <div>☁ Drive: <code>W:\\My Drive\\WECRYP0-data\\${todayStr()}</code></div>
+          <div>☁ Drive (primary): <code>Z:\\WeCrypto-data\\${todayStr()}</code></div>
+          <div>☁ Drive (fallback): <code>W:\\My Drive\\WECRYP0-data\\${todayStr()}</code></div>
           <div style="margin-top:6px">Categories: predictions · decisions · cfm_snapshots · shell_events · resolver_outcomes · errors</div>
         </div>
 
@@ -352,8 +401,12 @@
     logShellEvent('veto_released', { sym: e.detail?.sym, reason: e.detail?.reason });
   });
   window.addEventListener('market15m:resolved', e => {
-    const { sym, outcome, modelCorrect, prob } = e.detail || {};
-    if (sym) logResolverOutcome(sym, outcome, modelCorrect, prob);
+    const { sym } = e.detail || {};
+    if (sym) {
+      // Pass full resolution object from _resolutionMap if available, else fall back to event detail
+      const res = window._resolutionMap?.[sym] ?? e.detail;
+      logResolverOutcome(sym, res);
+    }
   });
 
   // ── Global error capture ─────────────────────────────────────────────────────
@@ -376,5 +429,5 @@
     hideDebug: hideOverlay,
   };
 
-  console.log('[DataLogger] v1.0 — F:\\WECRYP\\data + W:\\My Drive\\WECRYP0-data | flush=60s | Ctrl+D=debug overlay');
+  console.log('[DataLogger] v2.0 — F:\\WECRYP\\data + Z:\\WeCrypto-data + W:\\My Drive\\WECRYP0-data | flush=60s | Ctrl+D=debug overlay');
 })();
