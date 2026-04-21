@@ -7213,12 +7213,126 @@
         case 'screener':  renderScreener(); break;
         case 'depth':     renderDepth(); break;
         case 'universe':  renderUniverse(); break;
+        case 'log':       content.innerHTML = renderContractLog(); break;
       }
     } catch (e) {
       console.error('[render] Panel error:', e);
       content.innerHTML = `<div class="error-notice">⚠ Panel error: ${e.message}<br><small>${e.stack || ''}</small></div>`;
     }
   }
+
+  // ── Contract Log gallery view ──────────────────────────────────────────────
+  // Shows settled 15M contracts with accuracy stats, wick detection, and
+  // close-time snapshots. Data sourced from window._15mResolutionLog and
+  // localStorage cache (wc_contract_log) for prior sessions.
+  function renderContractLog() {
+    const log = (window._15mResolutionLog || []).slice().reverse();
+    let lsLog = [];
+    try { lsLog = JSON.parse(localStorage.getItem('wc_contract_log') || '[]'); } catch (_) {}
+
+    const traded    = log.filter(e => e.orchestratorAction === 'trade');
+    const correct   = traded.filter(e => e.modelCorrect === true).length;
+    const wr        = traded.length ? Math.round(correct / traded.length * 100) : null;
+    const wickCount = traded.filter(e => e.wickedOut).length;
+    const sweetTrades = traded.filter(e => e.sweetSpot);
+    const sweetWr   = sweetTrades.length ? Math.round(sweetTrades.filter(e => e.modelCorrect).length / sweetTrades.length * 100) : null;
+    const fadeTrades = traded.filter(e => e.crowdFade);
+    const fadeWr    = fadeTrades.length ? Math.round(fadeTrades.filter(e => e.modelCorrect).length / fadeTrades.length * 100) : null;
+    const missed    = log.filter(e => e.missedOpportunity).length;
+
+    const statBar = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+        ${[
+          ['Overall WR',    wr != null ? wr + '%' : '—',         wr >= 55 ? 'var(--color-green)' : wr >= 45 ? '#ffd700' : 'var(--color-red)'],
+          ['Sweet Spot WR', sweetWr != null ? sweetWr + '%' : '—', sweetWr >= 55 ? 'var(--color-green)' : '#ffd700'],
+          ['Fade WR',       fadeWr != null ? fadeWr + '%' : '—',  fadeWr >= 55 ? 'var(--color-green)' : '#ffd700'],
+          ['Wick-outs',     wickCount + (traded.length ? '/' + traded.length : ''), wickCount > 2 ? 'var(--color-red)' : 'var(--color-text-muted)'],
+          ['Missed Opps',   missed,       missed > 0 ? '#ff9800' : 'var(--color-text-muted)'],
+          ['Trades',        traded.length, 'var(--color-text)'],
+        ].map(([lbl, val, col]) => `
+          <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 14px;min-width:90px">
+            <div style="font-size:10px;color:var(--color-text-muted);font-weight:600;letter-spacing:.5px;text-transform:uppercase">${lbl}</div>
+            <div style="font-size:20px;font-weight:800;color:${col};font-family:var(--font-mono)">${val}</div>
+          </div>`).join('')}
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <button onclick="window._exportContractLog()" style="padding:7px 14px;border-radius:5px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,200,100,0.10);color:var(--color-green);font-size:12px;font-weight:700;cursor:pointer">☁ Export to Drive</button>
+        </div>
+      </div>`;
+
+    const rows = log.slice(0, 80).map(e => {
+      const time        = e.settledTs ? new Date(e.settledTs).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
+      const dir         = e.modelDir ?? '—';
+      const dirColor    = dir === 'up' ? 'var(--color-green)' : dir === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
+      const outcome     = e.actualOutcome ?? '—';
+      const outcomeColor= outcome === 'UP' ? 'var(--color-green)' : outcome === 'DOWN' ? 'var(--color-red)' : 'var(--color-text-muted)';
+      const correct     = e.modelCorrect === true ? '✅' : e.modelCorrect === false ? '❌' : '—';
+      const wick        = e.wickedOut ? '<span style="color:var(--color-red);font-weight:800">⚡WICK</span>' : '';
+      const sweet       = e.sweetSpot ? '⭐' : '';
+      const fade        = e.crowdFade ? '🔄' : '';
+      const align       = e.orchestratorAlign ?? e.alignment ?? '—';
+      const kalshiPct   = e.entryProb != null ? Math.round(e.entryProb * 100) + '%' : '—';
+      const modelPct    = e.modelProbUp != null ? Math.round(e.modelProbUp * 100) + '%' : (e.modelScore != null ? Math.round(50 + e.modelScore * 50) + '%' : '—');
+      const tradedStr   = e.orchestratorAction === 'trade' ? '<span style="color:var(--color-green)">TRADE</span>' : `<span style="color:var(--color-text-muted)">${e.orchestratorAction ?? 'skip'}</span>`;
+      const snap60      = (e.closeSnapshots || []).find(s => s.secsLeft >= 30 && s.secsLeft <= 90);
+      const snapStr     = snap60 ? `K@T-${snap60.secsLeft}s: ${Math.round(snap60.kalshiProb * 100)}%` : '';
+      return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">
+        <td style="padding:7px 8px;font-weight:700;color:var(--color-text)">${e.sym}</td>
+        <td style="padding:7px 8px;color:var(--color-text-muted);font-size:10px">${time}</td>
+        <td style="padding:7px 8px;color:${dirColor};font-weight:700">${dir.toUpperCase()}</td>
+        <td style="padding:7px 8px;color:${outcomeColor};font-weight:700">${outcome}</td>
+        <td style="padding:7px 8px;text-align:center;font-size:14px">${correct}</td>
+        <td style="padding:7px 8px;font-family:var(--font-mono);font-size:11px">${modelPct}</td>
+        <td style="padding:7px 8px;font-family:var(--font-mono);font-size:11px">${kalshiPct}</td>
+        <td style="padding:7px 8px;font-size:11px;color:var(--color-text-muted)">${align}</td>
+        <td style="padding:7px 8px">${tradedStr}</td>
+        <td style="padding:7px 8px;font-size:11px;color:var(--color-text-muted)">${sweet}${fade}</td>
+        <td style="padding:7px 8px;font-size:11px">${wick}</td>
+        <td style="padding:7px 8px;font-size:10px;color:var(--color-text-faint);font-family:var(--font-mono)">${snapStr}</td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div style="padding:16px;max-width:1400px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+          <span style="font-size:18px;font-weight:800">📋 Contract Log</span>
+          <span style="font-size:11px;color:var(--color-text-muted)">${log.length} contracts · Local + Z:\\WeCrypto-data · localStorage cache</span>
+        </div>
+        ${statBar}
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="border-bottom:2px solid rgba(255,255,255,0.1)">
+                ${['Sym','Time','Model Dir','Outcome','✓','Model%','Kalshi%','Align','Action','Flags','Wick','Snap'].map(h =>
+                  `<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px">${h}</th>`
+                ).join('')}
+              </tr>
+            </thead>
+            <tbody>${rows || '<tr><td colspan="12" style="padding:20px;color:var(--color-text-muted);text-align:center">No contracts settled yet this session</td></tr>'}</tbody>
+          </table>
+        </div>
+        ${log.length === 0 && lsLog.length > 0 ? `<div style="margin-top:12px;font-size:11px;color:var(--color-text-muted)">ℹ ${lsLog.length} contracts in localStorage cache from prior sessions</div>` : ''}
+      </div>`;
+  }
+
+  // ── Export contract log to Drive + local ──────────────────────────────────
+  window._exportContractLog = async function() {
+    const log = window._15mResolutionLog || [];
+    const day = new Date().toISOString().slice(0, 10);
+    const content = log.map(e => JSON.stringify(e)).join('\n');
+    const paths = [
+      `Z:\\WeCrypto-data\\${day}\\contract-export.jsonl`,
+      `W:\\My Drive\\WECRYP0-data\\${day}\\contract-export.jsonl`,
+      `F:\\WECRYP\\data\\${day}\\contract-export.jsonl`,
+    ];
+    let written = 0;
+    for (const p of paths) {
+      try {
+        const ok = await window.dataStore.writeFile(p, content);
+        if (ok) written++;
+      } catch (_) {}
+    }
+    alert(`Exported ${log.length} contracts to ${written}/${paths.length} paths`);
+  };
 
   // ================================================================
   // BOOT
@@ -7316,6 +7430,7 @@
         }
       }
     }
+    if (currentView === 'log') render();
   });
 
   // ── Real-time ms countdown for last-call Kalshi contracts ────────────────
@@ -7360,6 +7475,36 @@
         ? Math.floor(sec / 60) + 'm ' + (sec % 60) + 's'
         : sec + 's';
     });
+
+    // ── Capture close-time snapshots for contract accuracy analysis ──────────
+    // Records Kalshi prob + model score at key seconds-to-close thresholds.
+    if (window.MarketResolver?.addCloseSnapshot) {
+      const SNAP_THRESHOLDS = [300, 180, 120, 60, 30, 10];
+      window._snapThresholdsFired = window._snapThresholdsFired || {};
+      const PREDICTION_COINS = window.PREDICTION_COINS || [];
+      for (const coin of PREDICTION_COINS) {
+        const pm = window.PredictionMarkets?.getCoin?.(coin.sym);
+        const k15 = pm?.kalshi15m;
+        if (!k15?.closeTime) continue;
+        const closeMs = new Date(k15.closeTime).getTime();
+        const secsLeft = (closeMs - now) / 1000;
+        if (secsLeft < 0 || secsLeft > 320) continue;
+        for (const thresh of SNAP_THRESHOLDS) {
+          const key = `${coin.sym}_${k15.ticker}_${thresh}`;
+          if (!window._snapThresholdsFired[key] && secsLeft <= thresh + 5 && secsLeft >= thresh - 10) {
+            window._snapThresholdsFired[key] = true;
+            const kalshiProb = k15.probability;
+            const modelScore = window._lastPrediction?.[coin.sym]?.score ?? null;
+            window.MarketResolver.addCloseSnapshot(coin.sym, Math.round(secsLeft), kalshiProb, modelScore);
+          }
+        }
+      }
+      // Clean fired keys every 15 minutes to avoid unbounded growth
+      if (!window._snapKeyCleanTs || now - window._snapKeyCleanTs > 900_000) {
+        window._snapKeyCleanTs = now;
+        window._snapThresholdsFired = {};
+      }
+    }
   }, 100);
 
   // ── Market Divergence live refresh (every 5s) ────────────────────────────

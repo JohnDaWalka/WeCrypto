@@ -164,6 +164,13 @@
         modelProbUp:          window.KalshiOrchestrator?.getIntent?.(sym)?.modelProbUp ?? null,
         orchestratorAction:   window.KalshiOrchestrator?.getIntent?.(sym)?.action      ?? null,
         orchestratorAlign:    window.KalshiOrchestrator?.getIntent?.(sym)?.alignment   ?? null,
+        // Close-snapshot and orchestrator enrichment
+        closeSnapshots: [],
+        modelScore:     window._lastPrediction?.[sym]?.score ?? null,
+        sweetSpot:      window.KalshiOrchestrator?.getIntent?.(sym)?.sweetSpot      ?? false,
+        confidence:     window.KalshiOrchestrator?.getIntent?.(sym)?.confidence     ?? null,
+        crowdFade:      window.KalshiOrchestrator?.getIntent?.(sym)?.crowdFade      ?? false,
+        crowdFadeDir:   window.KalshiOrchestrator?.getIntent?.(sym)?.direction      ?? null,
       });
 
       const secsToClose = Math.round((closeMs - now) / 1000);
@@ -178,6 +185,32 @@
         `ref=$${k15.targetPriceNum} (floor_price=${k15.floorPrice}) ` +
         `strike=${k15.strikeDir ?? 'above'} prob=${entryProb != null ? (entryProb*100).toFixed(0)+'%' : 'n/a'} model=${modelDir}`
       );
+    }
+  }
+
+  // ── Wick detection — did the crowd predict correctly at T-60s but result flipped? ──
+  function detectWick(entry, actualOutcome) {
+    const snaps = entry.closeSnapshots || [];
+    const snap = snaps
+      .filter(s => s.secsLeft >= 30 && s.secsLeft <= 90)
+      .sort((a, b) => Math.abs(a.secsLeft - 60) - Math.abs(b.secsLeft - 60))[0];
+    if (!snap || snap.kalshiProb == null || !actualOutcome) return false;
+    const kalshiDir = snap.kalshiProb >= 0.5 ? 'UP' : 'DOWN';
+    return kalshiDir !== actualOutcome && Math.abs(snap.kalshiProb - 0.5) >= 0.10;
+  }
+
+  // ── Close-time snapshots — called from app.js 100ms tick ────────────────────
+  // Records Kalshi probability at key time thresholds before contract closes.
+  function addCloseSnapshot(sym, secsLeft, kalshiProb, modelScore) {
+    for (const entry of _pending.values()) {
+      if (entry.sym === sym) {
+        if (!entry.closeSnapshots) entry.closeSnapshots = [];
+        const already = entry.closeSnapshots.some(s => Math.abs(s.secsLeft - secsLeft) < 15);
+        if (!already) {
+          entry.closeSnapshots.push({ secsLeft, kalshiProb, modelScore, ts: Date.now() });
+        }
+        break;
+      }
     }
   }
 
@@ -366,6 +399,15 @@
         alignment: entry.orchestratorAlign ?? null,
         edgeCents: entry.edgeCents ?? null,
       } : null,
+      // Enhanced contract analysis fields
+      closeSnapshots:  entry.closeSnapshots ?? [],
+      modelScore:      entry.modelScore     ?? null,
+      sweetSpot:       entry.sweetSpot      ?? false,
+      crowdFade:       entry.crowdFade      ?? false,
+      crowdFadeDir:    entry.crowdFadeDir   ?? null,
+      wickedOut:       detectWick(entry, actualOutcome),
+      lateEntry:       entry.closeSnapshots?.some(s => s.secsLeft < 60) ?? false,
+      entrySecsLeft:   Math.round((entry.closeTimeMs - entry.snapshotTs) / 1000),
     };
   }
 
@@ -379,6 +421,11 @@
     // Quick lookup by coin
     window._resolutionMap[res.sym] = res;
     saveLog();
+
+    // Log to DataLogger (writes to local + Z:\ + W:\ Drive paths + localStorage cache)
+    if (window.DataLogger?.logResolverOutcome) {
+      window.DataLogger.logResolverOutcome(res.sym, res);
+    }
 
     // Notify the app (UI can show toast, update accuracy badge)
     try {
@@ -477,6 +524,7 @@
     getLog:               () => window._15mResolutionLog,
     getResolutionAccuracy,
     getLatest:            sym => window._resolutionMap[sym] ?? null,
+    addCloseSnapshot,
     buildCalibration(sym, n = 30) { return getResolutionAccuracy(sym, n); },
     getMissedOpps(n = 50) {
       return (window._15mResolutionLog || []).filter(e => e.missedOpportunity != null).slice(-n);
