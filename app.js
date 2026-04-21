@@ -6070,7 +6070,11 @@
             const rowBdr    = isExit ? 'rgba(255,80,80,0.2)'  : isHold ? 'rgba(255,180,0,0.25)' : isTrade ? 'rgba(0,200,100,0.2)'  : 'rgba(200,200,0,0.15)';
             const actionLabel = isTrade ? '🟢 TRADE' : isExit ? '🔴 EXIT' : isHold ? '⏳ HOLD' : '👁 WATCH';
             const strikeLabel = (() => { const m = ki.contractTicker?.match(/T(\d+(?:\.\d+)?)$/); return m ? 'T' + Number(m[1]).toLocaleString() : ''; })();
-            const minsStr     = ki.minutesLeft != null ? (ki.minutesLeft < 1 ? Math.round(ki.minutesLeft * 60) + 's' : ki.minutesLeft.toFixed(1) + 'm') : null;
+            // Compute time-left LIVE from closeTimeMs so it's accurate at render —
+            // the 100ms tick will keep ticking the DOM elements via data-close-ms.
+            const liveSecsLeft = ki.closeTimeMs ? Math.max(0, (ki.closeTimeMs - Date.now()) / 1000) : null;
+            const fmtSecsLeft  = s => s == null ? null : s < 60 ? Math.round(s) + 's' : (s / 60).toFixed(1) + 'm';
+            const minsStr      = fmtSecsLeft(liveSecsLeft) ?? (ki.minutesLeft != null ? fmtSecsLeft(ki.minutesLeft * 60) : null);
             const alignTag    = { AGREE:'✓ Both agree', SPLIT:'⚡ Split', MODEL_LEADS:'Model leads', KALSHI_ONLY:'Kalshi only', MODEL_ONLY:'Model only', EARLY_EXIT:'Early exit' }[ki.alignment] ?? (ki.alignment ?? '');
             return `
             <div style="margin-top:6px;padding:8px 10px;border-radius:5px;background:${rowBg};border:1px solid ${rowBdr};font-family:var(--font-mono)">
@@ -6091,12 +6095,12 @@
                    </div>`}
               <div style="display:flex;gap:12px;font-size:11px;color:var(--color-text-faint);margin-top:5px;flex-wrap:wrap;align-items:center">
                 ${ki.targetPrice     ? `<span>Strike <strong style="color:var(--color-text)">${ki.targetPrice}</strong></span>` : ''}
-                ${minsStr            ? `<span>⏱ <strong>${minsStr}</strong> left</span>` : ''}
+                ${ki.closeTimeMs     ? `<span id="kalshi-min-${p.sym}" data-close-ms="${ki.closeTimeMs}">⏱ <strong>${minsStr ?? '…'}</strong> left</span>` : minsStr ? `<span>⏱ <strong>${minsStr}</strong> left</span>` : ''}
                 ${ki.suggestedEntry != null ? `<span>Entry ~<strong>$${ki.suggestedEntry.toFixed(2)}</strong></span>` : ''}
                 <span style="color:${isTrade ? 'var(--color-green)' : isSplit ? 'var(--color-orange)' : 'var(--color-text-muted)'}">${alignTag} · <strong>${ki.confidence}%</strong></span>
               </div>
               ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:5px;line-height:1.4;font-family:var(--font-sans)">${ki.humanReason}</div>` : ''}
-               ${ki.sweetSpot    ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — ${ki.minsLeft?.toFixed(1)}m left · ${ki.payoutMult?.toFixed(2)}x payout · prime entry window</div>` : ''}
+               ${ki.sweetSpot    ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — <span id="kalshi-ss-${p.sym}" data-close-ms="${ki.closeTimeMs ?? ''}">${minsStr ?? '?'}</span> until close · ${ki.payoutMult?.toFixed(2)}x payout · best entry window (3–6 min)</div>` : ''}
               ${ki.crowdFade    ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — ${Math.round(ki.kalshiYesPrice * 100)}% YES extreme · going ${ki.direction}</div>` : ''}
               ${ki.signalLocked ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">🔒 Signal locked (${ki.humanReason?.match(/\d+s/)?.[0] || '?'} ago) — holding position</div>` : ''}
               ${ki.illiquid ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Low liquidity ($${ki.liquidity?.toFixed(0)}) — size carefully</div>` : ''}
@@ -7224,6 +7228,13 @@
       } else if (el.id && el.id.startsWith('kalshi-min-')) {
         el.innerHTML = '⏱ <strong' + (secsLeft < 30 ? ' style="color:var(--color-red)"' : '') + '>' + label + '</strong>';
       }
+    });
+    // Live-tick sweet-spot countdown (kalshi-ss-* elements)
+    activeView.querySelectorAll('[data-close-ms][id^="kalshi-ss-"]').forEach(el => {
+      const closeMs  = parseInt(el.getAttribute('data-close-ms'), 10);
+      if (!closeMs) return;
+      const secsLeft = Math.max(0, (closeMs - now) / 1000);
+      el.textContent = secsLeft < 60 ? Math.round(secsLeft) + 's' : (secsLeft / 60).toFixed(1) + 'm';
     });
     // Live-tick Market Divergence timers without requiring a full re-render
     activeView.querySelectorAll('[data-mdiv-ts]').forEach(el => {
