@@ -1,6 +1,6 @@
 {
   "name": "we-cfm-orchestrator",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "private": true,
   "description": "WalkerEnterprise CFM benchmark orchestration engine",
   "main": "main.js",
