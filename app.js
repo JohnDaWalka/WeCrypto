@@ -57,6 +57,7 @@
   const LAST_PRED_STORE     = 'beta1_last_pred';
   const LAST_KALSHI_STORE   = 'beta1_last_kalshi';
   const KALSHI_ERR_STORE    = 'beta1_kalshi_errors';
+  const ORCH_LOG_STORE      = 'beta1_orch_log';
 
   // ── Prediction accuracy tracker ──────────────────────────────────────────
   // window._lastPrediction[sym] = { direction: 'UP'|'DOWN'|'FLAT', price, ts, signal }
@@ -70,8 +71,9 @@
   // Contract-level error log — captures mismatches, wick events, fetch failures
   window._kalshiErrors       = window._kalshiErrors       || [];
   // Market Divergence: per-coin divergence timing state (model vs Kalshi crowd)
-  // Tracks how long model has been ahead of Kalshi odds so user can time fade entries.
   window._marketDivergence   = window._marketDivergence   || {};
+  // Orchestrator intent history — logs each actionable state change per coin
+  window._orchLog            = window._orchLog            || [];
 
   // Restore persisted logs from localStorage on startup
   (function restorePersistedData() {
@@ -80,13 +82,15 @@
     try { const r = localStorage.getItem(LAST_PRED_STORE);   if (r) window._lastPrediction     = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(LAST_KALSHI_STORE); if (r) window._lastKalshiSnapshot = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(KALSHI_ERR_STORE);  if (r) window._kalshiErrors       = JSON.parse(r); } catch(e) {}
+    try { const r = localStorage.getItem(ORCH_LOG_STORE);    if (r) window._orchLog            = JSON.parse(r); } catch(e) {}
   })();
 
-  function savePredLog()    { try { localStorage.setItem(PRED_LOG_STORE,    JSON.stringify(window._predLog.slice(-200)));           } catch(e) {} }
-  function saveKalshiLog()  { try { localStorage.setItem(KALSHI_LOG_STORE,  JSON.stringify(window._kalshiLog.slice(-500)));         } catch(e) {} }
-  function saveLastPred()   { try { localStorage.setItem(LAST_PRED_STORE,   JSON.stringify(window._lastPrediction));                } catch(e) {} }
-  function saveLastKalshi() { try { localStorage.setItem(LAST_KALSHI_STORE, JSON.stringify(window._lastKalshiSnapshot));            } catch(e) {} }
-  function saveKalshiErrors() { try { localStorage.setItem(KALSHI_ERR_STORE, JSON.stringify(window._kalshiErrors.slice(-100)));     } catch(e) {} }
+  function savePredLog()      { try { localStorage.setItem(PRED_LOG_STORE,    JSON.stringify(window._predLog.slice(-200)));       } catch(e) {} }
+  function saveKalshiLog()    { try { localStorage.setItem(KALSHI_LOG_STORE,  JSON.stringify(window._kalshiLog.slice(-500)));     } catch(e) {} }
+  function saveLastPred()     { try { localStorage.setItem(LAST_PRED_STORE,   JSON.stringify(window._lastPrediction));            } catch(e) {} }
+  function saveLastKalshi()   { try { localStorage.setItem(LAST_KALSHI_STORE, JSON.stringify(window._lastKalshiSnapshot));        } catch(e) {} }
+  function saveKalshiErrors() { try { localStorage.setItem(KALSHI_ERR_STORE,  JSON.stringify(window._kalshiErrors.slice(-100))); } catch(e) {} }
+  function saveOrchLog()      { try { localStorage.setItem(ORCH_LOG_STORE,    JSON.stringify(window._orchLog.slice(-300)));       } catch(e) {} }
 
   // ── Contract error logging helper ─────────────────────────────────────────
   // Records anomalies (wick events, proxy mismatches, fetch failures) to
@@ -4113,6 +4117,42 @@
     // Kalshi orchestrator — resolve YES/NO intents for all coins this render cycle
     const kalshiIntents = window.KalshiOrchestrator?.update(predAll, cfmAll) ?? {};
 
+    // Log orchestrator intent changes — only when action/side/alignment shifts
+    try {
+      PREDICTION_COINS.forEach(coin => {
+        const ki = kalshiIntents[coin.sym];
+        if (!ki || ki.action === 'skip') return;
+        const prev = window._orchLog.length
+          ? window._orchLog.filter(e => e.sym === coin.sym).slice(-1)[0] : null;
+        const changed = !prev
+          || prev.action    !== ki.action
+          || prev.side      !== ki.side
+          || prev.alignment !== ki.alignment;
+        if (changed) {
+          window._orchLog.push({
+            sym:         coin.sym,
+            ts:          Date.now(),
+            action:      ki.action,
+            side:        ki.side         ?? null,
+            direction:   ki.direction    ?? null,
+            alignment:   ki.alignment    ?? null,
+            edgeCents:   ki.edgeCents    ?? null,
+            confidence:  ki.confidence   ?? null,
+            modelScore:  ki.modelScore   ?? null,
+            secsLeft:    ki.secsLeft     ?? null,
+            minsLeft:    ki.minsLeft     ?? null,
+            sweetSpot:   ki.sweetSpot    ?? false,
+            crowdFade:   ki.crowdFade    ?? false,
+            signalLocked:ki.signalLocked ?? false,
+            contractTicker: ki.contractTicker ?? null,
+            humanReason: ki.humanReason  ?? null,
+          });
+          if (window._orchLog.length > 300) window._orchLog.shift();
+          saveOrchLog();
+        }
+      });
+    } catch(orchLogErr) { console.warn('[orchLog]', orchLogErr.message); }
+
     // ── DataLogger hooks — fire-and-forget, no perf impact ──────────────────
     if (window.DataLogger) {
       PREDICTION_COINS.forEach(coin => {
@@ -5178,138 +5218,288 @@
   // Shows in the predictions view: per-coin contract state, last 5 errors,
   // last 5 resolutions. Collapsed by default, toggled by clicking the header.
   function buildKalshiDebugPanel() {
-    const snaps   = window._lastKalshiSnapshot || {};
-    const log     = (window._kalshiLog         || []).slice(-20).reverse();
-    const errors  = (window._kalshiErrors      || []).slice(-8).reverse();
-    const resLog  = (window._15mResolutionLog  || []).slice(-8).reverse();
+    try {
+      const snaps   = window._lastKalshiSnapshot || {};
+      const log     = (window._kalshiLog         || []).slice(-20).reverse();
+      const errors  = (window._kalshiErrors      || []).slice(-8).reverse();
+      const resLog  = (window._15mResolutionLog  || []).slice(-10).reverse();
+      const orchLog = (window._orchLog           || []).slice(-15).reverse();
 
-    const fmtPrice = v => v != null ? `$${Number(v).toLocaleString(undefined, {maximumFractionDigits:2})}` : '–';
-    const fmtPct   = v => v != null ? `${v}%` : '–';
-    const fmtTime  = ms => ms ? new Date(ms).toISOString().slice(11,19) : '–';
-    const col = (v, ok, warn, bad) => {
-      if (v === ok)   return 'color:#4caf50';
-      if (v === warn) return 'color:#ffc107';
-      if (v === bad)  return 'color:#f44336';
-      return 'color:#aaa';
-    };
+      const fmtPrice = v => v != null && v > 0 ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:2})}` : '–';
+      const fmtPct   = v => v != null ? `${v}%` : '–';
+      const fmtTime  = ms => ms ? new Date(ms).toISOString().slice(11,19) : '–';
+      const fmtScore = v => v != null ? (v > 0 ? '+' : '') + Number(v).toFixed(3) : '–';
+      const fmtEdge  = v => v != null ? (v >= 0 ? '+' : '') + v + '¢' : '–';
+      const ok       = v => v === true
+        ? '<span style="color:#4caf50;font-weight:700">✓</span>'
+        : v === false ? '<span style="color:#f44336;font-weight:700">✗</span>'
+        : '<span style="color:#666">?</span>';
+      const colDir   = v => (v === 'UP' || v === 'up') ? 'color:#4caf50'
+                          : (v === 'DOWN' || v === 'down') ? 'color:#f44336' : 'color:#888';
+      const colAct   = a => a === 'trade'   ? 'color:#4caf50;font-weight:700'
+                          : a === 'watch'   ? 'color:#ffc107'
+                          : a === 'skip'    ? 'color:#f44336'
+                          : a === 'hold'    ? 'color:#80cbc4'
+                          : a === 'earlyExit' ? 'color:#e040fb' : 'color:#888';
+      const alignColor = al => ({
+        ALIGNED:'#4caf50', DIVERGENT:'#ff9800', MODEL_LEADS:'#4f9eff',
+        CROWD_FADE:'#e040fb', MODEL_ONLY:'#80cbc4', KALSHI_ONLY:'#ffc107',
+        SHELL_EVAL:'#ff5722', EARLY_EXIT:'#888',
+      }[al] || '#aaa');
 
-    // ── snapshot rows ──
-    const snapRows = Object.entries(snaps).map(([sym, s]) => {
-      const conflict = s.dirConflict ? '⚠️' : '';
-      const confCol  = s.dirConflict ? 'color:#f44336;font-weight:700' : 'color:#4caf50';
-      return `<tr>
-        <td style="color:#fff;font-weight:600">${sym}</td>
-        <td>${fmtPrice(s.floorPrice || s.ref)}</td>
-        <td style="${s.strikeDir==='below'?'color:#f44336':'color:#4caf50'}">${s.strikeDir||'above'}</td>
-        <td style="${col(s.modelDir,'UP','FLAT','DOWN')}">${s.modelDir||'–'}</td>
-        <td>${fmtPct(s.mYesPct)}</td>
-        <td>${fmtPct(s.kYesPct)}</td>
-        <td style="${confCol}">${conflict}${s.cdfImpliedDir||'–'}</td>
-        <td style="color:#888">${fmtTime(s.closeTimeMs)}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan="8" style="color:#666;text-align:center">No snapshots yet</td></tr>';
+      const th = 'style="color:#888;font-size:10px;font-weight:600;padding:3px 6px;border-bottom:1px solid #2a2a2a;white-space:nowrap"';
+      const tdBase = 'padding:3px 6px;font-size:11px;border-bottom:1px solid #1a1a1a';
+      const td = `style="${tdBase}"`;
+      const tbl = 'width:100%;border-collapse:collapse;margin-bottom:8px';
 
-    // ── recent log rows ──
-    const logRows = log.slice(0,8).map(e => {
-      const settled = e._settled  ? `<span style="color:#4caf50">✓${e._kalshiResult||''}</span>` : (e._pendingAuth ? '<span style="color:#ffc107">⏳</span>' : '');
-      const match   = e._settled  ? (e._proxyMismatch ? '<span style="color:#f44336">MISMATCH</span>' : '<span style="color:#4caf50">✓match</span>') : '';
-      const flags   = [e._wickStraddle?'🔥wick':'', e._nearRef?'≈ref':'', e._dirConflict?'⚠️dir':''].filter(Boolean).join(' ');
-      return `<tr>
-        <td style="color:#fff">${e.sym}</td>
-        <td>${e.outcome||'–'}</td>
-        <td style="color:#888;font-size:10px">${fmtPrice(e.ref)}</td>
-        <td style="color:#888;font-size:10px">${fmtPrice(e.closePrice)}</td>
-        <td style="color:#aaa;font-size:10px">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':'–'}</td>
-        <td style="font-size:10px">${e.proxyConfidence!=null?e.proxyConfidence:'–'}</td>
-        <td>${settled} ${match}</td>
-        <td style="color:#ffc107;font-size:10px">${flags}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan="8" style="color:#666;text-align:center">No entries yet</td></tr>';
+      // ── 1. ORCHESTRATOR LIVE ──────────────────────────────────────────────
+      const liveOrchRows = PREDICTION_COINS.map(coin => {
+        try {
+          const ki = window.KalshiOrchestrator?.getIntent?.(coin.sym);
+          if (!ki) return `<tr><td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
+            <td colspan="7" style="${tdBase};color:#555;font-size:10px">no data — waiting for first prediction cycle</td></tr>`;
+          const minsStr = ki.minsLeft != null ? ki.minsLeft.toFixed(1) + 'm'
+                        : ki.secsLeft != null ? ki.secsLeft.toFixed(0) + 's' : '–';
+          const flags = (ki.sweetSpot ? '⭐' : '') + (ki.crowdFade ? '🔄' : '') + (ki.signalLocked ? '🔒' : '');
+          return `<tr>
+            <td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
+            <td style="${tdBase};${colAct(ki.action)}">${(ki.action||'–').toUpperCase()}</td>
+            <td style="${tdBase};${ki.side==='YES'?'color:#4caf50':ki.side==='NO'?'color:#f44336':'color:#888'};font-weight:700">${ki.side??'–'}</td>
+            <td style="${tdBase};color:${alignColor(ki.alignment)};font-size:10px">${ki.alignment??'–'}</td>
+            <td style="${tdBase};color:${(ki.edgeCents??0)>=8?'#4caf50':'#f44336'}">${fmtEdge(ki.edgeCents)}</td>
+            <td style="${tdBase};${colDir(ki.direction)}">${fmtScore(ki.modelScore)}</td>
+            <td style="${tdBase};color:#888">${minsStr}</td>
+            <td style="${tdBase};font-size:12px">${flags||'–'}</td>
+          </tr>`;
+        } catch(e) {
+          return `<tr><td style="${tdBase};color:#fff">${coin.sym}</td><td colspan="7" style="${tdBase};color:#f44336;font-size:10px">render error: ${e.message}</td></tr>`;
+        }
+      }).join('');
 
-    // ── recent errors ──
-    const errRows = errors.map(e => {
-      const typeCol = e.type==='proxy_mismatch'?'#f44336':e.type==='wick_straddle'?'#ff9800':e.type==='dir_conflict'?'#e040fb':'#ffc107';
-      return `<tr>
-        <td style="color:${typeCol};font-weight:600;font-size:10px">${e.type}</td>
-        <td style="color:#fff">${e.sym}</td>
-        <td style="font-size:10px;color:#888">${e.tsIso?.slice(11,19)||'–'}</td>
-        <td style="font-size:10px">${e.proxy||''} → ${e.authoritative||''}</td>
-        <td style="font-size:10px;color:#aaa">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':''} ${e.wickStraddle?'🔥':''} ${e.nearRef?'≈':''}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan="5" style="color:#666;text-align:center">No errors 🎉</td></tr>';
+      // ── 2. ACCURACY SCORECARD ─────────────────────────────────────────────
+      const scorecardRows = PREDICTION_COINS.map(coin => {
+        try {
+          const entries = (window._kalshiLog||[]).filter(e => e.sym===coin.sym && e._settled);
+          const resE    = (window._15mResolutionLog||[]).filter(e => e.sym===coin.sym && e.modelCorrect!==null);
+          const total   = entries.length + resE.length;
+          if (!total) return `<tr><td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
+            <td colspan="5" style="${tdBase};color:#555;font-size:10px">no settled data yet</td></tr>`;
+          const modelOk = entries.filter(e=>e.modelCorrect===true).length + resE.filter(e=>e.modelCorrect===true).length;
+          const mktOk   = entries.filter(e=>e.marketCorrect===true).length + resE.filter(e=>e.marketCorrect===true).length;
+          const fadeE   = entries.filter(e=>e.fadeActive && e.fadeCorrect!==null);
+          const fadeOk  = fadeE.filter(e=>e.fadeCorrect===true).length;
+          const modelPct = Math.round(modelOk/total*100);
+          const mktPct   = Math.round(mktOk/total*100);
+          const fadePct  = fadeE.length ? Math.round(fadeOk/fadeE.length*100) : null;
+          const last8    = entries.slice(-8);
+          const l8ok     = last8.filter(e=>e.modelCorrect===true).length;
+          const trend    = last8.length>=4 ? (l8ok/last8.length>=0.6?'↑':l8ok/last8.length<=0.35?'↓':'→') : '?';
+          const tC       = trend==='↑'?'#4caf50':trend==='↓'?'#f44336':'#ffc107';
+          const mC       = modelPct>=55?'#4caf50':modelPct>=45?'#ffc107':'#f44336';
+          const fC       = fadePct==null?'#555':fadePct>=55?'#4caf50':fadePct>=45?'#ffc107':'#f44336';
+          return `<tr>
+            <td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
+            <td style="${tdBase};color:#888">${total}</td>
+            <td style="${tdBase};color:${mC};font-weight:700">${modelPct}%</td>
+            <td style="${tdBase};color:#888">${mktPct}%</td>
+            <td style="${tdBase};color:${fC}">${fadePct!=null ? fadePct+'% ('+fadeE.length+')' : '–'}</td>
+            <td style="${tdBase};color:${tC};font-weight:700">${trend} ${last8.length}/${8}</td>
+          </tr>`;
+        } catch(e) {
+          return `<tr><td style="${tdBase};color:#fff">${coin.sym}</td><td colspan="5" style="${tdBase};color:#f44336;font-size:10px">err</td></tr>`;
+        }
+      }).join('');
 
-    // ── recent resolutions ──
-    const resRows = resLog.map(r => {
-      const mc = r.modelCorrect===true?'<span style="color:#4caf50">✓</span>':r.modelCorrect===false?'<span style="color:#f44336">✗</span>':'<span style="color:#888">?</span>';
-      return `<tr>
-        <td style="color:#fff">${r.sym}</td>
-        <td style="color:${r.actualOutcome==='UP'?'#4caf50':'#f44336'}">${r.actualOutcome}</td>
-        <td style="color:#888;font-size:10px">${r.kalshiResult||'–'}</td>
-        <td style="font-size:10px">${r.modelDir||'–'} ${mc}</td>
-        <td style="font-size:10px;color:#aaa">${fmtPrice(r.floorPrice||r.refPrice)}</td>
-        <td style="font-size:10px;color:#888">${fmtTime(r.settledTs)}</td>
-        <td style="font-size:10px;color:${r.confidence>=90?'#4caf50':'#ffc107'}">${r.confidence!=null?r.confidence+'%conf':'–'}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan="7" style="color:#666;text-align:center">No settled contracts yet</td></tr>';
+      // ── 3. CURRENT SNAPSHOTS ──────────────────────────────────────────────
+      const snapRows = Object.entries(snaps).map(([sym, s]) => {
+        const conflict = s.dirConflict ? '⚠️' : '';
+        const confCol  = s.dirConflict ? 'color:#f44336;font-weight:700' : 'color:#4caf50';
+        const fadeTag  = s.fadeActive
+          ? (s.fadeSolid ? '<span style="color:#ff9800;font-weight:700">🔥FADE</span>'
+                        : '<span style="color:#ffc107">~fade</span>') : '';
+        return `<tr>
+          <td style="${tdBase};color:#fff;font-weight:600">${sym}</td>
+          <td style="${tdBase}">${fmtPrice(s.floorPrice||s.ref)}</td>
+          <td style="${tdBase};${s.strikeDir==='below'?'color:#f44336':'color:#4caf50'}">${s.strikeDir||'above'}</td>
+          <td style="${tdBase};${colDir(s.modelDir)}">${s.modelDir||'–'}</td>
+          <td style="${tdBase}">${fmtPct(s.mYesPct)}</td>
+          <td style="${tdBase}">${fmtPct(s.kYesPct)}</td>
+          <td style="${tdBase};${confCol}">${conflict}${s.cdfImpliedDir||'–'}</td>
+          <td style="${tdBase};font-size:10px">${fadeTag||'–'}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${fmtTime(s.closeTimeMs)}</td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="9" style="${tdBase};color:#666;text-align:center">No snapshots yet</td></tr>`;
 
-    const th = 'style="color:#888;font-size:10px;font-weight:600;padding:3px 6px;border-bottom:1px solid #2a2a2a;white-space:nowrap"';
-    const td = 'style="padding:3px 6px;font-size:11px;border-bottom:1px solid #1a1a1a"';
-    const tableStyle = 'width:100%;border-collapse:collapse;margin-bottom:8px';
+      // ── 4. CONTRACT LOG ───────────────────────────────────────────────────
+      const logRows = log.slice(0,10).map(e => {
+        const settled = e._settled
+          ? `<span style="color:#4caf50">✓${e._kalshiResult||''}</span>`
+          : (e._pendingAuth ? '<span style="color:#ffc107">⏳</span>' : '–');
+        const match = e._settled
+          ? (e._proxyMismatch ? '<span style="color:#f44336">MM</span>' : '<span style="color:#4caf50">✓</span>') : '';
+        const fadeCol = e.fadeActive
+          ? (e.fadeCorrect===true  ? '<span style="color:#4caf50">F✓</span>'
+           : e.fadeCorrect===false ? '<span style="color:#f44336">F✗</span>'
+           :                        '<span style="color:#ff9800">F?</span>')
+          : '<span style="color:#555">–</span>';
+        const mdivBadge = e.mdivPhase && e.mdivPhase!=='STALE'
+          ? `<span style="font-size:9px;color:#888">${e.mdivPhase}</span>` : '–';
+        const betTag = e.betAction
+          ? `<span style="color:${e.betAction==='YES'?'#4caf50':'#f44336'};font-weight:700">${e.betAction}</span>` : '–';
+        const flags = [e._wickStraddle?'🔥':'', e._nearRef?'≈':'', e._dirConflict?'⚠️':''].filter(Boolean).join('');
+        return `<tr>
+          <td style="${tdBase};color:#fff;font-weight:700">${e.sym}</td>
+          <td style="${tdBase};${e.outcome==='YES'?'color:#4caf50':'color:#f44336'}">${e.outcome||'–'}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${fmtPrice(e.ref)}</td>
+          <td style="${tdBase};color:#aaa;font-size:10px">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':'–'}</td>
+          <td style="${tdBase};${colDir(e.modelDir)}">${fmtScore(e.modelScore)}</td>
+          <td style="${tdBase}">${betTag}</td>
+          <td style="${tdBase}">${fadeCol}</td>
+          <td style="${tdBase};font-size:10px">${mdivBadge}</td>
+          <td style="${tdBase}">${settled}${match}</td>
+          <td style="${tdBase};color:#ffc107;font-size:10px">${flags||'–'}</td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="10" style="${tdBase};color:#666;text-align:center">No contract log entries yet</td></tr>`;
 
-    return `
-    <details id="kalshi-debug-panel" style="margin:8px 0 14px;background:#111;border:1px solid #2a2a2a;border-radius:8px">
-      <summary style="cursor:pointer;padding:8px 14px;font-size:12px;font-weight:700;color:#ffc107;letter-spacing:.5px;display:flex;align-items:center;gap:8px;user-select:none">
-        🔬 KALSHI CONTRACT DEBUG
-        <span style="font-size:10px;color:#666;font-weight:400;margin-left:auto">
-          snap:${Object.keys(snaps).length} log:${log.length} err:${errors.length} res:${resLog.length}
-        </span>
-      </summary>
-      <div style="padding:10px 14px;overflow:hidden;border-radius:0 0 8px 8px">
+      // ── 5. SETTLED CONTRACTS ─────────────────────────────────────────────
+      const resRows = resLog.map(r => {
+        const missedTag = r.missedOpportunity
+          ? '<span style="color:#e040fb;font-size:9px">MISSED</span>' : '';
+        const orchTag = r.orchestratorAction==='trade'
+          ? '<span style="color:#4caf50;font-size:9px">TRADED</span>' : '';
+        return `<tr>
+          <td style="${tdBase};color:#fff;font-weight:700">${r.sym}</td>
+          <td style="${tdBase};color:${r.actualOutcome==='UP'?'#4caf50':'#f44336'};font-weight:700">${r.actualOutcome||'–'}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${r.kalshiResult||'–'}</td>
+          <td style="${tdBase}">${r.modelDir||'–'} ${ok(r.modelCorrect)}</td>
+          <td style="${tdBase};${colAct(r.orchestratorAction)};font-size:10px">${r.orchestratorAction||'–'} ${orchTag}${missedTag}</td>
+          <td style="${tdBase};color:${(r.edgeCents??0)>=8?'#4caf50':'#888'}">${fmtEdge(r.edgeCents)}</td>
+          <td style="${tdBase};font-size:10px;color:#aaa">${r.cbSettlePrice ? '$'+Number(r.cbSettlePrice).toLocaleString() : fmtPrice(r.floorPrice||r.refPrice)}</td>
+          <td style="${tdBase};color:${(r.confidence??0)>=90?'#4caf50':'#ffc107'};font-size:10px">${r.confidence!=null?r.confidence+'%':'–'}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${fmtTime(r.settledTs)}</td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="9" style="${tdBase};color:#666;text-align:center">No settled contracts yet — first settlement fires ~2 min after contract close_time</td></tr>`;
 
-        <div style="font-size:10px;color:#ffc107;font-weight:700;margin-bottom:4px;letter-spacing:.5px">▸ CURRENT SNAPSHOTS</div>
-        <div style="overflow-x:auto"><table style="${tableStyle}">
-          <thead><tr>
-            <th ${th}>SYM</th><th ${th}>FLOOR</th><th ${th}>STRIKE</th>
-            <th ${th}>MODEL↑↓</th><th ${th}>mYes%</th><th ${th}>kYes%</th>
-            <th ${th}>CDF→</th><th ${th}>CLOSES</th>
-          </tr></thead>
-          <tbody>${snapRows.replace(/<td/g, `<td ${td}`.replace('td style=', 'td ').replace(/td  style=/g,'td style='))}</tbody>
-        </table></div>
+      // ── 6. ORCHESTRATOR HISTORY ──────────────────────────────────────────
+      const orchLogRows = orchLog.slice(0,12).map(e => {
+        const flags = (e.sweetSpot?'⭐':'')+(e.crowdFade?'🔄':'')+(e.signalLocked?'🔒':'');
+        return `<tr>
+          <td style="${tdBase};color:#fff;font-weight:700">${e.sym}</td>
+          <td style="${tdBase};${colAct(e.action)}">${(e.action||'–').toUpperCase()}</td>
+          <td style="${tdBase};${e.side==='YES'?'color:#4caf50':e.side==='NO'?'color:#f44336':'color:#888'}">${e.side??'–'}</td>
+          <td style="${tdBase};color:${alignColor(e.alignment)};font-size:10px">${e.alignment??'–'}</td>
+          <td style="${tdBase};color:${(e.edgeCents??0)>=8?'#4caf50':'#888'}">${fmtEdge(e.edgeCents)}</td>
+          <td style="${tdBase};${colDir(e.direction)}">${fmtScore(e.modelScore)}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${fmtTime(e.ts)}</td>
+          <td style="${tdBase};font-size:12px">${flags||'–'}</td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="8" style="${tdBase};color:#666;text-align:center">No orchestrator history yet — logs on first actionable signal</td></tr>`;
 
-        <div style="font-size:10px;color:#4fc3f7;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ RECENT CONTRACT LOG (last 8)</div>
-        <div style="overflow-x:auto"><table style="${tableStyle}">
-          <thead><tr>
-            <th ${th}>SYM</th><th ${th}>PROXY</th><th ${th}>REF</th>
-            <th ${th}>CLOSE</th><th ${th}>GAP</th><th ${th}>CONF</th>
-            <th ${th}>AUTH</th><th ${th}>FLAGS</th>
-          </tr></thead>
-          <tbody>${logRows.replace(/<td/g, `<td ${td}`)}</tbody>
-        </table></div>
+      // ── 7. ERRORS ─────────────────────────────────────────────────────────
+      const errRows = errors.map(e => {
+        const typeCol = e.type==='proxy_mismatch'?'#f44336':e.type==='wick_straddle'?'#ff9800':
+                        e.type==='dir_conflict'?'#e040fb':e.type==='fetch_fail'?'#f44336':'#ffc107';
+        return `<tr>
+          <td style="${tdBase};color:${typeCol};font-weight:600;font-size:10px">${e.type}</td>
+          <td style="${tdBase};color:#fff">${e.sym}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${e.tsIso?.slice(11,19)||'–'}</td>
+          <td style="${tdBase};font-size:10px">${e.proxy||''}${e.proxy&&e.authoritative?' → ':''}${e.authoritative||''}</td>
+          <td style="${tdBase};font-size:10px;color:#aaa">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':''} ${e.wickStraddle?'🔥':''} ${e.nearRef?'≈':''}</td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="5" style="${tdBase};color:#4caf50;text-align:center">No errors 🎉</td></tr>`;
 
-        <div style="font-size:10px;color:#f44336;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ ERRORS / MISMATCHES (last 8)</div>
-        <div style="overflow-x:auto"><table style="${tableStyle}">
-          <thead><tr>
-            <th ${th}>TYPE</th><th ${th}>SYM</th><th ${th}>TIME</th>
-            <th ${th}>PROXY→AUTH</th><th ${th}>GAP</th>
-          </tr></thead>
-          <tbody>${errRows.replace(/<td/g, `<td ${td}`)}</tbody>
-        </table></div>
+      const pendingN = window.MarketResolver?.getPending?.()?.length ?? 0;
 
-        <div style="font-size:10px;color:#4caf50;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ SETTLED CONTRACTS (last 8)</div>
-        <div style="overflow-x:auto"><table style="${tableStyle}">
-          <thead><tr>
-            <th ${th}>SYM</th><th ${th}>OUTCOME</th><th ${th}>RAW</th>
-            <th ${th}>MODEL</th><th ${th}>REF</th>
-            <th ${th}>TIME</th><th ${th}>CONF</th>
-          </tr></thead>
-          <tbody>${resRows.replace(/<td/g, `<td ${td}`)}</tbody>
-        </table></div>
+      return `
+      <details id="kalshi-debug-panel" style="margin:8px 0 14px;background:#111;border:1px solid #2a2a2a;border-radius:8px">
+        <summary style="cursor:pointer;padding:8px 14px;font-size:12px;font-weight:700;color:#ffc107;letter-spacing:.5px;display:flex;align-items:center;gap:8px;user-select:none">
+          🔬 KALSHI CONTRACT DEBUG
+          <span style="font-size:10px;color:#666;font-weight:400;margin-left:auto">
+            snap:${Object.keys(snaps).length} log:${(window._kalshiLog||[]).length} err:${errors.length} res:${resLog.length} pending:${pendingN} orch:${(window._orchLog||[]).length}
+          </span>
+        </summary>
+        <div style="padding:10px 14px;border-radius:0 0 8px 8px">
 
-        <div style="margin-top:8px;font-size:10px;color:#555;font-family:monospace">
-          DevTools: KalshiDebug.audit('ETH') · .errors() · .pending() · .last('ETH') · .contract('ETH')
+          <div style="font-size:10px;color:#e040fb;font-weight:700;margin-bottom:4px;letter-spacing:.5px">▸ ORCHESTRATOR — LIVE INTENTS</div>
+          <div style="overflow-x:auto"><table style="${tbl}">
+            <thead><tr>
+              <th ${th}>SYM</th><th ${th}>ACTION</th><th ${th}>SIDE</th>
+              <th ${th}>ALIGNMENT</th><th ${th}>EDGE</th><th ${th}>SCORE</th>
+              <th ${th}>TIME LEFT</th><th ${th}>FLAGS</th>
+            </tr></thead>
+            <tbody>${liveOrchRows}</tbody>
+          </table></div>
+
+          <div style="font-size:10px;color:#80cbc4;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ ACCURACY SCORECARD</div>
+          <div style="overflow-x:auto"><table style="${tbl}">
+            <thead><tr>
+              <th ${th}>SYM</th><th ${th}>N</th><th ${th}>MODEL%</th>
+              <th ${th}>MKT%</th><th ${th}>FADE✓</th><th ${th}>TREND</th>
+            </tr></thead>
+            <tbody>${scorecardRows}</tbody>
+          </table></div>
+
+          <div style="font-size:10px;color:#ffc107;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ CURRENT SNAPSHOTS</div>
+          <div style="overflow-x:auto"><table style="${tbl}">
+            <thead><tr>
+              <th ${th}>SYM</th><th ${th}>FLOOR</th><th ${th}>STRIKE</th>
+              <th ${th}>MODEL</th><th ${th}>mYes%</th><th ${th}>kYes%</th>
+              <th ${th}>CDF</th><th ${th}>FADE</th><th ${th}>CLOSES</th>
+            </tr></thead>
+            <tbody>${snapRows}</tbody>
+          </table></div>
+
+          <div style="font-size:10px;color:#4fc3f7;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ CONTRACT LOG (last 10)</div>
+          <div style="overflow-x:auto"><table style="${tbl}">
+            <thead><tr>
+              <th ${th}>SYM</th><th ${th}>OUTCOME</th><th ${th}>REF</th>
+              <th ${th}>GAP%</th><th ${th}>SCORE</th><th ${th}>BET</th>
+              <th ${th}>FADE</th><th ${th}>MDIV</th><th ${th}>AUTH</th><th ${th}>FLAGS</th>
+            </tr></thead>
+            <tbody>${logRows}</tbody>
+          </table></div>
+
+          <div style="font-size:10px;color:#4caf50;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ SETTLED CONTRACTS (last 10)</div>
+          <div style="overflow-x:auto"><table style="${tbl}">
+            <thead><tr>
+              <th ${th}>SYM</th><th ${th}>RESULT</th><th ${th}>RAW</th>
+              <th ${th}>MODEL</th><th ${th}>ORCH</th><th ${th}>EDGE</th>
+              <th ${th}>CB$</th><th ${th}>CONF</th><th ${th}>TIME</th>
+            </tr></thead>
+            <tbody>${resRows}</tbody>
+          </table></div>
+
+          <div style="font-size:10px;color:#7986cb;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ ORCHESTRATOR HISTORY (last 12 changes)</div>
+          <div style="overflow-x:auto"><table style="${tbl}">
+            <thead><tr>
+              <th ${th}>SYM</th><th ${th}>ACTION</th><th ${th}>SIDE</th>
+              <th ${th}>ALIGNMENT</th><th ${th}>EDGE</th><th ${th}>SCORE</th>
+              <th ${th}>TIME</th><th ${th}>FLAGS</th>
+            </tr></thead>
+            <tbody>${orchLogRows}</tbody>
+          </table></div>
+
+          <div style="font-size:10px;color:#f44336;font-weight:700;margin:10px 0 4px;letter-spacing:.5px">▸ ERRORS / MISMATCHES (last 8)</div>
+          <div style="overflow-x:auto"><table style="${tbl}">
+            <thead><tr>
+              <th ${th}>TYPE</th><th ${th}>SYM</th><th ${th}>TIME</th>
+              <th ${th}>PROXY→AUTH</th><th ${th}>GAP</th>
+            </tr></thead>
+            <tbody>${errRows}</tbody>
+          </table></div>
+
+          <div style="margin-top:8px;font-size:10px;color:#555;font-family:monospace">
+            DevTools: KalshiDebug.audit('ETH') · .errors() · .pending() · .last('ETH') · .contract('ETH') · .orch('BTC') · .scorecard() · MarketResolver.getMissedOpps()
+          </div>
         </div>
-      </div>
-    </details>`;
+      </details>`;
+    } catch(panelErr) {
+      console.error('[KalshiDebug] panel render error:', panelErr);
+      return `<details style="margin:8px 0 14px;background:#111;border:1px solid #f44336;border-radius:8px">
+        <summary style="padding:8px 14px;color:#f44336;font-size:12px">🔬 KALSHI DEBUG — render error</summary>
+        <div style="padding:10px 14px;color:#f44336;font-size:11px">${panelErr.message}<br><small style="color:#888">${panelErr.stack||''}</small></div>
+      </details>`;
+    }
   }
 
   async function renderPredictions() {
@@ -6974,15 +7164,29 @@
   });
 
   // ── 15M Market Resolution listener ─────────────────────────────────
-  // Kalshi 15M settled result fed back into CFM calibration.
+  // Kalshi 15M settled result fed back into CFM calibration and debug panel.
   window.addEventListener('market15m:resolved', (e) => {
-    const { sym, outcome, modelCorrect, prob } = e.detail || {};
+    const { sym, outcome, modelCorrect, prob, orchestratorAction, edgeCents } = e.detail || {};
     if (!sym) return;
     const icon  = modelCorrect === true ? '✅' : modelCorrect === false ? '❌' : '❓';
     const coin  = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
     const label = coin?.icon ? coin.icon + ' ' + sym : sym;
-    console.log('[Resolver] ' + label + ' 15M ' + outcome + ' ' + icon + ' | prob:' + Math.round((prob||0.5)*100) + '%');
-    if (currentView === 'predictions' && predsLoaded) updateAccuracyBadge();
+    const orchStr = orchestratorAction ? ` orch:${orchestratorAction}` : '';
+    const edgeStr = edgeCents != null ? ` edge:${edgeCents}¢` : '';
+    console.log('[Resolver] ' + label + ' 15M ' + outcome + ' ' + icon + ' | prob:' + Math.round((prob||0.5)*100) + '%' + orchStr + edgeStr);
+    if (currentView === 'predictions' && predsLoaded) {
+      updateAccuracyBadge();
+      // Refresh the debug panel so settled contracts appear immediately
+      const panel = document.getElementById('kalshi-debug-panel');
+      if (panel) {
+        const open = panel.hasAttribute('open');
+        panel.outerHTML = buildKalshiDebugPanel();
+        if (open) {
+          const np = document.getElementById('kalshi-debug-panel');
+          if (np) np.setAttribute('open', '');
+        }
+      }
+    }
   });
 
   // ── Real-time ms countdown for last-call Kalshi contracts ────────────────
@@ -7085,5 +7289,44 @@
 
   // ── Order Book HUD — initialise after DOM is ready ──────────────
   initOBHud();
+
+  // ── KalshiDebug console API ──────────────────────────────────────
+  // Accessible from DevTools console for live inspection.
+  window.KalshiDebug = {
+    audit:     sym => (window._kalshiLog||[]).filter(e => !sym || e.sym===sym),
+    errors:    ()  => (window._kalshiErrors||[]),
+    pending:   ()  => window.MarketResolver?.getPending?.() ?? [],
+    last:      sym => (window._lastKalshiSnapshot||{})[sym] ?? null,
+    contract:  sym => (window._kalshiLog||[]).filter(e=>e.sym===sym).slice(-1)[0] ?? null,
+    orch:      sym => sym ? (window._orchLog||[]).filter(e=>e.sym===sym).slice(-5)
+                          : (window._orchLog||[]).slice(-20),
+    liveOrch:  sym => window.KalshiOrchestrator?.getIntent?.(sym) ?? null,
+    scorecard: ()  => {
+      const out = {};
+      (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).forEach(c => {
+        const e = (window._kalshiLog||[]).filter(x=>x.sym===c.sym&&x._settled);
+        if (!e.length) { out[c.sym] = { n:0 }; return; }
+        const mOk = e.filter(x=>x.modelCorrect===true).length;
+        const fE  = e.filter(x=>x.fadeActive&&x.fadeCorrect!==null);
+        const fOk = fE.filter(x=>x.fadeCorrect===true).length;
+        out[c.sym] = {
+          n: e.length,
+          modelPct: Math.round(mOk/e.length*100),
+          fadePct:  fE.length ? Math.round(fOk/fE.length*100) : null,
+          fadeN:    fE.length,
+        };
+      });
+      return out;
+    },
+    missedOpps: () => window.MarketResolver?.getMissedOpps?.() ?? [],
+    clearOrch:  () => { window._orchLog = []; saveOrchLog(); console.log('[KalshiDebug] _orchLog cleared'); },
+    dump:       sym => ({
+      snapshot: (window._lastKalshiSnapshot||{})[sym],
+      log:      (window._kalshiLog||[]).filter(e=>e.sym===sym).slice(-5),
+      orch:     (window._orchLog||[]).filter(e=>e.sym===sym).slice(-5),
+      resolved: (window._15mResolutionLog||[]).filter(e=>e.sym===sym).slice(-3),
+    }),
+  };
+  console.log('[KalshiDebug] API ready — KalshiDebug.audit(sym) .orch(sym) .scorecard() .dump(sym)');
 
 })();

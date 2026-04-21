@@ -1,6 +1,6 @@
 {
   "name": "we-cfm-orchestrator",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "private": true,
   "description": "WalkerEnterprise CFM benchmark orchestration engine",
   "main": "main.js",
@@ -12,7 +12,7 @@
     "appId": "com.walkerenterprise.wecfmorchestrator",
     "productName": "WE--CRYPTO--BETA2",
     "electronVersion": "37.2.0",
-    "artifactName": "WECRYPTO-portable.exe",
+    "artifactName": "WECRYPTO-v${version}-portable.exe",
     "files": [
       "index.html",
       "styles.css",
