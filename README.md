@@ -1,4 +1,4 @@
-
+CFM BENCHMARKS
 CRYPTO
 Scope: These rules shall apply to this contract.
 Underlying: The Underlying for this Contract is the spot price of one <cryptocurrency> in
