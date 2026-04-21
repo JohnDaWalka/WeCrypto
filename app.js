@@ -6012,15 +6012,28 @@
               LATE:     '⬜ LATE',
             };
 
-            const secElapsed = _md.durationMs > 0 ? Math.floor(_md.durationMs / 1000) : 0;
+            // Compute elapsed time live from firstDivTs (not from stale durationMs)
+            const secElapsed = _md.firstDivTs ? Math.floor((Date.now() - _md.firstDivTs) / 1000) : 0;
             const minSec     = secElapsed >= 60
               ? Math.floor(secElapsed / 60) + 'm ' + (secElapsed % 60) + 's'
               : secElapsed + 's';
 
-            const deltaStr = _md.catchupDelta != null && Math.abs(_md.catchupDelta) >= 0.5
-              ? (_md.catchupDelta > 0
-                  ? `+${_md.catchupDelta.toFixed(1)}pp crowd → model`
-                  : `${_md.catchupDelta.toFixed(1)}pp crowd away`)
+            // Read live Kalshi probability directly — don't rely on stale snapshot value
+            const liveKalshiPct = window.PredictionMarkets?.getCoin?.(p.sym)?.kalshi15m?.probability != null
+              ? window.PredictionMarkets.getCoin(p.sym).kalshi15m.probability * 100
+              : (_md.currentKalshiPct ?? null);
+
+            // Recompute catchupDelta from live odds
+            const liveCatchupDelta = (liveKalshiPct != null && _md.entryKalshiPct != null)
+              ? (_md.entryModelDir === 'up' || _md.entryModelDir === 'UP'
+                  ? liveKalshiPct - _md.entryKalshiPct
+                  : _md.entryKalshiPct - liveKalshiPct)
+              : (_md.catchupDelta ?? 0);
+
+            const deltaStr = Math.abs(liveCatchupDelta) >= 0.5
+              ? (liveCatchupDelta > 0
+                  ? `+${liveCatchupDelta.toFixed(1)}pp crowd → model`
+                  : `${liveCatchupDelta.toFixed(1)}pp crowd away`)
               : '';
 
             const entryHint = _md.phase === 'PRIME'
@@ -6041,7 +6054,7 @@
                   <span style="font-weight:700;color:var(--color-text)" data-mdiv-ts="${_md.firstDivTs ?? ''}">${minSec}</span>
                   ${deltaStr ? `<span style="margin-left:auto;color:var(--color-text-muted)">${deltaStr}</span>` : ''}
                 </div>
-                <div style="margin-top:3px;color:var(--color-text-muted);font-size:10px;font-family:var(--font-sans)">${entryHint}${_md.entryKalshiPct != null ? ` · Entry K: ${_md.entryKalshiPct.toFixed(0)}% → now ${_md.currentKalshiPct?.toFixed(0) ?? '?'}%` : ''}</div>
+                <div style="margin-top:3px;color:var(--color-text-muted);font-size:10px;font-family:var(--font-sans)">${entryHint}${_md.entryKalshiPct != null ? ` · Entry K: ${_md.entryKalshiPct.toFixed(0)}% → now ${liveKalshiPct != null ? liveKalshiPct.toFixed(0) : '?'}%` : ''}</div>
               </div>`;
           })()}
           ${(() => {
@@ -7212,7 +7225,39 @@
         el.innerHTML = '⏱ <strong' + (secsLeft < 30 ? ' style="color:var(--color-red)"' : '') + '>' + label + '</strong>';
       }
     });
+    // Live-tick Market Divergence timers without requiring a full re-render
+    activeView.querySelectorAll('[data-mdiv-ts]').forEach(el => {
+      const firstDivTs = parseInt(el.getAttribute('data-mdiv-ts'), 10);
+      if (!firstDivTs) return;
+      const sec = Math.floor((now - firstDivTs) / 1000);
+      el.textContent = sec >= 60
+        ? Math.floor(sec / 60) + 'm ' + (sec % 60) + 's'
+        : sec + 's';
+    });
   }, 100);
+
+  // ── Market Divergence live refresh (every 5s) ────────────────────────────
+  // Keeps _marketDivergence state fresh between prediction engine cycles using
+  // live Kalshi odds from PredictionMarkets — fixes stale %, catchupDelta, phase.
+  setInterval(() => {
+    if (!window._marketDivergence || !window._lastPrediction) return;
+    try {
+      PREDICTION_COINS.forEach(coin => {
+        const buf = window._marketDivergence[coin.sym];
+        if (!buf?.active || !buf.firstDivTs) return; // only refresh active divergence windows
+        const pm = window.PredictionMarkets?.getCoin?.(coin.sym);
+        const liveProb = pm?.kalshi15m?.probability;
+        if (liveProb == null) return;
+        const liveKalshiPct = liveProb * 100;
+        const lastPred = window._lastPrediction[coin.sym];
+        if (!lastPred) return;
+        const modelScore = (window._predictions?.[coin.sym]?.score) ?? 0;
+        const modelDir   = modelScore > 0.12 ? 'up' : modelScore < -0.12 ? 'down' : 'wait';
+        const kalshiDir  = liveKalshiPct >= 50 ? 'up' : 'down';
+        updateMarketDivergence(coin.sym, modelDir, kalshiDir, liveKalshiPct, modelScore);
+      });
+    } catch(e) { /* non-critical */ }
+  }, 5000);
 
   // ── Blockchain scan live updates ──────────────────────────────────
   window.addEventListener('blockchain-scan-update', () => {
