@@ -4,7 +4,7 @@
 //
 // Writes every 60s to:
 //   F:\WECRYP\data\YYYY-MM-DD\{category}.jsonl              (local)
-//   Z:\WeCrypto-data\YYYY-MM-DD\{category}.jsonl            (Google Drive primary)
+//   Z:\YYYY-MM-DD\{category}.jsonl            (Google Drive primary)
 //   W:\My Drive\WECRYP0-data\YYYY-MM-DD\{category}.jsonl   (Google Drive fallback)
 //
 // Categories: predictions · decisions · cfm_snapshots · shell_events ·
@@ -15,7 +15,7 @@
   'use strict';
 
   const LOCAL_ROOT  = 'F:\\WECRYP\\data';
-  const DRIVE_PATHS = ['Z:\\WeCrypto-data', 'W:\\My Drive\\WECRYP0-data'];
+  const DRIVE_PATHS = ['Z:\\', 'W:\\My Drive\\WECRYP0-data'];
   const FLUSH_MS    = 60_000;
 
   // ── Buffer + Stats ──────────────────────────────────────────────────────────
@@ -327,7 +327,7 @@
         <div style="margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;font-size:10px;color:var(--color-text-muted);line-height:1.9">
           <div style="font-weight:700;color:var(--color-text,#e2e8f0);margin-bottom:4px">💾 Storage Paths</div>
           <div>📁 Local: <code>F:\\WECRYP\\data\\${todayStr()}</code></div>
-          <div>☁ Drive (primary): <code>Z:\\WeCrypto-data\\${todayStr()}</code></div>
+          <div>☁ Drive (primary): <code>Z:\\${todayStr()}</code></div>
           <div>☁ Drive (fallback): <code>W:\\My Drive\\WECRYP0-data\\${todayStr()}</code></div>
           <div style="margin-top:6px">Categories: predictions · decisions · cfm_snapshots · shell_events · resolver_outcomes · errors</div>
         </div>

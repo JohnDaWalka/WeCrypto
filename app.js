@@ -7320,7 +7320,7 @@
     const day = new Date().toISOString().slice(0, 10);
     const content = log.map(e => JSON.stringify(e)).join('\n');
     const paths = [
-      `Z:\\WeCrypto-data\\${day}\\contract-export.jsonl`,
+      `Z:\\${day}\\contract-export.jsonl`,
       `W:\\My Drive\\WECRYP0-data\\${day}\\contract-export.jsonl`,
       `F:\\WECRYP\\data\\${day}\\contract-export.jsonl`,
     ];
