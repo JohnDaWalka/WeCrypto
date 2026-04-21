@@ -961,6 +961,50 @@
   // DATA FETCH ORCHESTRATION
   // ================================================================
 
+  // ── New-contract burst-retry heuristic ──────────────────────────────────────
+  // After each :00/:15/:30/:45 boundary, Kalshi takes 2-4 min to list the next
+  // 15M contract on their API. This fires PredictionMarkets.fetchAll() every 15s
+  // for up to 5 minutes and stops the moment all 7 coins have a live ticker.
+  // Without this, the UI can lag 4-6 minutes waiting on the normal 30s poll.
+  const _CONTRACT_SYMS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
+  // Delays (seconds) between each successive retry attempt after the boundary pulse
+  const _CONTRACT_RETRY_DELAYS = [15, 15, 15, 15, 30, 30, 30, 60, 60]; // ~T+4.5 min total
+
+  function scheduleNewContractRetries() {
+    let retryIdx = 0;
+    function attempt() {
+      if (retryIdx >= _CONTRACT_RETRY_DELAYS.length) {
+        console.info('[WE] 🔚 New-contract retry sequence exhausted');
+        return;
+      }
+      const delay = _CONTRACT_RETRY_DELAYS[retryIdx] * 1000;
+      retryIdx++;
+      setTimeout(async () => {
+        if (document.hidden) { attempt(); return; } // tab hidden — defer
+        const pmAll = window.PredictionMarkets?.getAll?.() || {};
+        const ready = _CONTRACT_SYMS.filter(s => pmAll[s]?.kalshi15m?.ticker);
+        if (ready.length === _CONTRACT_SYMS.length) {
+          console.info('[WE] ✅ All 7 new Kalshi 15M contracts loaded — retry done');
+          return; // all coins have fresh contracts — stop
+        }
+        console.info(`[WE] 🔄 New-contract retry #${retryIdx} — ${ready.length}/7 ready (${ready.join(',') || 'none'}) — fetching…`);
+        if (feedText) feedText.textContent = `🔄 Awaiting new contracts (${ready.length}/7)…`;
+        await window.PredictionMarkets?.fetchAll?.();
+        // Re-check after fetch
+        const pmAll2 = window.PredictionMarkets?.getAll?.() || {};
+        const ready2 = _CONTRACT_SYMS.filter(s => pmAll2[s]?.kalshi15m?.ticker);
+        if (ready2.length === _CONTRACT_SYMS.length) {
+          console.info('[WE] ✅ All 7 new Kalshi 15M contracts loaded after fetch — retry done');
+          if (feedText) feedText.textContent = `✅ New contracts ready`;
+          return;
+        }
+        attempt(); // still missing some — schedule next retry
+      }, delay);
+    }
+    // Kick off first retry 10s after the boundary pulse completes
+    setTimeout(attempt, 10_000);
+  }
+
   // ── Settlement pulse — fires at every :00/:15/:30/:45 boundary ─────────────
   // Hits ALL 6 CEXes simultaneously alongside chain intel + prediction markets.
   // Streaming via resetTimer() continues uninterrupted between pulses.
@@ -981,6 +1025,8 @@
     // Reset regular timer so streaming doesn't double-fire immediately after pulse
     resetTimer();
     console.info(`[WE] ⚡ Settlement pulse ${label} complete`);
+    // Burst-retry until new Kalshi contracts appear (Kalshi lists them 2-4 min after boundary)
+    scheduleNewContractRetries();
   }
 
   async function fetchAll(manual = false, settlement = false) {
@@ -7341,6 +7387,12 @@
   // re-renders the view as soon as fresh data is available.
   window.addEventListener('predictionmarketsready', () => {
     if (currentView === 'markets5m') renderMarkets5M();
+    // Re-render prediction cards when Kalshi data arrives — ensures new contracts
+    // appear immediately when the burst-retry fetches them instead of waiting
+    // for the next PredictionEngine.runAll() cycle (up to 15s later).
+    if (['predictions', 'cfm', 'universe'].includes(currentView) && predsLoaded && !predictionRunInFlight) {
+      try { renderPredictions(); } catch (_) {}
+    }
   });
 
   // ── Order Book HUD — initialise after DOM is ready ──────────────
