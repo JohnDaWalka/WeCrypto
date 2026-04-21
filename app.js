@@ -6106,22 +6106,77 @@
           ${(() => {
             const ki = window.KalshiOrchestrator?.getIntent?.(p.sym);
             if (!ki || ki.action === 'skip') return '';
+
+            // ── Model probability: convert score (-1..+1) to directional % ───
+            const modelUpPct   = Math.round(Math.min(99, Math.max(1, 50 + (p.score || 0) * 50)));
+            const modelDownPct = 100 - modelUpPct;
+            const modelLean    = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'neutral';
+            const modelLeanStr = modelLean === 'up'   ? `${modelUpPct}% UP`
+                               : modelLean === 'down' ? `${modelDownPct}% DOWN`
+                               : 'NEUTRAL';
+            const modelColor   = modelLean === 'up'   ? 'var(--color-green)'
+                               : modelLean === 'down' ? 'var(--color-red)'
+                               : 'var(--color-text-muted)';
+
+            // ── Live Kalshi probability (always fresh from PredictionMarkets) ─
+            const _pmCoin      = window.PredictionMarkets?.getCoin?.(p.sym);
+            const _pmK15       = _pmCoin?.kalshi15m ?? null;
+            const liveKProb    = _pmK15?.probability ?? kalshiProb;
+            const liveKPct     = liveKProb != null ? Math.round(liveKProb * 100) : null;
+            const kalshiLean   = liveKProb != null ? (liveKProb >= 0.5 ? 'up' : 'down') : null;
+            const kalshiLeanStr = liveKProb == null ? '—'
+                               : liveKProb >= 0.5  ? `${liveKPct}% YES`
+                               : `${100 - liveKPct}% NO`;
+            const kalshiColor  = liveKProb == null ? 'var(--color-text-muted)'
+                               : liveKProb >= 0.5  ? 'var(--color-green)' : 'var(--color-red)';
+
+            // ── Alignment badge ───────────────────────────────────────────────
+            const proAgree = modelLean !== 'neutral' && kalshiLean !== null && modelLean === kalshiLean;
+            const proFade  = modelLean !== 'neutral' && kalshiLean !== null && modelLean !== kalshiLean;
+            const edgePp   = liveKPct != null ? Math.abs(modelUpPct - liveKPct) : null;
+            const alignBadge = proAgree ? `<span style="color:var(--color-green);font-weight:800">✓ AGREE</span>`
+                             : proFade  ? `<span style="color:#ff9800;font-weight:800">⚡ FADE</span>`
+                             : `<span style="color:var(--color-text-muted)">—</span>`;
+
+            // ── Styling ───────────────────────────────────────────────────────
             const isExit  = ki.action === 'earlyExit';
             const isHold  = ki.action === 'hold';
             const isTrade = ki.action === 'trade';
             const isSplit = ki.alignment === 'SPLIT';
-            const sideColor = ki.side === 'YES' ? 'var(--color-green)' : ki.side === 'NO' ? 'var(--color-red)' : 'var(--color-orange)';
-            const sideBg    = ki.side === 'YES' ? 'rgba(0,200,100,0.18)' : ki.side === 'NO' ? 'rgba(220,60,60,0.18)' : 'transparent';
-            const rowBg     = isExit ? 'rgba(255,80,80,0.07)' : isHold ? 'rgba(255,180,0,0.07)' : isTrade ? 'rgba(0,200,100,0.07)' : 'rgba(200,200,0,0.05)';
-            const rowBdr    = isExit ? 'rgba(255,80,80,0.2)'  : isHold ? 'rgba(255,180,0,0.25)' : isTrade ? 'rgba(0,200,100,0.2)'  : 'rgba(200,200,0,0.15)';
+            const rowBg   = isExit  ? 'rgba(255,80,80,0.07)'  : isHold  ? 'rgba(255,180,0,0.07)'
+                          : isTrade ? 'rgba(0,200,100,0.07)'  : 'rgba(200,200,0,0.05)';
+            const rowBdr  = isExit  ? 'rgba(255,80,80,0.2)'   : isHold  ? 'rgba(255,180,0,0.25)'
+                          : isTrade ? 'rgba(0,200,100,0.2)'   : 'rgba(200,200,0,0.15)';
+
+            // ── Contract expiry guard ─────────────────────────────────────────
+            // ki is stale cache — if closeTimeMs is in the past, new contract not yet listed.
+            const contractExpired = ki.closeTimeMs && (Date.now() - ki.closeTimeMs) > 5_000;
+            if (contractExpired) {
+              return `<div style="margin-top:6px;padding:8px 10px;border-radius:5px;background:rgba(100,100,100,0.06);border:1px solid rgba(120,120,120,0.15);font-family:var(--font-mono)">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="color:var(--color-text-muted);font-size:11px;font-weight:700">⏳ Awaiting next contract</span>
+                  <span style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px">
+                    <span style="color:var(--color-text-muted);font-size:10px">Model</span>
+                    <strong style="color:${modelColor}">${modelLeanStr}</strong>
+                    <span style="color:var(--color-text-faint)">↔</span>
+                    <span style="color:var(--color-text-muted);font-size:10px">Kalshi</span>
+                    <strong style="color:${kalshiColor}">${kalshiLeanStr}</strong>
+                    ${liveKPct != null ? `<span style="color:var(--color-text-faint);font-size:10px">(prev)</span>` : ''}
+                    ${alignBadge}
+                  </span>
+                </div>
+              </div>`;
+            }
+
+            // ── Active contract ───────────────────────────────────────────────
+            const sideColor   = ki.side === 'YES' ? 'var(--color-green)' : ki.side === 'NO' ? 'var(--color-red)' : 'var(--color-orange)';
+            const sideBg      = ki.side === 'YES' ? 'rgba(0,200,100,0.18)' : ki.side === 'NO' ? 'rgba(220,60,60,0.18)' : 'transparent';
             const actionLabel = isTrade ? '🟢 TRADE' : isExit ? '🔴 EXIT' : isHold ? '⏳ HOLD' : '👁 WATCH';
             const strikeLabel = (() => { const m = ki.contractTicker?.match(/T(\d+(?:\.\d+)?)$/); return m ? 'T' + Number(m[1]).toLocaleString() : ''; })();
-            // Compute time-left LIVE from closeTimeMs so it's accurate at render —
-            // the 100ms tick will keep ticking the DOM elements via data-close-ms.
             const liveSecsLeft = ki.closeTimeMs ? Math.max(0, (ki.closeTimeMs - Date.now()) / 1000) : null;
             const fmtSecsLeft  = s => s == null ? null : s < 60 ? Math.round(s) + 's' : (s / 60).toFixed(1) + 'm';
-            const minsStr      = fmtSecsLeft(liveSecsLeft) ?? (ki.minutesLeft != null ? fmtSecsLeft(ki.minutesLeft * 60) : null);
-            const alignTag    = { AGREE:'✓ Both agree', SPLIT:'⚡ Split', MODEL_LEADS:'Model leads', KALSHI_ONLY:'Kalshi only', MODEL_ONLY:'Model only', EARLY_EXIT:'Early exit' }[ki.alignment] ?? (ki.alignment ?? '');
+            const minsStr      = fmtSecsLeft(liveSecsLeft);
+            const alignTag     = { AGREE:'✓ Both agree', SPLIT:'⚡ Split', MODEL_LEADS:'Model leads', KALSHI_ONLY:'Kalshi only', MODEL_ONLY:'Model only', EARLY_EXIT:'Early exit' }[ki.alignment] ?? (ki.alignment ?? '');
             return `
             <div style="margin-top:6px;padding:8px 10px;border-radius:5px;background:${rowBg};border:1px solid ${rowBdr};font-family:var(--font-mono)">
               ${isExit
@@ -6139,14 +6194,25 @@
                      <span style="font-size:12px;font-weight:700;color:var(--color-text)">KALSHI${strikeLabel ? ' · ' + strikeLabel : ''}</span>
                      <span style="margin-left:auto;background:${isTrade ? 'rgba(0,200,100,0.15)' : 'rgba(200,200,0,0.12)'};color:${isTrade ? 'var(--color-green)' : 'var(--color-orange)'};padding:3px 10px;border-radius:3px;font-size:12px;font-weight:700">${actionLabel}</span>
                    </div>`}
+              <!-- Model vs Kalshi probability — the primary insight -->
+              <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding:5px 8px;border-radius:4px;background:rgba(0,0,0,0.12);font-size:12px">
+                <span style="color:var(--color-text-muted);font-size:10px;font-weight:600;letter-spacing:.4px">MODEL</span>
+                <strong style="font-size:14px;color:${modelColor}">${modelLeanStr}</strong>
+                <span style="color:var(--color-text-faint);font-size:16px;font-weight:300">↔</span>
+                <span style="color:var(--color-text-muted);font-size:10px;font-weight:600;letter-spacing:.4px">KALSHI</span>
+                <strong style="font-size:14px;color:${kalshiColor}">${kalshiLeanStr}</strong>
+                <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+                  ${alignBadge}
+                  ${edgePp != null ? `<span style="color:var(--color-text-faint);font-size:10px">${edgePp}pp gap</span>` : ''}
+                </span>
+              </div>
               <div style="display:flex;gap:12px;font-size:11px;color:var(--color-text-faint);margin-top:5px;flex-wrap:wrap;align-items:center">
-                ${ki.targetPrice     ? `<span>Strike <strong style="color:var(--color-text)">${ki.targetPrice}</strong></span>` : ''}
-                ${ki.closeTimeMs     ? `<span id="kalshi-min-${p.sym}" data-close-ms="${ki.closeTimeMs}">⏱ <strong>${minsStr ?? '…'}</strong> left</span>` : minsStr ? `<span>⏱ <strong>${minsStr}</strong> left</span>` : ''}
+                ${ki.closeTimeMs ? `<span id="kalshi-min-${p.sym}" data-close-ms="${ki.closeTimeMs}">⏱ <strong>${minsStr ?? '…'}</strong> left</span>` : minsStr ? `<span>⏱ <strong>${minsStr}</strong> left</span>` : ''}
                 ${ki.suggestedEntry != null ? `<span>Entry ~<strong>$${ki.suggestedEntry.toFixed(2)}</strong></span>` : ''}
                 <span style="color:${isTrade ? 'var(--color-green)' : isSplit ? 'var(--color-orange)' : 'var(--color-text-muted)'}">${alignTag} · <strong>${ki.confidence}%</strong></span>
               </div>
               ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:5px;line-height:1.4;font-family:var(--font-sans)">${ki.humanReason}</div>` : ''}
-               ${ki.sweetSpot    ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — <span id="kalshi-ss-${p.sym}" data-close-ms="${ki.closeTimeMs ?? ''}">${minsStr ?? '?'}</span> until close · ${ki.payoutMult?.toFixed(2)}x payout · best entry window (3–6 min)</div>` : ''}
+              ${ki.sweetSpot    ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — <span id="kalshi-ss-${p.sym}" data-close-ms="${ki.closeTimeMs ?? ''}">${minsStr ?? '?'}</span> until close · ${ki.payoutMult?.toFixed(2)}x payout · best entry window (3–6 min)</div>` : ''}
               ${ki.crowdFade    ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — ${Math.round(ki.kalshiYesPrice * 100)}% YES extreme · going ${ki.direction}</div>` : ''}
               ${ki.signalLocked ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">🔒 Signal locked (${ki.humanReason?.match(/\d+s/)?.[0] || '?'} ago) — holding position</div>` : ''}
               ${ki.illiquid ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Low liquidity ($${ki.liquidity?.toFixed(0)}) — size carefully</div>` : ''}
@@ -7272,6 +7338,7 @@
         // Pulse red when < 10s
         el.style.opacity = secsLeft < 10 && Math.floor(now / 300) % 2 === 0 ? '0.5' : '1';
       } else if (el.id && el.id.startsWith('kalshi-min-')) {
+        if (closeMs && (now - closeMs) > 5_000) { el.innerHTML = '⏱ <strong>—</strong>'; return; } // contract expired — new one pending
         el.innerHTML = '⏱ <strong' + (secsLeft < 30 ? ' style="color:var(--color-red)"' : '') + '>' + label + '</strong>';
       }
     });
@@ -7279,7 +7346,9 @@
     activeView.querySelectorAll('[data-close-ms][id^="kalshi-ss-"]').forEach(el => {
       const closeMs  = parseInt(el.getAttribute('data-close-ms'), 10);
       if (!closeMs) return;
-      const secsLeft = Math.max(0, (closeMs - now) / 1000);
+      const msLeft   = closeMs - now;
+      if (msLeft <= 0) { el.textContent = '—'; return; } // contract expired — new one pending
+      const secsLeft = msLeft / 1000;
       el.textContent = secsLeft < 60 ? Math.round(secsLeft) + 's' : (secsLeft / 60).toFixed(1) + 'm';
     });
     // Live-tick Market Divergence timers without requiring a full re-render
