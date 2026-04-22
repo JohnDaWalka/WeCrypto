@@ -2690,3 +2690,108 @@ input, select { font: inherit; color: inherit; }
 .cls-item { display: flex; flex-direction: column; gap: 2px; }
 .cls-val  { font-size: 14px; font-weight: 700; font-family: var(--font-mono); }
 .cls-lbl  { font-size: 10px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: .05em; }
+
+/* ================================================================
+   HOURLY RANGES PRICE LADDER
+   ================================================================ */
+#hourly-ranges-panel {
+  display: flex; flex-direction: column; height: 100%;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.hr-panel {
+  display: flex; flex-direction: column; height: 100%;
+  overflow: hidden;
+}
+
+.hr-panel-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.hr-grid-wrapper {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.hr-coin-section {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.hr-coin-label {
+  padding: 10px 12px;
+  background: var(--color-surface-3);
+  font-weight: 700;
+  font-size: 13px;
+  border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+}
+
+.hr-ladder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.hr-level {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--color-text-muted);
+  transition: all 120ms ease;
+}
+
+.hr-level:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--color-text);
+}
+
+.hr-level-current {
+  background: var(--color-green-dim);
+  border-left: 3px solid var(--color-green);
+  border-bottom: 1px solid var(--color-green);
+  color: var(--color-green);
+  font-weight: 700;
+}
+
+.hr-level-price {
+  flex: 1;
+  text-align: right;
+  padding-right: 8px;
+}
+
+.hr-level-peg {
+  padding: 2px 6px;
+  background: var(--color-green);
+  color: var(--color-bg);
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: auto;
+}
+
+.hr-ladder-empty {
+  padding: 32px 12px;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
