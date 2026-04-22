@@ -46,17 +46,31 @@
   let _cachedRanges = {}; // { 'BTC': [{ ...market }, ...], ... }
   let _cachedPrices = {}; // { 'BTC': 45000, ... }
 
+  // ── Route through Tauri suppFetch for CORS bypass ───────────────
+  async function proxyFetch(url) {
+    if (typeof window.suppFetch === 'function') {
+      try {
+        const txt = await window.suppFetch(url);
+        return typeof txt === 'string' ? JSON.parse(txt) : txt;
+      } catch {}
+    }
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(res.status);
+      return res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
   // ── Fetch live price from Coinbase, fallback to Kraken ──────────
   async function getLivePrice(sym) {
     // Try Coinbase first (fastest, most reliable)
     const cbProduct = COINBASE_PRODUCTS[sym];
     if (cbProduct) {
       try {
-        const res = await fetch(`${COINBASE_BASE}/market/products/${cbProduct}/ticker`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.price) return parseFloat(data.price);
-        }
+        const data = await proxyFetch(`${COINBASE_BASE}/market/products/${cbProduct}/ticker`);
+        if (data?.price) return parseFloat(data.price);
       } catch (e) {
         console.warn(`[HourlyRangesPanel] Coinbase fetch failed for ${sym}:`, e.message);
       }
@@ -66,13 +80,10 @@
     const krakenTicker = KRAKEN_TICKERS[sym];
     if (krakenTicker) {
       try {
-        const res = await fetch(`${KRAKEN_BASE}/Ticker?pair=${krakenTicker}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.result?.[krakenTicker]) {
-            const tickerData = data.result[krakenTicker];
-            return parseFloat(tickerData.c[0]); // c = last trade close array
-          }
+        const data = await proxyFetch(`${KRAKEN_BASE}/Ticker?pair=${krakenTicker}`);
+        if (data?.result?.[krakenTicker]) {
+          const tickerData = data.result[krakenTicker];
+          return parseFloat(tickerData.c[0]); // c = last trade close array
         }
       } catch (e) {
         console.warn(`[HourlyRangesPanel] Kraken fetch failed for ${sym}:`, e.message);
@@ -94,9 +105,7 @@
     try {
       // Fetch all markets matching the hourly range series (status=open, limit=100)
       const url = `${KALSHI_BASE}/markets?series_ticker=${series}&status=open&limit=100`;
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error(res.status);
-      const data = await res.json();
+      const data = await proxyFetch(url);
       
       if (!data?.markets) return [];
 
