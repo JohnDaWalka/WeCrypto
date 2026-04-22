@@ -6,7 +6,11 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win portable"
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable",
+    "build:installer": "electron-builder --win nsis",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "build": {
     "appId": "com.walkerenterprise.wecfmorchestrator",
@@ -42,6 +46,7 @@
       "cex-flow.js",
       "blockchain-scan.js",
       "data-logger.js",
+      "hourly-kalshi-tracker.js",
       "tauri-bridge.js",
       "chart.umd.min.js",
       "chartjs-adapter-date-fns.bundle.min.js",
@@ -57,15 +62,29 @@
       "icon": "app-icon.ico",
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "portable",
           "arch": [
             "x64"
           ]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WE--CRYPTO--BETA2"
     }
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
     "electron": "^37.2.0",
     "electron-builder": "^25.1.8"
   }

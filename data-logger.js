@@ -194,6 +194,20 @@
     flushCat('errors');
   }
 
+  // ── Hourly Kalshi outcome logger ─────────────────────────────────────────────
+  function logOutcome(sym, record) {
+    push('hourly_kalshi', {
+      sym,
+      ts: record.ts,
+      closeTimeMs: record.closeTimeMs,
+      kalshiYes: record.kalshiYes,
+      outcome: record.outcome,
+      edgeRealized: record.edgeRealized,
+      payout: record.payout,
+      entryPrice: record.entryPrice,
+    });
+  }
+
   // ── Debug Overlay (Ctrl+D) ───────────────────────────────────────────────────
   let _overlayEl  = null;
   let _overlayOn  = false;
@@ -422,6 +436,7 @@
     logDecision,
     logShellEvent,
     logResolverOutcome,
+    logOutcome,
     logError,
     flush:     flushAll,
     getStats:  () => _stats,
@@ -429,5 +444,5 @@
     hideDebug: hideOverlay,
   };
 
-  console.log('[DataLogger] v2.0 — F:\\WECRYP\\data + Z:\\WeCrypto-data + W:\\My Drive\\WECRYP0-data | flush=60s | Ctrl+D=debug overlay');
+  console.log('[DataLogger] v2.0 — F:\\WECRYP\\data + Z:\\WeCrypto-data + W:\\My Drive\\WECRYP0-data | flush=60s | Ctrl+D=debug overlay | hourly_kalshi tracking enabled');
 })();
