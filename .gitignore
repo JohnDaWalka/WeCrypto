@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.exe
+*.log
+config.toml
+.DS_Store
+Thumbs.db
+
+# Rust/Tauri build artifacts
+src-tauri/
+*.rlib
+*.pdb
+
+# Generated backtest reports (large JSON, rebuild locally)
+*-report.json

@@ -1,0 +1,67 @@
+{
+  "name": "we-cfm-orchestrator",
+  "version": "1.5.0",
+  "private": true,
+  "description": "WalkerEnterprise CFM benchmark orchestration engine",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.walkerenterprise.wecfmorchestrator",
+    "productName": "WE--CRYPTO--1",
+    "electronVersion": "37.2.0",
+    "artifactName": "WE--CRYPTO--1.exe",
+    "files": [
+      "index.html",
+      "styles.css",
+      "app.js",
+      "predictions.js",
+      "cfm-engine.js",
+      "prediction-markets.js",
+      "market-resolver.js",
+      "data.js",
+      "main.js",
+      "preload.js",
+      "app-icon.ico",
+      "app-icon.png",
+      "pwa-icon.svg",
+      "manifest.webmanifest",
+      "sw.js",
+      "proxy-fetch.js",
+      "social-sentiment.js",
+      "candle-ws.js",
+      "orderbook.js",
+      "signal-router-cfm.js",
+      "shell-router.js",
+      "floating-orchestrator.js",
+      "chain-router.js",
+      "cex-flow.js",
+      "blockchain-scan.js",
+      "data-logger.js",
+      "we-crypto-proxy.exe",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "we-crypto-proxy.exe"
+    ],
+    "icon": "app-icon.ico",
+    "win": {
+      "icon": "app-icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}
+
