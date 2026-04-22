@@ -7362,7 +7362,12 @@
       switch (currentView) {
         case 'markets':    renderMarkets(); break;
         case 'markets5m':  renderMarkets5M(); break;
-        case 'hourly-ranges': window.HourlyRangesPanel?.render?.(); break;
+        case 'hourly-ranges':
+          (async () => {
+            await window.HourlyRangesPanel?.load?.();
+            window.HourlyRangesPanel?.render?.();
+          })();
+          break;
         case 'debuglog':   renderDebugLog();  break;
         case 'portfolio': renderPortfolio(); break;
         case 'charts':    renderCharts(); break;
