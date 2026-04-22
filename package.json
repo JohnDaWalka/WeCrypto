@@ -47,6 +47,7 @@
       "blockchain-scan.js",
       "data-logger.js",
       "hourly-kalshi-tracker.js",
+      "hourly-ranges-panel.js",
       "tauri-bridge.js",
       "chart.umd.min.js",
       "chartjs-adapter-date-fns.bundle.min.js",

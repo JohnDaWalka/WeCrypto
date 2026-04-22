@@ -5823,7 +5823,20 @@
       : compositeEdge >= 0.42 ? 'STRONG' : compositeEdge >= 0.22 ? 'MODERATE' : 'LIGHT';
     const scoreStr  = Number.isFinite(p.score) ? (p.score > 0 ? '+' : '') + p.score.toFixed(2) : '—';
 
-    // Session quality badge — London open (UTC 7–12) is consistently worst session (-7-10% WR)
+    // ── Pre-compute model probability (outer scope — used in verdict banner + comparison bar) ──
+    const _modelUpPct     = Math.round(Math.min(99, Math.max(1, 50 + (p.score || 0) * 50)));
+    const _modelDownPct   = 100 - _modelUpPct;
+    const _modelProbStr   = verdictDir === 'up'   ? `${_modelUpPct}% UP`
+                          : verdictDir === 'down' ? `${_modelDownPct}% DOWN` : 'NEUTRAL';
+    const _modelProbColor = verdictDir === 'up'   ? 'var(--color-green)'
+                          : verdictDir === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
+    const _liveKProbCard  = window.PredictionMarkets?.getCoin?.(p.sym)?.kalshi15m?.probability ?? kalshiProb;
+    const _liveKPctCard   = _liveKProbCard != null ? Math.round(_liveKProbCard * 100) : null;
+    const _edgePpCard     = _liveKPctCard  != null ? Math.abs(_modelUpPct - _liveKPctCard) : null;
+    const _liveKColorCard = _liveKProbCard == null  ? 'var(--color-text-muted)'
+                          : _liveKProbCard >= 0.5   ? 'var(--color-green)' : 'var(--color-red)';
+
+    // Session quality badge— London open (UTC 7–12) is consistently worst session (-7-10% WR)
     const _nowUTC = new Date().getUTCHours();
     const isLondonSession = _nowUTC >= 7 && _nowUTC < 12;
     const londonBadge = isLondonSession
@@ -5988,7 +6001,7 @@
         const msl = new Date(_k15m.closeTime).getTime() - Date.now();
         if (msl > 0) {
           const ts = Math.floor(msl / 1000);
-          countdown = ` <span class="k15-expiry">⏱ ${Math.floor(ts / 60)}m${String(ts % 60).padStart(2, '0')}s</span>`;
+          countdown = ` <span class="k15-expiry" data-close-ms="${new Date(_k15m.closeTime).getTime()}">⏱ ${Math.floor(ts / 60)}m${String(ts % 60).padStart(2, '0')}s</span>`;
         } else {
           countdown = ` <span class="k15-expiry k15-settling">⏱ SETTLING</span>`;
         }
@@ -6023,12 +6036,13 @@
           </div>
           <div class="pred-verdict-meta">
             <span class="pred-source-badge model">MODEL</span>
-            ${kalshiPct !== null
-              ? `<span class="pred-source-badge ${_fadeActive ? 'kalshi-fade' : 'kalshi-align'}">KALSHI ${kalshiPct}% YES</span>`
+            ${_liveKPctCard !== null
+              ? `<span class="pred-source-badge ${_fadeActive ? 'kalshi-fade' : 'kalshi-align'}">${_fadeActive ? '⚡ ' : ''}KALSHI ${_liveKPctCard}% YES</span>`
               : ''}
-            <span>Score ${scoreStr}</span>
+            <span style="color:${_modelProbColor};font-weight:700">${_modelProbStr}</span>
             <span>·</span>
             <span>${p.confidence}% conf</span>
+            ${_edgePpCard != null && _edgePpCard >= 10 ? `<span style="color:${_edgePpCard >= 20 ? 'var(--color-green)' : '#ffd700'};font-weight:800;font-size:9px;padding:1px 5px;border-radius:3px;background:${_edgePpCard >= 20 ? 'rgba(38,212,126,0.12)' : 'rgba(255,215,0,0.12)'}">${_edgePpCard}pp ${_fadeActive ? 'FADE' : 'EDGE'}</span>` : ''}
             ${londonBadge}${calibBadge}${weakBadge}
           </div>
           ${ratPrimary ? `<div class="pred-verdict-rationale">${ratPrimary}</div>` : ''}
@@ -6294,16 +6308,31 @@
                      <span style="margin-left:auto;background:${isTrade ? 'rgba(0,200,100,0.15)' : 'rgba(200,200,0,0.12)'};color:${isTrade ? 'var(--color-green)' : 'var(--color-orange)'};padding:3px 10px;border-radius:3px;font-size:12px;font-weight:700">${actionLabel}</span>
                    </div>`}
               <!-- Model vs Kalshi probability — the primary insight -->
-              <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding:5px 8px;border-radius:4px;background:rgba(0,0,0,0.12);font-size:12px">
-                <span style="color:var(--color-text-muted);font-size:10px;font-weight:600;letter-spacing:.4px">MODEL</span>
-                <strong style="font-size:14px;color:${modelColor}">${modelLeanStr}</strong>
-                <span style="color:var(--color-text-faint);font-size:16px;font-weight:300">↔</span>
-                <span style="color:var(--color-text-muted);font-size:10px;font-weight:600;letter-spacing:.4px">KALSHI</span>
-                <strong style="font-size:14px;color:${kalshiColor}">${kalshiLeanStr}</strong>
-                <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
-                  ${alignBadge}
-                  ${edgePp != null ? `<span style="color:var(--color-text-faint);font-size:10px">${edgePp}pp gap</span>` : ''}
-                </span>
+              <div style="margin-top:6px;padding:6px 8px;border-radius:4px;background:rgba(0,0,0,0.12);font-size:12px">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:${liveKPct != null ? '5px' : '0'}">
+                  <span style="color:var(--color-text-muted);font-size:10px;font-weight:600;letter-spacing:.4px">MODEL</span>
+                  <strong style="font-size:14px;color:${modelColor}">${modelLeanStr}</strong>
+                  <span style="color:var(--color-text-faint);font-size:16px;font-weight:300">↔</span>
+                  <span style="color:var(--color-text-muted);font-size:10px;font-weight:600;letter-spacing:.4px">KALSHI</span>
+                  <strong style="font-size:14px;color:${kalshiColor}">${kalshiLeanStr}</strong>
+                  <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+                    ${alignBadge}
+                    ${edgePp != null ? `<span style="color:${edgePp >= 20 ? 'var(--color-green)' : edgePp >= 10 ? '#ffd700' : 'var(--color-text-faint)'};font-size:10px;font-weight:${edgePp >= 15 ? '800' : '600'}">${edgePp}pp${edgePp >= 20 ? ' ⚡' : edgePp >= 10 ? ' ▲' : ''}</span>` : ''}
+                  </span>
+                </div>
+                ${liveKPct != null ? `
+                <div style="display:grid;grid-template-columns:44px 1fr;row-gap:3px;align-items:center;font-size:9px">
+                  <span style="color:var(--color-text-muted);text-align:right;padding-right:5px">MDL</span>
+                  <div style="height:5px;border-radius:2px;background:rgba(255,255,255,0.07);position:relative;overflow:hidden">
+                    <div style="position:absolute;inset:0 ${100-modelUpPct}% 0 0;background:${modelColor};border-radius:2px"></div>
+                    <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.18)"></div>
+                  </div>
+                  <span style="color:var(--color-text-muted);text-align:right;padding-right:5px">KAL</span>
+                  <div style="height:5px;border-radius:2px;background:rgba(255,255,255,0.07);position:relative;overflow:hidden">
+                    <div style="position:absolute;inset:0 ${100-liveKPct}% 0 0;background:${kalshiColor};border-radius:2px"></div>
+                    <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.18)"></div>
+                  </div>
+                </div>` : ''}
               </div>
               <div style="display:flex;gap:12px;font-size:11px;color:var(--color-text-faint);margin-top:5px;flex-wrap:wrap;align-items:center">
                 ${ki.closeTimeMs ? `<span id="kalshi-min-${p.sym}" data-close-ms="${ki.closeTimeMs}">⏱ <strong>${minsStr ?? '…'}</strong> left</span>` : minsStr ? `<span>⏱ <strong>${minsStr}</strong> left</span>` : ''}
@@ -6959,6 +6988,36 @@
       });
     }, 3000);
 
+    // Live countdown for all Kalshi contract close times — ticks every 1s
+    setInterval(() => {
+      document.querySelectorAll('[data-close-ms]').forEach(el => {
+        const closeMs = parseInt(el.dataset.closeMs, 10);
+        if (!closeMs || isNaN(closeMs)) return;
+        const msLeft = closeMs - Date.now();
+        if (msLeft <= 0) {
+          if (el.classList.contains('k15-expiry')) {
+            el.classList.add('k15-settling');
+            el.textContent = '⏱ SETTLING';
+          } else {
+            el.innerHTML = '⏱ <strong>SETTLING</strong>';
+            el.style.color = 'var(--color-text-muted)';
+          }
+          return;
+        }
+        const s   = Math.floor(msLeft / 1000);
+        const m   = Math.floor(s / 60);
+        const sec = s % 60;
+        if (el.classList.contains('k15-expiry')) {
+          el.textContent = `⏱ ${m}m${String(sec).padStart(2, '0')}s`;
+          el.style.color = s < 60 ? 'var(--color-red)' : s < 180 ? '#ffd700' : '';
+        } else {
+          const str = m > 0 ? `${m}m ${String(sec).padStart(2, '0')}s` : `${sec}s`;
+          el.innerHTML = `⏱ <strong>${str}</strong> left`;
+          el.style.color = s < 60 ? 'var(--color-red)' : s < 180 ? '#ffd700' : '';
+        }
+      });
+    }, 1000);
+
     // Re-render immediately on alert
     window.OB?.onAlert(() => renderHud());
   }
@@ -7303,6 +7362,7 @@
       switch (currentView) {
         case 'markets':    renderMarkets(); break;
         case 'markets5m':  renderMarkets5M(); break;
+        case 'hourly-ranges': window.HourlyRangesPanel?.render?.(); break;
         case 'debuglog':   renderDebugLog();  break;
         case 'portfolio': renderPortfolio(); break;
         case 'charts':    renderCharts(); break;
