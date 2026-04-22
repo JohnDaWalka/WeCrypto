@@ -1,8 +1,9 @@
 // ================================================================
-// WE|||CRYPTO — Hourly Ranges Panel v4 (Kalshi API Integration)
+// WE|||CRYPTO — Hourly Ranges Panel v5 (Auto-load + Rich Data)
 //
 // Fetches actual hourly range contracts from Kalshi API (~70 ranges per coin)
-// Displays all available range strikes with live odds
+// Enriches with live prices from Coinbase, Kraken, CoinGecko
+// Auto-loads on page init, updates every 30 seconds
 //
 // Kalshi hourly range series (e.g., KXBTC_H, KXETH_H, etc.)
 // Each range: e.g., "KXBTC_H_75000_75100" = BTC between $75000-$75100
@@ -19,6 +20,7 @@
   const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
   const COINBASE_BASE = 'https://api.coinbase.com/api/v3/brokerage';
   const KRAKEN_BASE = 'https://api.kraken.com/0/public';
+  const COINGECKO_BASE = 'https://api.coingecko.com/api/v3';
   
   // Hourly range series base names (e.g., KXBTC_H)
   const HOURLY_RANGE_SERIES = {
@@ -43,8 +45,15 @@
     DOGE: 'XDOGEZUSD', BNB: 'BNBUSD', HYPE: null,
   };
 
+  // CoinGecko IDs
+  const COINGECKO_IDS = {
+    BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', XRP: 'ripple',
+    DOGE: 'dogecoin', BNB: 'binancecoin', HYPE: 'hyperliquid',
+  };
+
   let _cachedRanges = {}; // { 'BTC': [{ ...market }, ...], ... }
   let _cachedPrices = {}; // { 'BTC': 45000, ... }
+  let _pollTimer = null;
 
   // ── Route through Tauri suppFetch for CORS bypass ───────────────
   async function proxyFetch(url) {
@@ -52,27 +61,33 @@
       try {
         const txt = await window.suppFetch(url);
         return typeof txt === 'string' ? JSON.parse(txt) : txt;
-      } catch {}
+      } catch (e) {
+        console.warn('[HR] suppFetch error:', url, e.message);
+      }
     }
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(res.status);
       return res.json();
     } catch (e) {
+      console.warn('[HR] fetch error:', url, e.message);
       return null;
     }
   }
 
-  // ── Fetch live price from Coinbase, fallback to Kraken ──────────
+  // ── Fetch live price from multiple sources ──────────────────────
   async function getLivePrice(sym) {
     // Try Coinbase first (fastest, most reliable)
     const cbProduct = COINBASE_PRODUCTS[sym];
     if (cbProduct) {
       try {
         const data = await proxyFetch(`${COINBASE_BASE}/market/products/${cbProduct}/ticker`);
-        if (data?.price) return parseFloat(data.price);
+        if (data?.price) {
+          console.log(`[HR] ${sym} price from Coinbase: ${data.price}`);
+          return parseFloat(data.price);
+        }
       } catch (e) {
-        console.warn(`[HourlyRangesPanel] Coinbase fetch failed for ${sym}:`, e.message);
+        console.warn(`[HR] Coinbase ${sym}:`, e.message);
       }
     }
 
@@ -82,18 +97,38 @@
       try {
         const data = await proxyFetch(`${KRAKEN_BASE}/Ticker?pair=${krakenTicker}`);
         if (data?.result?.[krakenTicker]) {
-          const tickerData = data.result[krakenTicker];
-          return parseFloat(tickerData.c[0]); // c = last trade close array
+          const price = parseFloat(data.result[krakenTicker].c[0]);
+          console.log(`[HR] ${sym} price from Kraken: ${price}`);
+          return price;
         }
       } catch (e) {
-        console.warn(`[HourlyRangesPanel] Kraken fetch failed for ${sym}:`, e.message);
+        console.warn(`[HR] Kraken ${sym}:`, e.message);
+      }
+    }
+
+    // Fallback to CoinGecko
+    const geckoId = COINGECKO_IDS[sym];
+    if (geckoId) {
+      try {
+        const data = await proxyFetch(`${COINGECKO_BASE}/simple/price?ids=${geckoId}&vs_currencies=usd`);
+        if (data?.[geckoId]?.usd) {
+          const price = data[geckoId].usd;
+          console.log(`[HR] ${sym} price from CoinGecko: ${price}`);
+          return price;
+        }
+      } catch (e) {
+        console.warn(`[HR] CoinGecko ${sym}:`, e.message);
       }
     }
 
     // Fallback to cached prediction market data
     const pred = window._predictions?.[sym];
-    if (pred?.price) return pred.price;
+    if (pred?.price) {
+      console.log(`[HR] ${sym} price from window._predictions: ${pred.price}`);
+      return pred.price;
+    }
     
+    console.warn(`[HR] No price found for ${sym}`);
     return null;
   }
 
@@ -105,9 +140,15 @@
     try {
       // Fetch all markets matching the hourly range series (status=open, limit=100)
       const url = `${KALSHI_BASE}/markets?series_ticker=${series}&status=open&limit=100`;
+      console.log(`[HR] Fetching ${sym} ranges from: ${url}`);
       const data = await proxyFetch(url);
       
-      if (!data?.markets) return [];
+      if (!data?.markets) {
+        console.warn(`[HR] No markets returned for ${sym}:`, data);
+        return [];
+      }
+
+      console.log(`[HR] Got ${data.markets.length} ranges for ${sym}`);
 
       // Parse contract titles to extract range bounds: "KXBTC_H_75000_75100" → { low: 75000, high: 75100 }
       const ranges = data.markets.map(m => {
@@ -130,13 +171,14 @@
       ranges.sort((a, b) => b.low - a.low);
       return ranges;
     } catch (e) {
-      console.warn(`[HourlyRangesPanel] Error fetching ranges for ${sym}:`, e);
+      console.error(`[HR] Error fetching ranges for ${sym}:`, e);
       return [];
     }
   }
 
   // ── Fetch all hourly ranges for all coins + live prices ────────
   async function loadAllRanges() {
+    console.log('[HR] Starting loadAllRanges...');
     _cachedRanges = {};
     _cachedPrices = {};
     
@@ -148,7 +190,9 @@
       ]);
       _cachedRanges[sym] = ranges;
       _cachedPrices[sym] = price;
+      console.log(`[HR] Loaded ${sym}: ${ranges.length} ranges, price=${price}`);
     }
+    console.log('[HR] loadAllRanges complete');
   }
 
   // ── Determine range classification relative to current price ────
@@ -162,7 +206,7 @@
   // ── Build range ladder with color coding ──────────────────────
   function buildRangeLadder(sym, ranges, currentPrice) {
     if (!ranges || ranges.length === 0) {
-      return `<div class="hr-ladder-empty">Loading ranges…</div>`;
+      return `<div class="hr-ladder-empty">No ranges available…</div>`;
     }
 
     const levels = ranges.map(r => {
@@ -170,7 +214,7 @@
       const classification = classifyRange(r.low, r.high, currentPrice);
       
       const priceStr = r.low >= 1 ? `$${r.low.toFixed(0)}-$${r.high.toFixed(0)}` : 
-                                     `$${r.low.toFixed(4)}-$${r.high.toFixed(4)}`;
+                                      `$${r.low.toFixed(4)}-$${r.high.toFixed(4)}`;
       
       let badge = '';
       if (classification === 'current' && currentPrice) {
@@ -221,7 +265,10 @@
   // ── Render panel ─────────────────────────────────────────────────
   function renderPanel() {
     const container = document.getElementById('content');
-    if (!container) return;
+    if (!container) {
+      console.warn('[HR] Content container not found');
+      return;
+    }
 
     const panelHTML = buildPanelHTML();
     const panel = document.createElement('div');
@@ -230,14 +277,41 @@
     
     container.replaceChildren(panel);
     window.dispatchEvent(new CustomEvent('hourly-ranges:ready'));
+    console.log('[HR] Panel rendered');
+  }
+
+  // ── Auto-load ranges periodically ────────────────────────────────
+  async function startAutoLoad(intervalMs = 30000) {
+    console.log('[HR] Starting auto-load loop');
+    await loadAllRanges();
+    renderPanel();
+    
+    _pollTimer = setInterval(async () => {
+      console.log('[HR] Polling ranges...');
+      await loadAllRanges();
+      renderPanel();
+    }, intervalMs);
   }
 
   // ── Public API ───────────────────────────────────────────────────
   window.HourlyRangesPanel = {
     render: renderPanel,
     load: loadAllRanges,
+    startAutoLoad,
     getRanges: (sym) => _cachedRanges[sym] || [],
+    stopAutoLoad: () => { if (_pollTimer) clearInterval(_pollTimer); },
   };
 
-  console.log('[HourlyRangesPanel] Ready — fetching Kalshi hourly range contracts');
+  // Auto-start loading on page ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('[HR] DOMContentLoaded - starting auto-load');
+      window.HourlyRangesPanel.startAutoLoad(30000);
+    });
+  } else {
+    console.log('[HR] Document already loaded - starting auto-load immediately');
+    window.HourlyRangesPanel.startAutoLoad(30000);
+  }
+
+  console.log('[HourlyRangesPanel] Ready — auto-loading Kalshi hourly range contracts');
 })();
