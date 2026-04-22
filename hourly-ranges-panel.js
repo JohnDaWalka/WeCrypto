@@ -178,21 +178,31 @@
 
   // ── Fetch all hourly ranges for all coins + live prices ────────
   async function loadAllRanges() {
-    console.log('[HR] Starting loadAllRanges...');
+    console.log('[HR] ⏳ Starting loadAllRanges...');
     _cachedRanges = {};
     _cachedPrices = {};
     
+    const results = [];
     for (const sym of MAIN_COINS) {
-      // Fetch ranges and live price in parallel
-      const [ranges, price] = await Promise.all([
-        fetchHourlyRangesForCoin(sym),
-        getLivePrice(sym),
-      ]);
-      _cachedRanges[sym] = ranges;
-      _cachedPrices[sym] = price;
-      console.log(`[HR] Loaded ${sym}: ${ranges.length} ranges, price=${price}`);
+      console.log(`[HR] Fetching ${sym}...`);
+      try {
+        // Fetch ranges and live price in parallel
+        const [ranges, price] = await Promise.all([
+          fetchHourlyRangesForCoin(sym),
+          getLivePrice(sym),
+        ]);
+        _cachedRanges[sym] = ranges;
+        _cachedPrices[sym] = price;
+        const status = ranges.length > 0 ? `✓ ${ranges.length} ranges` : '✗ No ranges';
+        console.log(`[HR] ${sym}: ${status}, price=$${price}`);
+        results.push({ sym, ranges: ranges.length, price });
+      } catch (e) {
+        console.error(`[HR] ERROR loading ${sym}:`, e);
+        results.push({ sym, error: e.message });
+      }
     }
-    console.log('[HR] loadAllRanges complete');
+    console.log('[HR] ✓ loadAllRanges complete', results);
+    return results;
   }
 
   // ── Determine range classification relative to current price ────
@@ -302,16 +312,5 @@
     stopAutoLoad: () => { if (_pollTimer) clearInterval(_pollTimer); },
   };
 
-  // Auto-start loading on page ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      console.log('[HR] DOMContentLoaded - starting auto-load');
-      window.HourlyRangesPanel.startAutoLoad(30000);
-    });
-  } else {
-    console.log('[HR] Document already loaded - starting auto-load immediately');
-    window.HourlyRangesPanel.startAutoLoad(30000);
-  }
-
-  console.log('[HourlyRangesPanel] Ready — auto-loading Kalshi hourly range contracts');
+  console.log('[HourlyRangesPanel] ✓ Ready — call load() then render()');
 })();
