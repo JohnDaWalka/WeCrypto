@@ -7363,9 +7363,17 @@
         case 'markets':    renderMarkets(); break;
         case 'markets5m':  renderMarkets5M(); break;
         case 'hourly-ranges':
+          console.log('[APP] Switching to hourly-ranges view');
           (async () => {
-            await window.HourlyRangesPanel?.load?.();
-            window.HourlyRangesPanel?.render?.();
+            try {
+              console.log('[APP] Loading hourly ranges...');
+              await window.HourlyRangesPanel?.load?.();
+              console.log('[APP] Rendering hourly ranges...');
+              window.HourlyRangesPanel?.render?.();
+              console.log('[APP] Hourly ranges rendered successfully');
+            } catch (e) {
+              console.error('[APP] ERROR rendering hourly-ranges:', e);
+            }
           })();
           break;
         case 'debuglog':   renderDebugLog();  break;
