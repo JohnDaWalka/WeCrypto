@@ -128,7 +128,27 @@
       input = rewrite(input);
     } else if (input instanceof Request && EXTERNAL.test(input.url)) {
       const rw = rewrite(input.url);
-      if (rw !== input.url) input = new Request(rw, input);
+      if (rw !== input.url) {
+        const requestInit = {
+          method: input.method,
+          headers: new Headers(input.headers),
+          mode: input.mode,
+          credentials: input.credentials,
+          cache: input.cache,
+          redirect: input.redirect,
+          referrer: input.referrer,
+          referrerPolicy: input.referrerPolicy,
+          integrity: input.integrity,
+          keepalive: input.keepalive,
+          signal: input.signal,
+        };
+
+        if (input.method !== 'GET' && input.method !== 'HEAD' && input.body !== null) {
+          requestInit.body = input.body;
+        }
+
+        input = new Request(rw, requestInit);
+      }
     }
     return _origFetch(input, init);
   };
