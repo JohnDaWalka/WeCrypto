@@ -117,8 +117,15 @@ function waitForProxy(maxMs = 5000, pollMs = 150) {
       const port = PROXY_PORT_CASCADE[portIdx] || PROXY_PORT_CASCADE[0];
       const req  = http.get(`http://127.0.0.1:${port}/health`, res => {
         res.resume();
-        proxyPort = port;           // lock in the responsive port
-        resolve();
+        if (res.statusCode === 200) {
+          proxyPort = port;           // lock in the healthy port
+          resolve();
+          return;
+        }
+        if (Date.now() >= deadline) { resolve(); return; }  // give up gracefully
+        // advance through cascade before retrying
+        portIdx = (portIdx + 1) % PROXY_PORT_CASCADE.length;
+        setTimeout(tryPort, pollMs);
       });
       req.on('error', () => {
         if (Date.now() >= deadline) { resolve(); return; }  // give up gracefully
