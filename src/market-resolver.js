@@ -98,11 +98,13 @@
       const candles = await r.json();
       if (!Array.isArray(candles) || !candles.length) return null;
       // candles: [[time, low, high, open, close, volume], ...] descending
-      // Find candle whose close_time (time+60s) is at or just after closeTimeMs
+      // Find the 1-min candle whose interval covers closeTimeMs.
+      // This avoids picking the next candle when closeTimeMs lands
+      // exactly on a minute boundary, while keeping a small tolerance
+      // for minor API timing skew.
       const target = candles
         .map(c => ({ timeMs: c[0] * 1000, close: parseFloat(c[4]) }))
-        .filter(c => c.timeMs <= closeTimeMs + 5_000)
-        .sort((a, b) => b.timeMs - a.timeMs)[0];
+        .find(c => c.timeMs < closeTimeMs && (c.timeMs + 60_000) >= (closeTimeMs - 5_000));
       return target ? target.close : null;
     } catch { return null; }
   }
