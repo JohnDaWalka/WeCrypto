@@ -1,4 +1,3 @@
-# WE|||CRYPTO
 
 > **Predictions dashboard for Kalshi UP/DOWN crypto binary contracts**
 > Built on a subatomic orbital model — signal packets orbit each coin's nucleus, weighted by orbital profile, fused into a single EV-optimised trade intent.
