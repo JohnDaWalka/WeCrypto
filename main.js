@@ -66,16 +66,24 @@ crypto-com      = "https://api.crypto.com"
 
 async function startProxy() {
   // Dev: __dirname  |  Packaged: resources/app.asar.unpacked/
+  // KEY: When running inside app.asar, __dirname is inside the archive (can't execute).
+  // Must ALWAYS look in app.asar.unpacked, not app.asar.
   const candidates = [
-    path.join(__dirname, 'we-crypto-proxy.exe'),
+    // Fallback for dev (root directory)
+    path.join(__dirname, '..', '..', 'we-crypto-proxy.exe'),
+    // Correct packaged path: resources/app.asar.unpacked/we-crypto-proxy.exe
     path.join(process.resourcesPath || '', 'app.asar.unpacked', 'we-crypto-proxy.exe'),
+    // Alternate: resourcesPath itself
     path.join(process.resourcesPath || '', 'we-crypto-proxy.exe'),
   ];
+  
   const exePath = candidates.find(p => fs.existsSync(p));
   if (!exePath) {
-    console.warn('[proxy] we-crypto-proxy.exe not found — CORS proxy disabled');
+    console.error('[proxy] CRITICAL: we-crypto-proxy.exe not found. Searched:', candidates);
+    console.warn('[proxy] Falling back to direct API access (NO proxy routing)');
     return;
   }
+  console.log(`[proxy] found executable at: ${exePath}`);
 
   // Pick a free port then write config.toml beside the exe so the binary uses it
   const chosenPort = await findFreePort(PROXY_PORT_CASCADE);
