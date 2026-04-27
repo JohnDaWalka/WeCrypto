@@ -481,6 +481,52 @@
     return result;
   }
 
+  // ---- Kalshi Prediction Markets — Real-time sentiment data ----
+  async function fetchKalshiData() {
+    try {
+      // Guard: only if window.Kalshi is available
+      if (!window.Kalshi) {
+        console.warn('[Kalshi] window.Kalshi API not available yet');
+        return;
+      }
+
+      // Get markets (limit to top 100 by volume)
+      const marketsRes = await window.Kalshi.getMarkets(100);
+      if (!marketsRes.success || !marketsRes.data?.markets) {
+        console.warn('[Kalshi] Markets fetch failed:', marketsRes.error);
+        return;
+      }
+
+      // Get balance for portfolio context
+      const balanceRes = await window.Kalshi.getBalance();
+      const balance = balanceRes.success ? balanceRes.data.balance : null;
+
+      // Store Kalshi snapshot
+      window._kalshiSnapshot = {
+        timestamp: Date.now(),
+        markets: marketsRes.data.markets,
+        balance,
+        count: marketsRes.count,
+      };
+
+      // Build quick lookup by market ticker
+      const kalshiByTicker = {};
+      marketsRes.data.markets.forEach(m => {
+        kalshiByTicker[m.market_ticker] = {
+          price: parseFloat(m.last_price),      // 0-100 probability
+          volume: parseFloat(m.volume),          // 24h volume
+          timestamp: Date.now(),
+        };
+      });
+      window._kalshiByTicker = kalshiByTicker;
+
+      console.log(`[Kalshi] Loaded ${marketsRes.count} markets, balance: $${balance}`);
+    } catch (error) {
+      console.warn('[Kalshi] Fetch error:', error.message);
+      window._kalshiSnapshot = null;
+    }
+  }
+
   // ---- Live source: Binance 24hr batch — full WATCHLIST coverage, direct, no rate-limit ----
   async function fetchBinanceTickers(symMap = BIN_ALL_SYMS) {
     const syms = Object.values(symMap);
@@ -1148,6 +1194,11 @@
         if (sparkData[c.sym].length > 20) sparkData[c.sym].shift();
       });
 
+      // Async: Fetch Kalshi market data in background (non-blocking)
+      fetchKalshiData().catch(err => {
+        console.warn('[Kalshi] Background fetch failed:', err.message);
+      });
+
       updateHeaderSummary();
       setFeedStatus('live', dataSource);
       if (lastUpdate) lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -1184,6 +1235,51 @@
     if (refreshTimer) clearInterval(refreshTimer);
     if (refreshSecs > 0) refreshTimer = setInterval(() => fetchAll(), refreshSecs * 1000);
   }
+
+  // ── Kalshi background polling ─────────────────────────────────────
+  let kalshiPollTimer = null;
+  function startKalshiPolling() {
+    if (kalshiPollTimer) return; // already running
+    kalshiPollTimer = setInterval(async () => {
+      try {
+        if (!window.Kalshi) return;
+        const res = await window.Kalshi.getBalance();
+        if (res.success && res.data) {
+          window._kalshiBalance = {
+            balance: res.data.balance,
+            portfolio_value: res.data.portfolio_value,
+            timestamp: Date.now(),
+          };
+          
+          // Update UI badge
+          const badge = document.getElementById('kalshiBadge');
+          const balanceEl = document.getElementById('kalshiBalance');
+          if (badge && balanceEl) {
+            badge.style.display = 'flex';
+            const cents = parseInt(res.data.balance);
+            const dollars = (cents / 100).toFixed(2);
+            balanceEl.textContent = `$${dollars}`;
+            balanceEl.classList.add('updating');
+            setTimeout(() => balanceEl.classList.remove('updating'), 300);
+          }
+          
+          console.log(`[Kalshi] Balance: $${dollars}`);
+        }
+      } catch (err) {
+        console.warn('[Kalshi] Balance poll error:', err.message);
+      }
+    }, 5000); // poll every 5 seconds
+  }
+
+  function stopKalshiPolling() {
+    if (kalshiPollTimer) {
+      clearInterval(kalshiPollTimer);
+      kalshiPollTimer = null;
+    }
+  }
+
+  // Start polling on app init
+  startKalshiPolling();
 
   function syncPredictionRefresh() {
     const shouldRun = (['predictions', 'cfm', 'universe'].includes(currentView)) && window.PredictionEngine;

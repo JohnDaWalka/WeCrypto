@@ -3,6 +3,9 @@ const path = require('path');
 const fs   = require('fs');
 const { spawn } = require('child_process');
 
+// ── Kalshi Worker Bridge ──────────────────────────────────────────────────
+const { startKalshiWorker, stopKalshiWorker } = require('./kalshi-ipc-bridge.js');
+
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
 let proxyPort    = 3010;
@@ -143,6 +146,43 @@ function waitForProxy(maxMs = 5000, pollMs = 150) {
 // ── IPC: proxy port discovery ─────────────────────────────────────────────
 ipcMain.handle('proxy:port', () => proxyPort);
 
+// ── IPC: Kalshi credentials loader ─────────────────────────────────────────
+ipcMain.handle('kalshi:loadCredentials', async () => {
+  try {
+    const credPath = path.join(__dirname, 'KALSHI-API-KEY.txt');
+    if (!fs.existsSync(credPath)) {
+      return {
+        success: false,
+        error: 'KALSHI-API-KEY.txt not found'
+      };
+    }
+    
+    const content = fs.readFileSync(credPath, 'utf8');
+    const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+    
+    if (lines.length < 5) {
+      return {
+        success: false,
+        error: 'Invalid credential file format'
+      };
+    }
+    
+    const apiKeyId = lines[0];
+    const privateKeyPem = lines.slice(4).join('\n');
+    
+    return {
+      success: true,
+      apiKeyId,
+      privateKeyPem
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
 // ── IPC: File system helpers for DataLogger ────────────────────────────────
 ipcMain.handle('data:ensureDir', async (_, dirPath) => {
   try { fs.mkdirSync(dirPath, { recursive: true }); return true; }
@@ -203,6 +243,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   await startProxy();
+  await startKalshiWorker();  // Start Kalshi worker
   Menu.setApplicationMenu(null);
   await waitForProxy();   // give proxy ~3s to bind before renderer fires fetchAll
   createWindow();
@@ -216,6 +257,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   stopProxy();
+  stopKalshiWorker();  // Stop worker on app close
   if (process.platform !== 'darwin') {
     app.quit();
   }
