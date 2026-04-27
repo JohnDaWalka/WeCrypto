@@ -3,6 +3,9 @@ const path = require('path');
 const fs   = require('fs');
 const { spawn } = require('child_process');
 
+// ── Kalshi Worker Bridge ──────────────────────────────────────────────────
+const { startKalshiWorker, stopKalshiWorker } = require('./kalshi-ipc-bridge.js');
+
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
 let proxyPort    = 3010;
@@ -66,16 +69,24 @@ crypto-com      = "https://api.crypto.com"
 
 async function startProxy() {
   // Dev: __dirname  |  Packaged: resources/app.asar.unpacked/
+  // KEY: When running inside app.asar, __dirname is inside the archive (can't execute).
+  // Must ALWAYS look in app.asar.unpacked, not app.asar.
   const candidates = [
-    path.join(__dirname, 'we-crypto-proxy.exe'),
+    // Fallback for dev (root directory)
+    path.join(__dirname, '..', '..', 'we-crypto-proxy.exe'),
+    // Correct packaged path: resources/app.asar.unpacked/we-crypto-proxy.exe
     path.join(process.resourcesPath || '', 'app.asar.unpacked', 'we-crypto-proxy.exe'),
+    // Alternate: resourcesPath itself
     path.join(process.resourcesPath || '', 'we-crypto-proxy.exe'),
   ];
+  
   const exePath = candidates.find(p => fs.existsSync(p));
   if (!exePath) {
-    console.warn('[proxy] we-crypto-proxy.exe not found — CORS proxy disabled');
+    console.error('[proxy] CRITICAL: we-crypto-proxy.exe not found. Searched:', candidates);
+    console.warn('[proxy] Falling back to direct API access (NO proxy routing)');
     return;
   }
+  console.log(`[proxy] found executable at: ${exePath}`);
 
   // Pick a free port then write config.toml beside the exe so the binary uses it
   const chosenPort = await findFreePort(PROXY_PORT_CASCADE);
@@ -134,6 +145,43 @@ function waitForProxy(maxMs = 5000, pollMs = 150) {
 
 // ── IPC: proxy port discovery ─────────────────────────────────────────────
 ipcMain.handle('proxy:port', () => proxyPort);
+
+// ── IPC: Kalshi credentials loader ─────────────────────────────────────────
+ipcMain.handle('kalshi:loadCredentials', async () => {
+  try {
+    const credPath = path.join(__dirname, 'KALSHI-API-KEY.txt');
+    if (!fs.existsSync(credPath)) {
+      return {
+        success: false,
+        error: 'KALSHI-API-KEY.txt not found'
+      };
+    }
+    
+    const content = fs.readFileSync(credPath, 'utf8');
+    const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+    
+    if (lines.length < 5) {
+      return {
+        success: false,
+        error: 'Invalid credential file format'
+      };
+    }
+    
+    const apiKeyId = lines[0];
+    const privateKeyPem = lines.slice(4).join('\n');
+    
+    return {
+      success: true,
+      apiKeyId,
+      privateKeyPem
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
 
 // ── IPC: File system helpers for DataLogger ────────────────────────────────
 ipcMain.handle('data:ensureDir', async (_, dirPath) => {
@@ -195,6 +243,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   await startProxy();
+  await startKalshiWorker();  // Start Kalshi worker
   Menu.setApplicationMenu(null);
   await waitForProxy();   // give proxy ~3s to bind before renderer fires fetchAll
   createWindow();
@@ -208,6 +257,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   stopProxy();
+  stopKalshiWorker();  // Stop worker on app close
   if (process.platform !== 'darwin') {
     app.quit();
   }

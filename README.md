@@ -1,11 +1,13 @@
 
 > **Predictions dashboard for Kalshi UP/DOWN crypto binary contracts**
 > Built on a subatomic orbital model — signal packets orbit each coin's nucleus, weighted by orbital profile, fused into a single EV-optimised trade intent.
+> Includes real-time PYTH momentum exit system and live blockchain wallet intelligence.
 
-![Version](https://img.shields.io/badge/version-2.1.1-blue)
+![Version](https://img.shields.io/badge/version-2.5.0--momentum-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![Electron](https://img.shields.io/badge/Electron-37-47848F?logo=electron)
 ![Kalshi](https://img.shields.io/badge/exchange-Kalshi-green)
+![Momentum](https://img.shields.io/badge/exit-PYTH%20momentum-orange)
 
 ---
 
@@ -35,6 +37,13 @@ flowchart TD
         G[buildSignalModel\nscore → modelProbUp]
     end
 
+    subgraph momentum["⚡ PYTH Momentum Exit"]
+        ME1[PYTH price samples\n15-sec intervals]
+        ME2[Momentum slope\ncalculation]
+        ME3{Reversal\ndetected?}
+        ME4[Exit position\nbefore expiry]
+    end
+
     subgraph orchestrator["🎯 Floating Orchestrator"]
         H[EV Engine\nmodelProbUp vs kalshiYesPrice]
         I{3-Tier Decision}
@@ -57,6 +66,10 @@ flowchart TD
     I --> J --> N
     I --> L --> N
     I --> M --> N
+    N -->|active position| ME1
+    ME1 --> ME2 --> ME3
+    ME3 -- Yes --> ME4
+    ME3 -- No --> ME1
 ```
 
 ---
@@ -195,7 +208,40 @@ graph LR
 | Orchestrator | `floating-orchestrator.js` — EV engine, Kelly sizing |
 | Market data | `prediction-markets.js` — Kalshi 15M + 5M feeds |
 | Cross-coin | `shell-router.js` — orbital propagation |
+| **Momentum exit** | **`pyth-momentum-exit.js`** — **PYTH 15-sec slope, reversal detection, auto-exit** |
+| **Kalshi trading** | **`kalshi-ws.js` · `kalshi-worker.js` · `kalshi-rest.js`** — **WS + REST entry/exit** |
+| **Blockchain intel** | **`blockchain-scan.js`** — **live on-chain metrics: BTC/ETH/SOL/XRP/BNB/DOGE/HYPE** |
 | API proxy | `proxy-fetch.js` + `throttled-fetch.js` |
+
+---
+
+## Momentum Exit System
+
+PYTH price samples are collected every 15 seconds. A slope is calculated over the last 3 samples. If momentum breaks hard (slope ≤ -1.0) on **2 consecutive samples**, the system exits the open position before the 15-min contract expires — cutting losses on reversals rather than holding to expiry.
+
+**Exit guards:**
+- Skip exit if position is underwater (don't lock in a loss on a noise spike)
+- Require ≥ 0.5% profit minimum before exiting
+- 3-minute timeout if profit never reaches 1%
+- Stop-loss at -3% (severe reversal)
+
+---
+
+## Blockchain Wallet Intelligence
+
+Live on-chain metrics polled every 30s for all 7 coins:
+
+| Coin | Source | Metrics |
+|------|--------|---------|
+| BTC | mempool.space | Mempool txs, fee tiers, block height |
+| ETH | Blockscout | Gas, daily txs, total addresses |
+| SOL | Solana RPC | TPS, epoch, slot height |
+| XRP | XRPL Cluster | Ledger index, base fee, server state |
+| BNB | BSC RPC | Gas, block, txs |
+| DOGE | Blockchair | 24h txs, hashrate, difficulty |
+| HYPE | Hyperliquid | Custom metrics |
+
+Signal from wallet intel feeds into the `BEARISH / BULLISH / NEUTRAL` sentiment overlay on each coin card.
 
 ---
 
@@ -204,7 +250,8 @@ graph LR
 ```bash
 npm install
 npm run build
-# → dist/WECRYPTO-PATCH-2.1.1.exe   (portable, no install)
+# → dist/WECRYPTO-v2.5.0-momentum-portable.exe   (portable, no install)
+# Previous: dist/WECRYPTO-v2.4.8-portable.exe     (preserved)
 ```
 
 Kill any running instance before rebuilding — the exe locks the output file.

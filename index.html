@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
@@ -156,6 +156,10 @@
           <div class="market-summary" id="marketSummary"></div>
         </div>
         <div class="header-right">
+          <div class="kalshi-badge" id="kalshiBadge" title="Kalshi account balance" style="display:none;">
+            <span class="kalshi-label">K</span>
+            <span class="kalshi-balance" id="kalshiBalance">—</span>
+          </div>
           <div class="refresh-wrap">
             <button class="refresh-btn" id="refreshBtn" data-testid="refresh-btn">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -192,6 +196,11 @@
   <script src="candle-ws.js"></script>
   <script src="shell-router.js"></script>
   <script src="signal-router-cfm.js"></script>
+   <script src="kalshi-renderer-bridge.js"></script>
+   <script src="kalshi-prediction-enhancements.js"></script>
+  <script src="kalshi-ws.js"></script>
+  <script src="kalshi-rest.js"></script>
+  <script src="kalshi-client.js"></script>
   <script src="cfm-engine.js" defer></script>
   <script src="prediction-markets.js" defer></script>
   <script src="market-resolver.js" defer></script>
@@ -201,26 +210,11 @@
   <script src="cex-flow.js" defer></script>
   <script src="predictions.js" defer></script>
   <script src="orderbook.js" defer></script>
-  <script src="data-logger.js"></script>
-  <script src="hourly-kalshi-tracker.js"></script>
+  <script src="hourly-kalshi-tracker.js" defer></script>
   <script src="hourly-ranges-panel.js" defer></script>
-  <script src="wallet-cache.js" defer></script>
-  <script src="throttled-fetch.js" defer></script>
-  <script src="proxy-fetch.js" defer></script>
-  <script src="tauri-bridge.js" defer></script>
-  <script src="prediction-markets.js" defer></script>
-  <script src="market-resolver.js" defer></script>
-  <script src="shell-router.js" defer></script>
-  <script src="signal-router-cfm.js" defer></script>
-  <script src="chain-router.js" defer></script>
-  <script src="orderbook.js" defer></script>
-  <script src="candle-ws.js" defer></script>
-  <script src="social-sentiment.js" defer></script>
   <script src="blockchain-scan.js" defer></script>
-  <script src="cex-flow.js" defer></script>
-  <script src="floating-orchestrator.js" defer></script>
-  <script src="cfm-engine.js" defer></script>
-  <script src="predictions.js" defer></script>
+   <script src="pyth-momentum-exit.js" defer></script>
+   <script src="MOMENTUM_INTEGRATION.js" defer></script>
   <script src="app.js" defer></script>
   <script>
     if ('serviceWorker' in navigator) {
@@ -232,3 +226,7 @@
   <div id="ob-hud" class="ob-hud"></div>
 </body>
 </html>
+
+
+
+

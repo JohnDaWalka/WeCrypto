@@ -50,8 +50,9 @@
     const isPost = opts && opts.method && opts.method.toUpperCase() === 'POST';
     if (isPost && typeof window.suppFetch === 'function') {
       const body = opts.body ? JSON.parse(opts.body) : null;
-      const text = await window.suppFetch(url, { method: 'POST', body });
-      return JSON.parse(text);
+      const response = await window.suppFetch(url, { method: 'POST', body, headers: opts.headers });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();  // ✅ FIX: Use .json() not JSON.parse(text)
     }
     const r = await fetch(url, opts);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
