@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('desktopApp', {
   isElectron: true,
   proxyPort:  () => ipcRenderer.invoke('proxy:port'),
+  loadKalshiCredentials: () => ipcRenderer.invoke('kalshi:loadCredentials'),
 });
 
 contextBridge.exposeInMainWorld('dataStore', {
