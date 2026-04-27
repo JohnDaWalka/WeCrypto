@@ -1,0 +1,73 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo build (release)",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["+stable-x86_64-pc-windows-gnu", "build", "--release"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${env:PATH};C:\\msys64\\mingw64\\bin",
+          "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER": "C:\\msys64\\mingw64\\bin\\gcc.exe"
+        }
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "cargo build (debug)",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["+stable-x86_64-pc-windows-gnu", "build"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${env:PATH};C:\\msys64\\mingw64\\bin",
+          "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER": "C:\\msys64\\mingw64\\bin\\gcc.exe"
+        }
+      },
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "cargo run (proxy)",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["+stable-x86_64-pc-windows-gnu", "run", "--release"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${env:PATH};C:\\msys64\\mingw64\\bin",
+          "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER": "C:\\msys64\\mingw64\\bin\\gcc.exe",
+          "RUST_LOG": "we_crypto_proxy=info"
+        }
+      },
+      "group": "test",
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "cargo clippy",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["+stable-x86_64-pc-windows-gnu", "clippy", "--", "-D", "warnings"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "${env:PATH};C:\\msys64\\mingw64\\bin"
+        }
+      },
+      "group": "test",
+      "presentation": { "reveal": "always" },
+      "problemMatcher": "$rustc"
+    }
+  ]
+}

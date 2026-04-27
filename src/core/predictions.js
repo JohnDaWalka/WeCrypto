@@ -280,8 +280,26 @@
     medReliability:   0.52,
   };
 
+  // Per-coin gate overrides (tighter thresholds for problematic coins)
+  const SIGNAL_GATE_OVERRIDES = {
+    BNB: {
+      minAbsScore:   0.50,  // ★ RAISE FURTHER: was 0.22; BNB fires on wrong subset
+      minAgreement:  0.65,  // ★ RAISE FURTHER: was 0.56; require VERY strong consensus
+      minConfidence: 55,    // ★ RAISE: was 42; only fire when confidence high
+      medAbsScore:   0.60,
+      medAgreement:  0.72,
+    },
+    SOL: {
+      minAbsScore:   0.30,  // ★ BACK OFF: was 0.28; h15m had 0 signals at 0.28
+      minAgreement:  0.58,  
+      minConfidence: 45,    
+      medAbsScore:   0.44,
+      medAgreement:  0.66,
+    },
+  };
+
   /**
-   * evaluateSignalGate(pred)
+   * evaluateSignalGate(pred, coin)
    * Returns quality assessment for a live prediction.
    *
    * quality: 'high'    — passes all soft thresholds, strong conviction signal
@@ -290,7 +308,7 @@
    *
    * gated: true when quality === 'blocked' (signal should show HOLD in UI)
    */
-  function evaluateSignalGate(pred) {
+  function evaluateSignalGate(pred, coin) {
     if (!pred || pred.signal === 'neutral' || !Number.isFinite(pred.score)) {
       return { passed: true, gated: false, quality: 'medium', label: 'NEUTRAL', reasons: [] };
     }
@@ -303,15 +321,18 @@
     const routedAction = pred.diagnostics?.routedAction ?? '';
     const reasons = [];
 
+    // Apply coin-specific gate if available
+    const gate = Object.assign({}, SIGNAL_GATE, SIGNAL_GATE_OVERRIDES[coin] || {});
+
     // Hard-gate failures
     if (routedAction === 'invalidated') {
       return { passed: false, gated: true, quality: 'blocked', label: '⛔ INVALIDATED', reasons: ['Signal invalidated by router'] };
     }
-    if (conf < SIGNAL_GATE.minConfidence) reasons.push('Low confidence (' + conf + '%)');
-    if (absScore < SIGNAL_GATE.minAbsScore) reasons.push('Weak score (' + absScore.toFixed(2) + ')');
-    if (agreement < SIGNAL_GATE.minAgreement) reasons.push('Low agreement (' + Math.round(agreement * 100) + '%)');
-    if (conflict >= SIGNAL_GATE.maxConflict) reasons.push('High conflict (' + Math.round(conflict * 100) + '%)');
-    if (reliability > 0 && reliability < SIGNAL_GATE.minReliability) reasons.push('Weak backtest (' + Math.round(reliability * 100) + '%)');
+    if (conf < gate.minConfidence) reasons.push('Low confidence (' + conf + '%)');
+    if (absScore < gate.minAbsScore) reasons.push('Weak score (' + absScore.toFixed(2) + ')');
+    if (agreement < gate.minAgreement) reasons.push('Low agreement (' + Math.round(agreement * 100) + '%)');
+    if (conflict >= gate.maxConflict) reasons.push('High conflict (' + Math.round(conflict * 100) + '%)');
+    if (reliability > 0 && reliability < gate.minReliability) reasons.push('Weak backtest (' + Math.round(reliability * 100) + '%)');
 
     if (reasons.length > 0) {
       return { passed: false, gated: true, quality: 'blocked', label: '⛔ HOLD', reasons };
@@ -319,9 +340,9 @@
 
     // Soft-gate check (medium conviction)
     const softFails = [];
-    if (conf < SIGNAL_GATE.medConfidence) softFails.push('Conf ' + conf + '%');
-    if (agreement < SIGNAL_GATE.medAgreement) softFails.push('Agr ' + Math.round(agreement * 100) + '%');
-    if (absScore < SIGNAL_GATE.medAbsScore) softFails.push('Score ' + absScore.toFixed(2));
+    if (conf < gate.medConfidence) softFails.push('Conf ' + conf + '%');
+    if (agreement < gate.medAgreement) softFails.push('Agr ' + Math.round(agreement * 100) + '%');
+    if (absScore < gate.medAbsScore) softFails.push('Score ' + absScore.toFixed(2));
     if (reliability > 0 && reliability < SIGNAL_GATE.medReliability) softFails.push('Rel ' + Math.round(reliability * 100) + '%');
 
     if (softFails.length >= 2) {
@@ -4106,7 +4127,7 @@
     };
 
     // PATCH1.10: attach signal quality gate
-    result.gate = evaluateSignalGate(result);
+    result.gate = evaluateSignalGate(result, coin.sym);
     return result;
   }
 

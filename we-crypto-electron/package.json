@@ -1,0 +1,24 @@
+{
+  "name": "we-crypto-electron",
+  "version": "1.0.1",
+  "description": "Electron wrapper for WeCrypto regime backtest",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^26.0.0",
+    "electron-builder": "^24.8.0"
+  },
+  "build": {
+    "appId": "com.wecrypto.regime",
+    "productName": "WeCrypto-Regime",
+    "win": {
+      "target": ["nsis"]
+    },
+    "files": [
+      "**/*"
+    ]
+  }
+}
