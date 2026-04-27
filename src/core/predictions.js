@@ -296,6 +296,20 @@
       medAbsScore:   0.44,
       medAgreement:  0.66,
     },
+    DOGE: {
+      minAbsScore:   0.28,  // ★ LOOSENED: restore signals (was 0.22 default)
+      minAgreement:  0.58,
+      minConfidence: 42,
+      medAbsScore:   0.35,
+      medAgreement:  0.62,
+    },
+    HYPE: {
+      minAbsScore:   0.20,  // ★ LOOSENED: restore signals (was 0.22 default)
+      minAgreement:  0.56,
+      minConfidence: 40,
+      medAbsScore:   0.30,
+      medAgreement:  0.60,
+    },
   };
 
   /**

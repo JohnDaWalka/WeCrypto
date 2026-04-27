@@ -1020,7 +1020,7 @@ def analyse_kalshi_csv(csv_path: str) -> dict:
             for row in reader:
                 rows.append(row)
     except FileNotFoundError:
-        print(f"  ⚠  Kalshi CSV not found: {csv_path}")
+        print(f"  !  Kalshi CSV not found: {csv_path}")
         return {}
 
     filled = [r for r in rows if r.get("Status","").strip() == "Filled"
@@ -1128,10 +1128,10 @@ def analyse_kalshi_csv(csv_path: str) -> dict:
 
 def _bar(pct: float, width: int = 20) -> str:
     filled = round(max(0.0, min(pct, 100.0)) / 100 * width)
-    return "█" * filled + "░" * (width - filled)
+    return "=" * filled + "-" * (width - filled)
 
 def _wr_icon(wr: float) -> str:
-    return "✅" if wr >= 58 else ("🟡" if wr >= 50 else "❌")
+    return "[OK]" if wr >= 58 else ("[~]" if wr >= 50 else "[X]")
 
 def print_coin_report(sym: str, results: dict, candle_count: int):
     divider = "-" * 80
