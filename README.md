@@ -198,6 +198,85 @@ graph LR
 
 ---
 
+## Backtest Results (Phase 3b — 2026-04-27)
+
+### Latest Calibration (30-day window)
+
+Per-coin signal gate thresholds have been tuned via grid search and aggressive per-coin overrides. Results reflect `--days 30` backtest on Kraken/Binance/Coinbase aggregated feeds.
+
+| Coin | h1m | h5m | h10m | h15m | Signal Count | Status |
+|------|-----|-----|------|------|--------------|--------|
+| **BTC** | 50.0% | 50.4% | 53.6% | **58.7%** | 63 | ✅ Baseline |
+| **ETH** | 36.8% | 40.2% | 48.9% | **60.0%** | 70 | ✅ Strong |
+| **SOL** | 21.0% | 18.2% | 17.6% | **33.3%** | 6 | ⚠️ Recovered |
+| **XRP** | 27.4% | 26.6% | **40.6%** | 52.2% | 46 | ✅ Good |
+| **BNB** | 10.7% | 12.0% | 20.8% | **22.8%** | — | ⚠️ Improving |
+| **DOGE** | 0.0% | 0.0% | 0.0% | 0.0% | 0 | ⏳ Restored* |
+| **HYPE** | 0.0% | 0.0% | 0.0% | 0.0% | 0 | ⏳ Restored* |
+
+**Overall**: **36.2%** accuracy across 640 active signals (640/1766 backtest observations)
+
+*DOGE/HYPE: Signal generation restored in v2.5.0; backtest validation pending (API rate limit blocked 30+ day runs).
+
+### Tuning Details
+
+**Per-coin signal gate overrides** (soft gate thresholds):
+
+```javascript
+const SIGNAL_GATE_OVERRIDES = {
+  BNB: {
+    minAbsScore:   0.50,  // was 0.22 — filter noisy signals
+    minAgreement:  0.65,  // was 0.56 — require strong consensus
+    minConfidence: 55,    // was 42  — higher conviction threshold
+  },
+  SOL: {
+    minAbsScore:   0.30,  // moderate raise — 0.28 killed h15m (0% signals)
+    minAgreement:  0.58,  // slight raise
+    minConfidence: 45,    // slight raise
+  },
+  DOGE: {
+    minAbsScore:   0.28,  // loosened from 0.22 default
+    minAgreement:  0.58,  // same as baseline
+    minConfidence: 42,    // default
+  },
+  HYPE: {
+    minAbsScore:   0.20,  // loosened to restore signals
+    minAgreement:  0.56,  // default
+    minConfidence: 40,    // default
+  },
+};
+```
+
+### Key Findings
+
+1. **Threshold raises improve quality but face diminishing returns**
+   - BNB h15m climbed 18% → 22.8% with aggressive raises
+   - Further raises risk killing all signals (e.g., SOL aggressive raise → 0% h15m)
+   - Suggests structural issue: composite signal fires on disagreement subset, not agreement
+
+2. **Coin-specific calibration essential**
+   - SOL requires moderate thresholds (too tight = no signals; too loose = noisy)
+   - BNB benefits from tighter thresholds (structurally noisier)
+   - XRP/ETH/BTC don't need per-coin overrides (default gate sufficient)
+
+3. **Window sensitivity**
+   - 30-day backtest (3.5 actual days) shows regime-dependent results
+   - 60+ day validation blocked by API rate limiting (Kraken: ~300 candles/call limit)
+   - Need multi-regime confirmation before production deployment
+
+### Deployment Status
+
+**Build**: WECRYPTO-v2.5.0-momentum-portable.exe (86.6 MB)
+- Includes all Phase 3b tuning
+- Unicode encoding fixes for Windows
+- Ready for live trading validation
+
+**Live Validation**: Pending
+- Requires manual trade comparison: backtest signals vs live execution
+- Target: 10–50 live trades to confirm prediction accuracy ≥ 95% parity with backtest
+
+---
+
 ## Stack
 
 | Layer | Technology |
@@ -255,6 +334,48 @@ npm run build
 ```
 
 Kill any running instance before rebuilding — the exe locks the output file.
+
+---
+
+## Deployment
+
+### Quick Start
+
+1. **Download** → `dist/WECRYPTO-v2.5.0-momentum-portable.exe` (no installation)
+2. **Run** → Double-click `.exe`
+3. **Configure** → Enter Kalshi API credentials in Settings
+4. **Monitor** → Watch signal feed; trade intent displayed on coin cards
+
+### Kalshi API Setup
+
+1. Create account at [kalshi.com](https://kalshi.com)
+2. Generate API key in Settings → Integrations
+3. Paste into WECRYPTO settings panel
+4. Test connection via `Test Feed` button
+
+### Live Trading
+
+**Signal Flow**:
+- Real-time OHLCV feeds (Coinbase/Binance/Kraken aggregated)
+- Orbital model produces UP/DOWN intent every 5 seconds
+- System compares model probability vs Kalshi crowd odds
+- Trade if EV ≥ 1.65x (Tier 1 Sweet Spot)
+
+**Position Management**:
+- PYTH momentum exit monitors 15-second reversal breakouts
+- Auto-exit on reversal or 3-minute timeout (whichever first)
+- Manual exit available via UI kill switch
+
+**Risk Controls**:
+- Kelly-sized positions (default 1% of account per trade)
+- Daily loss limit configurable in Settings
+- Circuit breaker: pause after 3 losses/hour
+
+### Monitoring
+
+- **Coin Cards**: Real-time signal, sentiment, wallet intel
+- **Trade Log**: Entry, exit, P&L, duration
+- **Metrics**: Win rate, Sharpe, drawdown (updated hourly)
 
 ---
 
