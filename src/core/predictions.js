@@ -215,13 +215,15 @@
   const BACKTEST_THRESHOLD_GRID = [0.08, 0.10, 0.12, 0.16, 0.20];
   const BACKTEST_AGREEMENT_GRID = [0.50, 0.54, 0.58];
   const BACKTEST_FILTER_OVERRIDES = {
-    BTC:  { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-    ETH:  { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-    SOL:  { h1: { entryThreshold: 0.20, minAgreement: 0.52 }, h5: { entryThreshold: 0.25, minAgreement: 0.56 }, h10: { entryThreshold: 0.30, minAgreement: 0.60 }, h15: { entryThreshold: 0.35, minAgreement: 0.64 } },
-    XRP:  { h1: { entryThreshold: 0.19, minAgreement: 0.52 }, h5: { entryThreshold: 0.23, minAgreement: 0.56 }, h10: { entryThreshold: 0.28, minAgreement: 0.60 }, h15: { entryThreshold: 0.32, minAgreement: 0.64 } },
-    DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-    BNB:  { h1: { entryThreshold: 0.20, maxScore: 0.58, minAgreement: 0.54 }, h5: { entryThreshold: 0.25, maxScore: 0.58, minAgreement: 0.58 }, h10: { entryThreshold: 0.29, maxScore: 0.58, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, maxScore: 0.58, minAgreement: 0.64 } },
-    HYPE: { h1: { entryThreshold: 0.18, maxScore: 0.40, minAgreement: 0.52 }, h5: { entryThreshold: 0.20, maxScore: 0.40, minAgreement: 0.52 }, h10: { entryThreshold: 0.22, maxScore: 0.40, minAgreement: 0.54 }, h15: { entryThreshold: 0.24, maxScore: 0.40, minAgreement: 0.56 } },
+    // Retuned 2025-07 based on 30-day backtest: all win_rates <50% & avg_edge <0 across board
+    // Rule applied: +0.04 entryThreshold, +0.04 minAgreement per horizon (XRP h10/h15 +0.05)
+    BTC:  { h1: { entryThreshold: 0.27, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.62 }, h10: { entryThreshold: 0.37, minAgreement: 0.66 }, h15: { entryThreshold: 0.42, minAgreement: 0.70 } },
+    ETH:  { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.33, minAgreement: 0.62 }, h10: { entryThreshold: 0.37, minAgreement: 0.66 }, h15: { entryThreshold: 0.41, minAgreement: 0.69 } },
+    SOL:  { h1: { entryThreshold: 0.25, minAgreement: 0.56 }, h5: { entryThreshold: 0.30, minAgreement: 0.60 }, h10: { entryThreshold: 0.34, minAgreement: 0.64 }, h15: { entryThreshold: 0.39, minAgreement: 0.68 } },
+    XRP:  { h1: { entryThreshold: 0.23, minAgreement: 0.56 }, h5: { entryThreshold: 0.27, minAgreement: 0.60 }, h10: { entryThreshold: 0.33, minAgreement: 0.64 }, h15: { entryThreshold: 0.37, minAgreement: 0.68 } },
+    DOGE: { h1: { entryThreshold: 0.32, minAgreement: 0.62 }, h5: { entryThreshold: 0.36, minAgreement: 0.64 }, h10: { entryThreshold: 0.39, minAgreement: 0.66 }, h15: { entryThreshold: 0.42, minAgreement: 0.70 } },
+    BNB:  { h1: { entryThreshold: 0.24, maxScore: 0.58, minAgreement: 0.57 }, h5: { entryThreshold: 0.29, maxScore: 0.58, minAgreement: 0.61 }, h10: { entryThreshold: 0.33, maxScore: 0.58, minAgreement: 0.65 }, h15: { entryThreshold: 0.37, maxScore: 0.58, minAgreement: 0.67 } },
+    HYPE: { h1: { entryThreshold: 0.22, maxScore: 0.40, minAgreement: 0.56 }, h5: { entryThreshold: 0.24, maxScore: 0.40, minAgreement: 0.56 }, h10: { entryThreshold: 0.26, maxScore: 0.40, minAgreement: 0.58 }, h15: { entryThreshold: 0.28, maxScore: 0.40, minAgreement: 0.60 } },
   };
   const ORBITAL_ROUTER_PROFILES = {
     core: {

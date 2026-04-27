@@ -1,15 +1,62 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+build/
+
+# Electron build artifacts
 *.exe
+!we-crypto-proxy.exe
+
+# Logs
 *.log
-config.toml
+debug-logs/
+
+# Secrets — NEVER COMMIT
+secrets/
+KALSHI-API-KEY.txt
+*-api-key*
+*.key
+.env
+.env.*
+
+# OS
 .DS_Store
 Thumbs.db
 
-# Rust/Tauri build artifacts
+# Rust/Tauri
 src-tauri/
+cargo-target/
 *.rlib
 *.pdb
 
-# Generated backtest reports (large JSON, rebuild locally)
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.Python
+venv/
+.venv/
+
+# HAR debug files (huge, personal)
+*.har
+
+# Backtest results (regenerated locally)
+backtest/results/
+backtest-results/
 *-report.json
+*-report.csv
+
+# Data files with personal trade history
+data/
+
+# Temp / scratch
+*.old
+*.bak
+*.tmp
+.tmp.driveupload/
+
+# Config
+config.toml

@@ -72,8 +72,8 @@ async function startProxy() {
   // KEY: When running inside app.asar, __dirname is inside the archive (can't execute).
   // Must ALWAYS look in app.asar.unpacked, not app.asar.
   const candidates = [
-    // Fallback for dev (root directory)
-    path.join(__dirname, '..', '..', 'we-crypto-proxy.exe'),
+    // Dev path: electron/ is one level down from root, so ../we-crypto-proxy.exe
+    path.join(__dirname, '..', 'we-crypto-proxy.exe'),
     // Correct packaged path: resources/app.asar.unpacked/we-crypto-proxy.exe
     path.join(process.resourcesPath || '', 'app.asar.unpacked', 'we-crypto-proxy.exe'),
     // Alternate: resourcesPath itself
@@ -149,7 +149,7 @@ ipcMain.handle('proxy:port', () => proxyPort);
 // ── IPC: Kalshi credentials loader ─────────────────────────────────────────
 ipcMain.handle('kalshi:loadCredentials', async () => {
   try {
-    const credPath = path.join(__dirname, 'KALSHI-API-KEY.txt');
+    const credPath = path.join(__dirname, '../secrets/KALSHI-API-KEY.txt');
     if (!fs.existsSync(credPath)) {
       return {
         success: false,
@@ -212,7 +212,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     backgroundColor: '#0b1020',
-    icon: path.join(__dirname, 'app-icon.png'),
+    icon: path.join(__dirname, '../assets/app-icon.png'),
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -232,7 +232,7 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  win.loadFile(path.join(__dirname, 'index.html'));
+  win.loadFile(path.join(__dirname, '../public/index.html'));
 
   // Inject the live proxy port so proxy-fetch.js can correct itself if it
   // started on the wrong guess before discovery completed.

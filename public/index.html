@@ -45,9 +45,9 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Symbols+2&display=swap">
   <link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&f[]=jetbrains-mono@400,500&display=swap" rel="stylesheet">
   <!-- Chart libs (defer — not needed until Charts tab) -->
-  <script defer src="chart.umd.min.js"></script>
-  <script defer src="chartjs-adapter-date-fns.bundle.min.js"></script>
-  <script defer src="lightweight-charts.standalone.production.js"></script>
+  <script defer src="vendors/chart.umd.min.js"></script>
+  <script defer src="vendors/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script defer src="vendors/lightweight-charts.standalone.production.js"></script>
   <!-- Styles -->
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -187,35 +187,35 @@
     </div>
   </div>
 
-  <script src="tauri-bridge.js"></script>
-  <script src="proxy-fetch.js"></script>
-  <script src="throttled-fetch.js"></script>
-  <script src="data.js"></script>
-  <script src="data-logger.js"></script>
-  <script src="social-sentiment.js"></script>
-  <script src="candle-ws.js"></script>
-  <script src="shell-router.js"></script>
-  <script src="signal-router-cfm.js"></script>
-   <script src="kalshi-renderer-bridge.js"></script>
-   <script src="kalshi-prediction-enhancements.js"></script>
-  <script src="kalshi-ws.js"></script>
-  <script src="kalshi-rest.js"></script>
-  <script src="kalshi-client.js"></script>
-  <script src="cfm-engine.js" defer></script>
-  <script src="prediction-markets.js" defer></script>
-  <script src="market-resolver.js" defer></script>
-  <script src="floating-orchestrator.js" defer></script>
-  <script src="chain-router.js" defer></script>
-  <script src="wallet-cache.js" defer></script>
-  <script src="cex-flow.js" defer></script>
-  <script src="predictions.js" defer></script>
-  <script src="orderbook.js" defer></script>
-  <script src="hourly-kalshi-tracker.js" defer></script>
-  <script src="hourly-ranges-panel.js" defer></script>
-  <script src="blockchain-scan.js" defer></script>
-   <script src="pyth-momentum-exit.js" defer></script>
-   <script src="MOMENTUM_INTEGRATION.js" defer></script>
-  <script src="app.js" defer></script>
+  <script src="../src/infra/tauri-bridge.js"></script>
+  <script src="../src/infra/proxy-fetch.js"></script>
+  <script src="../src/infra/throttled-fetch.js"></script>
+  <script src="../src/core/data.js"></script>
+  <script src="../src/core/data-logger.js"></script>
+  <script src="../src/feeds/social-sentiment.js"></script>
+  <script src="../src/feeds/candle-ws.js"></script>
+  <script src="../src/orbital/shell-router.js"></script>
+  <script src="../src/orbital/signal-router-cfm.js"></script>
+   <script src="../src/kalshi/kalshi-renderer-bridge.js"></script>
+   <script src="../src/kalshi/kalshi-prediction-enhancements.js"></script>
+  <script src="../src/kalshi/kalshi-ws.js"></script>
+  <script src="../src/kalshi/kalshi-rest.js"></script>
+  <script src="../src/kalshi/kalshi-client.js"></script>
+  <script src="../src/core/cfm-engine.js" defer></script>
+  <script src="../src/kalshi/prediction-markets.js" defer></script>
+  <script src="../src/kalshi/market-resolver.js" defer></script>
+  <script src="../src/ui/floating-orchestrator.js" defer></script>
+  <script src="../src/orbital/chain-router.js" defer></script>
+  <script src="../src/feeds/wallet-cache.js" defer></script>
+  <script src="../src/feeds/cex-flow.js" defer></script>
+  <script src="../src/core/predictions.js" defer></script>
+  <script src="../src/feeds/orderbook.js" defer></script>
+  <script src="../src/ui/hourly-kalshi-tracker.js" defer></script>
+  <script src="../src/ui/hourly-ranges-panel.js" defer></script>
+  <script src="../src/feeds/blockchain-scan.js" defer></script>
+   <script src="../src/orbital/pyth-momentum-exit.js" defer></script>
+   <script src="../src/orbital/MOMENTUM_INTEGRATION.js" defer></script>
+  <script src="../src/core/app.js" defer></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

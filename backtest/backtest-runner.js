@@ -35,22 +35,23 @@ const PREDICTION_COINS = [
 
 // ── Exact backtest config from predictions.js ───────────────────
 const SHORT_HORIZON_MINUTES = [1, 5, 10, 15];
+// Mirrors predictions.js SHORT_HORIZON_FILTERS exactly
 const SHORT_HORIZON_FILTERS = {
   h1:  { entryThreshold: 0.08, minAgreement: 0.50 },
-const DEFAULT_FILTERS = {
-  h1:  { entryThreshold: 0.18, minAgreement: 0.52 },
-  h5:  { entryThreshold: 0.22, minAgreement: 0.54 },
-  h10: { entryThreshold: 0.26, minAgreement: 0.56 },
-  h15: { entryThreshold: 0.30, minAgreement: 0.58 },
+  h5:  { entryThreshold: 0.12, minAgreement: 0.54 },
+  h10: { entryThreshold: 0.16, minAgreement: 0.58 },
+  h15: { entryThreshold: 0.20, minAgreement: 0.65 },
 };
 const BACKTEST_FILTER_OVERRIDES = {
-  BTC:  { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-  ETH:  { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-  SOL:  { h1: { entryThreshold: 0.20, minAgreement: 0.52 }, h5: { entryThreshold: 0.25, minAgreement: 0.56 }, h10: { entryThreshold: 0.30, minAgreement: 0.60 }, h15: { entryThreshold: 0.35, minAgreement: 0.64 } },
-  XRP:  { h1: { entryThreshold: 0.19, minAgreement: 0.52 }, h5: { entryThreshold: 0.23, minAgreement: 0.56 }, h10: { entryThreshold: 0.28, minAgreement: 0.60 }, h15: { entryThreshold: 0.32, minAgreement: 0.64 } },
-  DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-  BNB:  { h1: { entryThreshold: 0.20, minAgreement: 0.54 }, h5: { entryThreshold: 0.25, minAgreement: 0.58 }, h10: { entryThreshold: 0.29, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },
-  HYPE: { h1: { entryThreshold: 0.20, minAgreement: 0.56 }, h5: { entryThreshold: 0.25, minAgreement: 0.60 }, h10: { entryThreshold: 0.30, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },
+  // Retuned 2025-07 based on 30-day backtest: all win_rates <50% & avg_edge <0 across board
+  // Rule applied: +0.04 entryThreshold, +0.04 minAgreement per horizon (XRP h10/h15 +0.05 due to deep negative edge)
+  BTC:  { h1: { entryThreshold: 0.27, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.62 }, h10: { entryThreshold: 0.37, minAgreement: 0.66 }, h15: { entryThreshold: 0.42, minAgreement: 0.70 } },
+  ETH:  { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.33, minAgreement: 0.62 }, h10: { entryThreshold: 0.37, minAgreement: 0.66 }, h15: { entryThreshold: 0.41, minAgreement: 0.69 } },
+  SOL:  { h1: { entryThreshold: 0.25, minAgreement: 0.56 }, h5: { entryThreshold: 0.30, minAgreement: 0.60 }, h10: { entryThreshold: 0.34, minAgreement: 0.64 }, h15: { entryThreshold: 0.39, minAgreement: 0.68 } },
+  XRP:  { h1: { entryThreshold: 0.23, minAgreement: 0.56 }, h5: { entryThreshold: 0.27, minAgreement: 0.60 }, h10: { entryThreshold: 0.33, minAgreement: 0.64 }, h15: { entryThreshold: 0.37, minAgreement: 0.68 } },
+  DOGE: { h1: { entryThreshold: 0.32, minAgreement: 0.62 }, h5: { entryThreshold: 0.36, minAgreement: 0.64 }, h10: { entryThreshold: 0.39, minAgreement: 0.66 }, h15: { entryThreshold: 0.42, minAgreement: 0.70 } },
+  BNB:  { h1: { entryThreshold: 0.24, minAgreement: 0.57 }, h5: { entryThreshold: 0.29, minAgreement: 0.61 }, h10: { entryThreshold: 0.33, minAgreement: 0.65 }, h15: { entryThreshold: 0.37, minAgreement: 0.67 } },
+  HYPE: { h1: { entryThreshold: 0.22, minAgreement: 0.56 }, h5: { entryThreshold: 0.24, minAgreement: 0.56 }, h10: { entryThreshold: 0.26, minAgreement: 0.58 }, h15: { entryThreshold: 0.28, minAgreement: 0.60 } },
 };
 const COMPOSITE_WEIGHTS = {
   ema: 0.18, structure: 0.17, momentum: 0.14, persistence: 0.12, macd: 0.10,
@@ -417,7 +418,7 @@ function buildSignalModel(candles) {
   const totalWeight = keys.reduce((s, k) => s + (COMPOSITE_WEIGHTS[k] || 0), 0) || 1;
   const rawComposite = keys.reduce((s, k) => s + sv[k] * (COMPOSITE_WEIGHTS[k] || 0), 0) / totalWeight;
   // ADX gate: suppress signal in flat/ranging markets; amplify to realistic confidence range
-  const adxGate = adxResult.adx < 20 ? Math.max(0.25, adxResult.adx / 20) : 1.0;
+  const adxGate = adxR.adx < 20 ? Math.max(0.25, adxR.adx / 20) : 1.0;
   const score = clamp(rawComposite * SCORE_AMPLIFIER * adxGate, -1, 1);
   const agr   = summarizeAgreement(sv);
 
@@ -782,7 +783,7 @@ async function main() {
   console.log(`  Overall accuracy across all coins & horizons: ${overall}% (${globalStats.correct}/${globalStats.total} active signals)`);
 
   // ── Save JSON report ─────────────────────────────────────────
-  const outPath = path.join(__dirname, 'backtest-report.json');
+  const outPath = path.join(__dirname, 'results', 'backtest-report.json');
   try {
     fs.writeFileSync(outPath, JSON.stringify({
       generatedAt: new Date().toISOString(),

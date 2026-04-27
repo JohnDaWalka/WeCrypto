@@ -1,16 +1,17 @@
 /**
  * Kalshi Prediction Accuracy Enhancements
- * 
- * 7-State Quantized Spin Model (-3 to +3)
- * 
+ *
+ * 11-State Quantized Spin Model (-5 to +5) — quantum h-subshell (l=5, n=6)
+ *
  * Improves predictions from 10-10 baseline through:
- * 1. Quantized spin states (+3/+2/+1/0/-1/-2/-3) instead of binary
- * 2. Volatility regime detection (choppy markets dampen confidence)
- * 3. Kalshi sentiment blending (crowd wisdom 12-15% weight)
- * 4. Consensus scoring (when CFM + Kalshi + orbital align, +30-50% confidence)
- * 5. Conflict penalties (disagreement reduces exposure)
- * 6. Choppy market filters (range-bound: higher thresholds)
- * 7. Spin state → Binary contract mapping (compress 7-state to YES/NO with confidence)
+ * 1. Quantized spin states (+5/+4/+3/+2/+1/0/-1/-2/-3/-4/-5) mapped to orbital shells
+ * 2. Per-coin orbital profiles (core/core+/momentum/highBeta) for confidence tuning
+ * 3. Volatility regime detection (choppy markets dampen confidence)
+ * 4. Kalshi sentiment blending (crowd wisdom 12-15% weight)
+ * 5. Consensus scoring (when CFM + Kalshi + orbital align, +30-50% confidence)
+ * 6. Conflict penalties (disagreement reduces exposure)
+ * 7. Choppy market filters (range-bound: higher thresholds)
+ * 8. Spin state → Binary contract mapping (compress 11-state to YES/NO with confidence)
  */
 
 (function() {
@@ -19,37 +20,76 @@
   window.KalshiEnhancements = window.KalshiEnhancements || {};
 
   /**
-   * 7-State Quantized Spin System
-   * Maps orbital quantum states to trading signals
+   * 11-State Quantized Spin System (-5 to +5)
+   * Maps h-subshell orbital quantum states (l=5, m_l=-5..+5) to trading signals
+   * Shell hierarchy: s(1)→p(3)→d(5)→f(7)→g(9)→h(11 states)
    */
   const SPIN_STATES = {
-    3: { label: 'Strong Bull', confidence: 0.95, direction: 1, execSize: 1.0 },
-    2: { label: 'Bull', confidence: 0.80, direction: 1, execSize: 1.0 },
-    1: { label: 'Weak Bull', confidence: 0.60, direction: 1, execSize: 0.7 },
-    0: { label: 'Neutral', confidence: 0.50, direction: 0, execSize: 0 },
-    '-1': { label: 'Weak Bear', confidence: 0.60, direction: -1, execSize: 0.7 },
-    '-2': { label: 'Bear', confidence: 0.80, direction: -1, execSize: 1.0 },
-    '-3': { label: 'Strong Bear', confidence: 0.95, direction: -1, execSize: 1.0 },
+    5:    { label: 'Extreme Bull',      confidence: 0.97, direction:  1, execSize: 1.0, shell: 'h', n: 6 },
+    4:    { label: 'Very Strong Bull',  confidence: 0.92, direction:  1, execSize: 1.0, shell: 'g', n: 5 },
+    3:    { label: 'Strong Bull',       confidence: 0.85, direction:  1, execSize: 1.0, shell: 'f', n: 4 },
+    2:    { label: 'Bull',              confidence: 0.72, direction:  1, execSize: 0.9, shell: 'd', n: 3 },
+    1:    { label: 'Weak Bull',         confidence: 0.58, direction:  1, execSize: 0.6, shell: 'p', n: 2 },
+    0:    { label: 'Neutral',           confidence: 0.50, direction:  0, execSize: 0,   shell: 's', n: 1 },
+    '-1': { label: 'Weak Bear',         confidence: 0.58, direction: -1, execSize: 0.6, shell: 'p', n: 2 },
+    '-2': { label: 'Bear',              confidence: 0.72, direction: -1, execSize: 0.9, shell: 'd', n: 3 },
+    '-3': { label: 'Strong Bear',       confidence: 0.85, direction: -1, execSize: 1.0, shell: 'f', n: 4 },
+    '-4': { label: 'Very Strong Bear',  confidence: 0.92, direction: -1, execSize: 1.0, shell: 'g', n: 5 },
+    '-5': { label: 'Extreme Bear',      confidence: 0.97, direction: -1, execSize: 1.0, shell: 'h', n: 6 },
   };
 
   /**
-   * Convert quantized spin state (-3 to +3) to normalized score
-   * Maps 7 states → confidence level for binary (YES/NO) Kalshi contracts
+   * Per-coin orbital profiles — maps each coin to its natural spin range
+   * and confidence multiplier for extreme states beyond maxNaturalSpin.
+   *
+   * core (BTC/ETH):       stable noble-gas-like; dampen ±4/±5 confidence
+   * core+ (BNB/XRP):      more reactive than core, less than momentum
+   * momentum (SOL/HYPE):  outer-shell reactive; ±4/±5 occur naturally, no penalty
+   * highBeta (DOGE):      extreme states are noisy; reduce confidence at ±5
    */
-  function spinToConfidence(spinState) {
-    const clipped = Math.max(-3, Math.min(3, spinState));
+  const COIN_ORBITAL_PROFILES = {
+    BTC:  { maxNaturalSpin: 3, extremeBoost: 0.85, profile: 'core' },
+    ETH:  { maxNaturalSpin: 3, extremeBoost: 0.85, profile: 'core' },
+    BNB:  { maxNaturalSpin: 4, extremeBoost: 0.90, profile: 'core_plus' },
+    XRP:  { maxNaturalSpin: 4, extremeBoost: 0.90, profile: 'core_plus' },
+    SOL:  { maxNaturalSpin: 5, extremeBoost: 1.00, profile: 'momentum' },
+    HYPE: { maxNaturalSpin: 5, extremeBoost: 1.00, profile: 'momentum' },
+    DOGE: { maxNaturalSpin: 5, extremeBoost: 0.80, profile: 'highBeta' },
+  };
+
+  /**
+   * Convert quantized spin state (-5 to +5) to normalized score
+   * Maps 11 h-subshell states → confidence level for binary (YES/NO) Kalshi contracts
+   *
+   * @param {number} spinState  - integer -5..+5
+   * @param {string} [coinSymbol] - optional coin ticker (e.g. 'BTC') for orbital profile adjustment
+   */
+  function spinToConfidence(spinState, coinSymbol) {
+    const clipped = Math.max(-5, Math.min(5, spinState));
     const metadata = SPIN_STATES[String(clipped)] || SPIN_STATES[0];
-    
+
+    let baseConfidence = metadata.confidence;
+
+    // Apply per-coin orbital profile: dampen confidence when spin exceeds maxNaturalSpin
+    if (coinSymbol) {
+      const profile = COIN_ORBITAL_PROFILES[coinSymbol.toUpperCase()];
+      if (profile && Math.abs(clipped) > profile.maxNaturalSpin) {
+        baseConfidence *= profile.extremeBoost;
+      }
+    }
+
     return {
       spinState: clipped,
       label: metadata.label,
-      baseConfidence: metadata.confidence,
+      baseConfidence,
       direction: metadata.direction,
       execSize: metadata.execSize,
+      shell: metadata.shell,
+      n: metadata.n,
       // Normalized score for predictions (-1 to +1)
-      normalizedScore: clipped / 3,  // -1 to +1
+      normalizedScore: clipped / 5,  // h-subshell: max |m_l| = 5
       // Raw quantized value for diagnostics
-      quantumLevel: Math.abs(clipped),  // 0-3 intensity
+      quantumLevel: Math.abs(clipped),  // 0-5 intensity
     };
   }
 
@@ -80,28 +120,36 @@
   }
 
   /**
-   * Kalshi Sentiment to Spin State
-   * 
-   * Kalshi binary market is 0-100 probability of UP
-   * Convert to quantized spin state aligned with 7-gate model
-   * 
+   * Kalshi Sentiment to Spin State (11-state h-subshell mapping)
+   *
+   * Kalshi binary market is 0-100 probability of UP.
+   * Convert to quantized spin state aligned with h-subshell model (±5).
+   *
    * Range mapping:
-   *  0-15: -3 (very strong bear)
-   * 15-30: -2 (bear)
-   * 30-40: -1 (weak bear)
-   * 40-60:  0 (neutral)
-   * 60-70: +1 (weak bull)
-   * 70-85: +2 (bull)
-   * 85-100: +3 (very strong bull)
+   *   0- 9: -5 (extreme bear)
+   *   9-18: -4 (very strong bear)
+   *  18-30: -3 (strong bear)
+   *  30-40: -2 (bear)
+   *  40-45: -1 (weak bear)
+   *  45-55:  0 (neutral)
+   *  55-60: +1 (weak bull)
+   *  60-70: +2 (bull)
+   *  70-82: +3 (strong bull)
+   *  82-91: +4 (very strong bull)
+   *  91-100: +5 (extreme bull)
    */
   function kalshiToSpinState(kalshiPrice) {
-    if (kalshiPrice < 15) return -3;
-    if (kalshiPrice < 30) return -2;
-    if (kalshiPrice < 40) return -1;
-    if (kalshiPrice < 60) return 0;
-    if (kalshiPrice < 70) return 1;
-    if (kalshiPrice < 85) return 2;
-    return 3;
+    if (kalshiPrice <  9) return -5;   // extreme bear: <9%
+    if (kalshiPrice < 18) return -4;   // very strong bear: 9-18%
+    if (kalshiPrice < 30) return -3;   // strong bear: 18-30%
+    if (kalshiPrice < 40) return -2;   // bear: 30-40%
+    if (kalshiPrice < 45) return -1;   // weak bear: 40-45%
+    if (kalshiPrice < 55) return  0;   // neutral: 45-55%
+    if (kalshiPrice < 60) return  1;   // weak bull: 55-60%
+    if (kalshiPrice < 70) return  2;   // bull: 60-70%
+    if (kalshiPrice < 82) return  3;   // strong bull: 70-82%
+    if (kalshiPrice < 91) return  4;   // very strong bull: 82-91%
+    return  5;                          // extreme bull: 91-100%
   }
 
   /**
@@ -130,7 +178,7 @@
 
     const kalshiSpin = kalshiToSpinState(kalshiPrice);
     const sameDirection = Math.sign(cfmSpin) === Math.sign(kalshiSpin) && cfmSpin !== 0;
-    const alignmentScore = 1 - (Math.abs(cfmSpin - kalshiSpin) / 6);  // 0 to 1, max separation is 6
+    const alignmentScore = 1 - (Math.abs(cfmSpin - kalshiSpin) / 10);  // 0 to 1, max separation is now 10 (±5 range)
 
     let blendedSpin = cfmSpin;
     let confidenceBoost = 1.0;

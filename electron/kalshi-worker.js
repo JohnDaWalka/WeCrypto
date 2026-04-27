@@ -12,8 +12,8 @@
  * IPC: Listens on port 3050 for JSON commands
  */
 
-const KalshiRestClient = require('./kalshi-rest.js');
-const WebSocketModule = require('./kalshi-ws.js');
+const KalshiRestClient = require('../src/kalshi/kalshi-rest.js');
+const WebSocketModule = require('../src/kalshi/kalshi-ws.js');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -44,7 +44,7 @@ for (let i = 0; i < args.length; i++) {
 
 // Load credentials from file if not provided
 if (!config.apiKeyId) {
-  const credPath = path.join(__dirname, 'KALSHI-API-KEY.txt');
+  const credPath = path.join(__dirname, '../secrets/KALSHI-API-KEY.txt');
   if (fs.existsSync(credPath)) {
     const content = fs.readFileSync(credPath, 'utf8');
     const lines = content.split('\n');
