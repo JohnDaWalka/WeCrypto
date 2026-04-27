@@ -85,31 +85,178 @@
       });
     } catch(e) {}
   })();
-  // PATCH-DIAG: ichimoku ↓ (slow, hurts short horizons), momentum ↑ short-term,
-  //             structure ↑, williamsR ↓ (single-indicator dominance reduced)
   const ENABLE_MDT_SCORE_MULT = true; // set false to instantly revert to pre-MDT formula
+
+  // ================================================================
+  // COMPOSITE_WEIGHTS — Global base weights
+  // Empirically derived from 30-day Python backtest (h-subshell ±5, 7 coins × 4 horizons).
+  // PER_COIN_INDICATOR_BIAS multipliers applied at composite-time — see below.
+  //
+  // KEY FINDING: Prior weights were backwards. momentum was worst indicator
+  // (27–40% WR across 6/7 coins). bands + williamsR were consistently best
+  // (63–70% WR for BTC/ETH). Weights now reflect empirical reality.
+  // ================================================================
   const COMPOSITE_WEIGHTS = {
-    // ── Trend-following (74% of weight) — momentum continuation dominates at 1-15 min ──
-    ema:          0.18,  // ↑↑ strongest directional anchor
-    structure:    0.17,  // ↑↑ breakout/breakdown confirmation
-    momentum:     0.14,  // ↑↑↑ short-term rate of change
-    persistence:  0.12,  // recent candle direction continuation
-    macd:         0.10,  // trend momentum confirmation
-    obv:          0.09,  // volume-confirmed direction
-    volume:       0.08,  // volume confirmation
-    // ── Neutral / gating ──────────────────────────────────────────────────
-    vwap:         0.06,  // ↓↓ mean-reversion bias, reduced
-    adx:          0.05,  // ↓↓ ADX gate handles flat suppression separately
-    book:         0.13,  // microstructure (live-only)
-    flow:         0.12,  // microstructure (live-only)
-    mktSentiment: 0.11,  // sentiment (live-only)
-    // ── Mean-reversion oscillators (15% total) — reduce harmful anti-momentum votes ──
-    rsi:          0.04,  // ↓↓ overbought/oversold misleads at short horizons
-    bands:        0.04,  // ↓↓ price at upper band ≠ sell at 5-min
-    williamsR:    0.04,  // ↓↓↓ was 0.17 — most harmful mean-reversion signal
-    stochrsi:     0.03,  // ↓↓ mean-reversion oscillator
-    mfi:          0.03,  // ↓↓ mean-reversion oscillator
-    ichimoku:     0.02,  // ↓↓↓ 52-bar cloud is noise at 1–5 min horizons
+    // ── Quantum Empirical Calibration ─────────────────────────────────────
+    // Basis: Quantum Harmonic Oscillator ground-state model.
+    // 15-min crypto binary is in the GROUND STATE (n=0) = mean-reversion.
+    // Trend signals (HMA, momentum) are excited-state PERTURBATIONS, not drivers.
+    // Empirical eigenvalues from backtest:
+    //   bands +0.27, williamsR +0.13, structure +0.12, mfi +0.06  ← positive
+    //   hma   -0.17, momentum  -0.25, vwap       -0.17           ← negative (inverted vs 50%)
+    // HMA role = quantum SELECTION RULE / gate operator only (not a field operator).
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── Ground-state mean-reversion eigenstates (highest predictive power) ─
+    bands:        0.14,  // WR 77%(ETH)/62%(BTC) — lowered from 0.22; too dominant globally
+    williamsR:    0.10,  // WR 63%(ETH)/54%(BTC) — lowered from 0.17 for global balance
+    structure:    0.12,  // WR 62%(BTC)/58%(ETH) — price structure energy level
+    mfi:          0.09,  // WR 56%(ETH)          — money flow density
+    volume:       0.08,  // ★ raised from 0.02 — BEST for SOL/XRP/BNB/HYPE (58–80% WR!)
+
+    // ── Mid-tier confirmation indicators ───────────────────────────────────
+    macd:         0.08,  // good for SOL/BNB momentum shells
+    persistence:  0.07,  // candle continuation — suppress for SOL/XRP/BNB via bias
+    obv:          0.06,  // volume accumulation — top for XRP h1/h5
+    vwma:         0.06,  // VWMA volume-weighted confirmation
+    ema:          0.05,  // EMA cross — suppress for SOL/XRP via bias
+    sma:          0.05,  // ★ NEW — SMA cross for trend confirmation (less lag than EMA)
+
+    // ── Quantum gate operators (minimal direct field weight) ───────────────
+    // HMA: selection-rule gate → drives isBullTrend/isBearTrend regime gate
+    //      NOT a primary signal contributor at 15-min (empirically: 33% WR BTC)
+    hma:          0.05,  // GATE ONLY — drop from 0.48; weight comes from regime modulation
+    rsi:          0.04,  // mixed coin-dependent; bias handles per-coin
+    adx:          0.04,  // DI± directional vote (adxGate is separate)
+    ichimoku:     0.03,  // cloud — top BNB/SOL
+    volume:       0.02,  // raw buy/sell delta (less standalone predictive power)
+
+    // ── Live-only microstructure ──────────────────────────────────────────
+    book:         0.13,
+    flow:         0.12,
+    mktSentiment: 0.11,
+  };
+
+  // ── Outer Orbital — coin-specific; activated via PER_COIN_INDICATOR_BIAS ──
+  // Global win-rates < 50% (contrarian at 15-min) but critical for specific shells.
+  // Low base weight; per-coin bias multiplies into relevance only where validated.
+  const OUTER_ORBITAL_WEIGHTS = {
+    momentum: 0.05,  // SOL/BNB only — globally 25–39% WR (contrarian everywhere else)
+    vwap:     0.05,  // BNB inner (5× bias); 33–43% WR globally (contrarian)
+    stochrsi: 0.04,  // DOGE highBeta squeeze only
+  };
+
+  // ================================================================
+  // PER_COIN_INDICATOR_BIAS — Quantum Orbital Shell Profiles
+  // Each value is a MULTIPLIER on COMPOSITE_WEIGHTS for that coin.
+  // Derived from 30-day backtest best/worst indicator win-rates per coin per horizon.
+  //
+  // Shell mapping:
+  //   core    (BTC/ETH) s-d → mean-reversion: bands, williamsR dominate
+  //   core+   (XRP)     d-f → hybrid: RSI/OBV at h1-h5, bands/structure at h10-h15
+  //   vwap+   (BNB)     d-f → VWAP-native: vwap/ema/ichimoku dominate
+  //   momentum(SOL)     f-h → trend: macd/vwap/momentum at h10+, bands at h1-h5
+  //   highBeta(DOGE)    g-h → squeeze: bands/mfi/structure; anti-ema, anti-vwap
+  //   noise   (HYPE)    h   → volume-only: volume/mfi/rsi; all else noise
+  // ================================================================
+  const PER_COIN_INDICATOR_BIAS = {
+    BTC: {
+      // Best h15: bands 62%, structure 58%, williamsR 54%
+      // Worst:    hma 33%, vwap 33%, momentum 25%
+      // BTC = mean-reversion dominant (s-shell ground state)
+      hma: 0.5,  vwma: 1.0,   // HMA near-gate-only for BTC; VWMA mild confirmation
+      bands: 3.5, williamsR: 3.5, structure: 2.0, mfi: 1.8,
+      volume: 1.4, obv: 1.0, persistence: 1.2, macd: 0.7,
+      momentum: 0.2, vwap: 0.3, rsi: 0.6, ichimoku: 0.5,
+    },
+    ETH: {
+      // Best h15: bands 77%, williamsR 63%, mfi 56%
+      // Worst:    vwap 43%, rsi 43%, momentum 41%
+      // ETH = strong mean-reversion (d-shell ground state)
+      hma: 0.7,  vwma: 1.4,
+      bands: 3.8, williamsR: 3.2, mfi: 2.2, structure: 1.8,
+      volume: 1.6, persistence: 1.3, obv: 0.6, macd: 0.8,
+      momentum: 0.25, vwap: 0.3, rsi: 1.0,
+    },
+    SOL: {
+      // Best h1:  volume 67%, bands 57%, structure 55%  (per-indicator analytics)
+      // Best h15: williamsR 67%, bands 57%, macd 54%, vwap 52%
+      // WORST: persistence 36%/34%, ema 35%/38%, adx 30%/31% — STRONGLY contrarian!
+      // Fix: kill persistence/ema/adx (inverted composite root cause), max volume
+      hma: 1.5,  vwma: 2.0,
+      volume: 6.0,   // ★ BEST across ALL SOL horizons — was 1.4 (criminally low!)
+      macd: 2.2, vwap: 2.0, momentum: 1.6, structure: 1.8,
+      williamsR: 1.2, bands: 0.3,  // williamsR 67% at h15; bands WORST at h10 (37%)
+      persistence: 0.1, ema: 0.1, adx: 0.15,  // ★ KILL contrarian indicators
+      rsi: 0.3, obv: 0.4,
+    },
+    XRP: {
+      // Best h1:  volume 58%, rsi 54%, obv 57% | h5: volume 57%, mfi 55%, vwap 55%
+      // Best h10: momentum 59%, mfi 57%, rsi 57% | h15: structure 59%, williamsR 56%, bands 56%
+      // WORST: ema 41–48%, persistence 46%, adx 46%, stochrsi 44% — contrarian!
+      // XRP split: trend-following h1-h10, mean-reverting h15 — balance both
+      hma: 0.8,  vwma: 0.05,  // ★ kill vwma (25-36% WR = consistently worst!)
+      volume: 4.0,    // ★ top signal h1/h5 — raised from 1.8
+      obv: 2.5, rsi: 2.5,
+      sma: 0.0,        // ★ KILL — SMA 38-42% at h1/h5, 33% at h15m; worse than structure/volume
+      mfi: 0.05,       // ★ kill mfi (34-46% WR = consistently worst!)
+      momentum: 1.8,   // 59% WR h10 — raised from 0.25
+      williamsR: 2.2, structure: 2.0, bands: 1.2,
+      stochrsi: 1.5,   // ★ raise stochrsi (56-59% WR = consistently best!)
+      vwap: 0.1,       // 0% WR at h15m — keep killed
+      ema: 0.15, persistence: 0.15, adx: 0.15, macd: 0.4,  // ★ suppress contrarians
+    },
+    HYPE: {
+      // Best: volume 84%, mfi 81%, rsi 73% | Worst: bands 17–21%, structure 27%
+      // NOTE: gated by SIGNAL_DISABLED_COINS — bias retained for future Birdeye feed
+      hma: 0.3,  vwma: 2.0,
+      volume: 5.0, mfi: 4.5, rsi: 3.5,
+      bands: 0.15, structure: 0.2, obv: 0.25, williamsR: 0.4, ema: 0.5, momentum: 0.5,
+    },
+    DOGE: {
+      // Best: bands 67–72%, mfi 58–65%, structure 57–60%, stochrsi 62% (h15)
+      // Worst: ema 25–30%, rsi 22–28%, vwap 17–24%
+      // DOGE = highBeta squeeze (mean-reversion extreme, no trend validity)
+      hma: 0.4,  vwma: 1.6,
+      bands: 4.5, mfi: 3.2, structure: 2.5, stochrsi: 2.0,
+      ema: 0.15, rsi: 0.15, vwap: 0.08, obv: 0.35, momentum: 0.3, williamsR: 0.7,
+    },
+    BNB: {
+      // Best h1:  volume 80%, vwap 64%, momentum 62% | h5: volume 79%, vwap 63%, momentum 61%
+      // Best h10: volume 66%, vwma 63%, hma 60%       | h15: mfi 67%, vwma 64%, ema 62%
+      // WORST: bands 30–43%, williamsR 33–42%, rsi 34–43%, stochrsi 40% — strongly contrarian!
+      // BNB composite WAS inverted because bands/williamsR outweighed volume even at low bias
+      // NOTE: SMA 67–69% standalone but composite 8–9% — indicator is firing on WRONG subset
+      hma: 1.5,  vwma: 3.5,   // vwma 63-64% WR h10/h15 — raised from 1.4
+      volume: 6.0,    // ★ BEST across ALL BNB horizons (66-80%!) — raised from 2.8
+      sma: 0.0,        // ★ KILL — 67-69% standalone but composite inverted (8-9%); overfitting
+      vwap: 5.0, ema: 3.2, ichimoku: 3.0,  // trend-following triad (native BNB)
+      momentum: 3.5,  // ★ 61-62% WR h1/h5 — was missing from dict!
+      mfi: 3.5,       // ★ 67% WR h15 — was missing from dict!
+      macd: 1.8, obv: 0.4, persistence: 0.2,
+      bands: 0.05,     // ★ WORST 30-43% — kill completely (was 0.2)
+      williamsR: 0.05, // ★ WORST 33-42% — kill completely (was 0.25)
+      rsi: 0.05,       // ★ WORST 34-43% — kill completely (was 0.25)
+      stochrsi: 0.1, structure: 0.15,  // mediocre; suppress
+    },
+  };
+
+  // Coins with no statistical edge pending external feed integration.
+  // HYPE → needs Birdeye microstructure  |  DOGE → needs Dexscreener meme volume
+  const SIGNAL_DISABLED_COINS = new Set(['HYPE', 'DOGE']);
+
+  // Session confidence multipliers — applied to final score before gate evaluation.
+  // Source: per-coin session win-rate analysis from 30-day backtest.
+  // NY Open is the prime 15m binary window for BTC/ETH/XRP.
+  const SESSION_SCORE_MULT = {
+    'NY Open':       { BTC: 1.20, ETH: 1.35, XRP: 1.28, SOL: 1.05, BNB: 1.05, HYPE: 0.80, DOGE: 0.80 },
+    'NY Session':    { BTC: 1.05, ETH: 1.12, XRP: 1.05, SOL: 0.95, BNB: 1.00, HYPE: 0.80, DOGE: 0.80 },
+    'NY Close':      { BTC: 1.00, ETH: 1.05, XRP: 0.95, SOL: 0.95, BNB: 1.00, HYPE: 0.80, DOGE: 0.80 },
+    'London Open':   { BTC: 0.88, ETH: 0.85, XRP: 0.82, SOL: 0.90, BNB: 0.92, HYPE: 0.75, DOGE: 0.75 },
+    'London Session':{ BTC: 0.92, ETH: 0.90, XRP: 0.88, SOL: 0.92, BNB: 0.95, HYPE: 0.80, DOGE: 0.80 },
+    'Asia Open':     { BTC: 0.92, ETH: 0.90, XRP: 0.95, SOL: 1.00, BNB: 1.18, HYPE: 0.85, DOGE: 0.85 },
+    'Asia Session':  { BTC: 0.90, ETH: 0.88, XRP: 0.92, SOL: 0.98, BNB: 1.10, HYPE: 0.82, DOGE: 0.82 },
+    'Dead Zone':     { BTC: 0.75, ETH: 0.75, XRP: 0.75, SOL: 0.78, BNB: 0.80, HYPE: 0.70, DOGE: 0.70 },
   };
 
   // ================================================================
@@ -190,11 +337,13 @@
   // considered a conclusive directional call in the UI.
   // Signals below threshold are labelled LOW CONVICTION or BLOCKED.
   // ================================================================
-  const CORE_SIGNAL_KEYS = ['rsi', 'ema', 'vwap', 'obv', 'volume', 'momentum', 'bands', 'persistence', 'structure', 'macd', 'stochrsi', 'adx', 'ichimoku', 'williamsR', 'mfi', 'mktSentiment'];
+  const CORE_SIGNAL_KEYS = ['hma', 'vwma', 'rsi', 'ema', 'obv', 'volume', 'momentum', 'bands', 'persistence', 'structure', 'macd', 'stochrsi', 'adx', 'ichimoku', 'williamsR', 'mfi', 'vwap', 'mktSentiment'];
   const MICRO_SIGNAL_KEYS = ['book', 'flow'];
   const SIGNAL_LABELS = {
     rsi: 'RSI',
     ema: 'EMA Cross',
+    hma: 'Hull MA',
+    vwma: 'VWMA',
     vwap: 'VWAP',
     obv: 'OBV',
     volume: 'Volume Flow',
@@ -1245,6 +1394,60 @@
     const ema = [data[0]];
     for (let i = 1; i < data.length; i++) ema.push(data[i] * k + ema[i - 1] * (1 - k));
     return ema;
+  }
+
+  // Simple Moving Average — unweighted average of last `period` bars
+  function calcSMA(data, period) {
+    const sma = [];
+    for (let i = 0; i < data.length; i++) {
+      const start = Math.max(0, i - period + 1);
+      const slice = data.slice(start, i + 1);
+      sma.push(slice.reduce((s, v) => s + v, 0) / slice.length);
+    }
+    return sma;
+  }
+
+  // ── Hull Moving Average ────────────────────────────────────────────────────
+  // WMA helper (linearly weighted, most-recent bars get highest weight).
+  function calcWMA(data, period) {
+    const result = [];
+    const denom = (period * (period + 1)) / 2;
+    for (let i = 0; i < data.length; i++) {
+      const start = Math.max(0, i - period + 1);
+      const slice = data.slice(start, i + 1);
+      const p = slice.length;
+      const d = p === period ? denom : (p * (p + 1)) / 2;
+      result.push(slice.reduce((s, v, j) => s + v * (j + 1), 0) / d);
+    }
+    return result;
+  }
+
+  // Hull Moving Average: WMA( 2×WMA(n/2) − WMA(n), floor(√n) )
+  // Nearly lag-free vs EMA — primary trend filter for 15m binary predictions.
+  // Default period 16 → half=8, smoothing=4 — tuned for 15m crypto candles.
+  function calcHMA(data, period = 16) {
+    if (data.length < 4) return data.map(() => data[data.length - 1] ?? 0);
+    const half  = Math.max(Math.floor(period / 2), 2);
+    const sqrtN = Math.max(Math.floor(Math.sqrt(period)), 2);
+    const wmaFull = calcWMA(data, period);
+    const wmaHalf = calcWMA(data, half);
+    const diff = wmaHalf.map((v, i) => 2 * v - wmaFull[i]);
+    return calcWMA(diff, sqrtN);
+  }
+
+  // Volume-Weighted Moving Average: Σ(close_i × vol_i) / Σ(vol_i) over n bars.
+  // High-volume candles dominate — pulls toward where real money moved.
+  // Complements HMA: HMA gives direction, VWMA confirms volume conviction.
+  function calcVWMA(candles, period = 20) {
+    const result = [];
+    for (let i = 0; i < candles.length; i++) {
+      const start = Math.max(0, i - period + 1);
+      const slice = candles.slice(start, i + 1);
+      const sumPV = slice.reduce((s, c) => s + c.c * (c.v || 1), 0);
+      const sumV  = slice.reduce((s, c) => s + (c.v || 1), 0);
+      result.push(sumV > 0 ? sumPV / sumV : candles[i].c);
+    }
+    return result;
   }
 
   function calcVWAP(candles) {
@@ -2555,6 +2758,12 @@
   function buildSignalModel(candles, book, trades, options = {}) {
     if (!candles || candles.length < 20) return null;
 
+    // Gate: coins with no statistical edge pending external feed integration
+    if (options.sym && SIGNAL_DISABLED_COINS.has(options.sym.toUpperCase())) {
+      return { score: 0, confidence: 0, direction: 'NEUTRAL', disabled: true,
+               disabledReason: `${options.sym} signal disabled — pending Birdeye/Dexscreener feed` };
+    }
+
     const includeMicrostructure = options.includeMicrostructure !== false;
     const includeSetups = options.includeSetups !== false;
     const closes = candles.map(c => c.c);
@@ -2572,6 +2781,11 @@
     const ema21 = calcEMA(closes, 21);
     const emaCross = (ema9[ema9.length - 1] - ema21[ema21.length - 1]) / (ema21[ema21.length - 1] || 1) * 100;
     const emaSig = clamp(emaCross * 5, -1, 1);
+
+    const sma9 = calcSMA(closes, 9);
+    const sma21 = calcSMA(closes, 21);
+    const smaCross = (sma9[sma9.length - 1] - sma21[sma21.length - 1]) / (sma21[sma21.length - 1] || 1) * 100;
+    const smaSig = clamp(smaCross * 5, -1, 1);
 
     const vwap = calcVWAP(candles);
     const vwapLast = vwap[vwap.length - 1];
@@ -2661,28 +2875,52 @@
     else mfiSig = (mfi - 50) / 50 * 0.35;
     mfiSig = clamp(mfiSig, -1, 1);
 
+    // --- Hull MA signal (primary trend filter) ---
+    const hmaLine  = calcHMA(closes, 16);
+    const hmaCurr  = hmaLine[hmaLine.length - 1];
+    const hmaPrev  = hmaLine[hmaLine.length - 2] ?? hmaCurr;
+    const hmaPrev2 = hmaLine[hmaLine.length - 3] ?? hmaPrev;
+    const hmaSlope = (hmaCurr - hmaPrev2) / (Math.abs(hmaPrev2) || 1) * 100;
+    const hmaDevPct = (lastPrice - hmaCurr) / (Math.abs(hmaCurr) || 1) * 100;
+    let hmaSig = clamp(hmaSlope * 8, -0.7, 0.7);
+    if (Math.abs(hmaDevPct) > 0.4) hmaSig += clamp(-hmaDevPct * 0.28, -0.3, 0.3);
+    hmaSig = clamp(hmaSig, -1, 1);
+
+    // --- VWMA signal (volume-weighted trend confirmation) ---
+    const vwmaLine  = calcVWMA(candles, 20);
+    const vwmaCurr  = vwmaLine[vwmaLine.length - 1];
+    const vwmaPrev  = vwmaLine[vwmaLine.length - 4] ?? vwmaCurr;
+    const vwmaSlope = (vwmaCurr - vwmaPrev) / (Math.abs(vwmaPrev) || 1) * 100;
+    const vwmaDevPct = (lastPrice - vwmaCurr) / (Math.abs(vwmaCurr) || 1) * 100;
+    let vmaSig = clamp(vwmaSlope * 6, -0.6, 0.6);
+    vmaSig += clamp(vwmaDevPct * 0.35, -0.4, 0.4);
+    vmaSig = clamp(vmaSig, -1, 1);
+
     // --- Trend Regime Modulation ---
     // In a strong trend, oscillator "overbought/oversold" signals are continuation
     // cues, not reversal cues. Suppress contrarian oscillator signals proportionally
     // to trend strength so they don't cancel out the trend-following signals.
-    const isBullTrend = emaCross > 0.15 && adxResult.pdi > adxResult.mdi && adxResult.adx > 22;
-    const isBearTrend = emaCross < -0.15 && adxResult.mdi > adxResult.pdi && adxResult.adx > 22;
+    // HMA slope used as primary trend confirmation — more lag-free than emaCross
+    const isBullTrend = hmaSlope > 0.04 && adxResult.pdi > adxResult.mdi && adxResult.adx > 22;
+    const isBearTrend = hmaSlope < -0.04 && adxResult.mdi > adxResult.pdi && adxResult.adx > 22;
     if (isBullTrend || isBearTrend) {
-      const suppressFactor = clamp((adxResult.adx - 22) / 28, 0, 0.70);
+      const suppressFactor = clamp((adxResult.adx - 22) / 28, 0, 0.80);
       if (isBullTrend) {
         // Dampen bearish readings from contrarian oscillators during bull trends
         if (rsiSig   < 0) rsiSig   *= (1 - suppressFactor);
         if (stochSig < 0) stochSig *= (1 - suppressFactor);
         if (wRSig    < 0) wRSig    *= (1 - suppressFactor);
-        if (bandSig  < 0) bandSig  *= (1 - suppressFactor * 0.6);
-        if (mfiSig   < 0) mfiSig   *= (1 - suppressFactor * 0.6);
+        if (bandSig  < 0) bandSig  *= (1 - suppressFactor * 0.75);
+        if (mfiSig   < 0) mfiSig   *= (1 - suppressFactor * 0.75);
+        if (vwapSig  < 0) vwapSig  *= (1 - suppressFactor * 0.70);
       } else {
         // Dampen bullish readings from contrarian oscillators during bear trends
         if (rsiSig   > 0) rsiSig   *= (1 - suppressFactor);
         if (stochSig > 0) stochSig *= (1 - suppressFactor);
         if (wRSig    > 0) wRSig    *= (1 - suppressFactor);
-        if (bandSig  > 0) bandSig  *= (1 - suppressFactor * 0.6);
-        if (mfiSig   > 0) mfiSig   *= (1 - suppressFactor * 0.6);
+        if (bandSig  > 0) bandSig  *= (1 - suppressFactor * 0.75);
+        if (mfiSig   > 0) mfiSig   *= (1 - suppressFactor * 0.75);
+        if (vwapSig  > 0) vwapSig  *= (1 - suppressFactor * 0.70);
       }
     }
 
@@ -2704,8 +2942,11 @@
     }
 
     const signalVector = {
+      hma:  hmaSig,
+      vwma: vmaSig,
       rsi: rsiSig,
       ema: emaSig,
+      sma: smaSig,
       vwap: vwapSig,
       obv: obvSig,
       volume: volSig,
@@ -2748,9 +2989,11 @@
     const biasedVector = applyBiasFilter(signalVector, mdt);
     Object.assign(signalVector, biasedVector);
     const activeKeys = Object.keys(signalVector).filter(key => includeMicrostructure || !MICRO_SIGNAL_KEYS.includes(key));
+    const coinBias = PER_COIN_INDICATOR_BIAS[options.sym?.toUpperCase()] ?? {};
     const weightedComposite = keys => {
-      const totalWeight = keys.reduce((sum, key) => sum + COMPOSITE_WEIGHTS[key], 0) || 1;
-      return keys.reduce((sum, key) => sum + signalVector[key] * COMPOSITE_WEIGHTS[key], 0) / totalWeight;
+      const effW = key => ((COMPOSITE_WEIGHTS[key] ?? OUTER_ORBITAL_WEIGHTS[key] ?? 0) * (coinBias[key] ?? 1.0));
+      const totalWeight = keys.reduce((sum, key) => sum + effW(key), 0) || 1;
+      return keys.reduce((sum, key) => sum + signalVector[key] * effW(key), 0) / totalWeight;
     };
     const coreComposite = weightedComposite(CORE_SIGNAL_KEYS);
     const microComposite = includeMicrostructure ? weightedComposite(MICRO_SIGNAL_KEYS) : 0;
@@ -2770,7 +3013,8 @@
       const maxEffect = mdt.preemptive ? 0.18 : 0.11;
       return aligns ? (1 + strength * maxEffect) : (1 - strength * maxEffect * 0.65);
     })();
-    const score = clamp(rawComposite * 1.6 * adxGate * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1), -1, 1);
+    const _sessMult = SESSION_SCORE_MULT[session.current.label]?.[options.sym?.toUpperCase()] ?? 1.0;
+    const score = clamp(rawComposite * 1.6 * adxGate * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult, -1, 1);
     const agreement = summarizeAgreement(Object.fromEntries(activeKeys.map(key => [key, signalVector[key]])));
     const coreAgreement = summarizeAgreement(Object.fromEntries(CORE_SIGNAL_KEYS.map(key => [key, signalVector[key]])));
 
@@ -2795,6 +3039,8 @@
       ichimoku: { ...ichimoku, signal: ichiSig, label: ichimoku.cloudPos === 'above' ? 'Above cloud' : ichimoku.cloudPos === 'below' ? 'Below cloud' : 'In cloud' },
       williamsR: { value: wR, signal: wRSig, label: wR > -20 ? 'Overbought' : wR < -80 ? 'Oversold' : 'Neutral' },
       mfi:      { value: mfi, signal: mfiSig, label: mfi > 80 ? 'Overbought' : mfi < 20 ? 'Oversold' : mfi > 55 ? 'Bullish' : mfi < 45 ? 'Bearish' : 'Neutral' },
+      hma:      { value: hmaCurr, slope: hmaSlope, signal: hmaSig, label: hmaSlope > 0.04 ? 'Rising' : hmaSlope < -0.04 ? 'Falling' : 'Flat' },
+      vwma:     { value: vwmaCurr, slope: vwmaSlope, dev: vwmaDevPct, signal: vmaSig, label: vwmaDevPct > 0.3 ? 'Price above VWMA' : vwmaDevPct < -0.3 ? 'Price below VWMA' : 'At VWMA' },
       mktSentiment: {
         kalshi: mktData?.kalshi ?? null,
         poly:   mktData?.poly   ?? null,

@@ -52,13 +52,88 @@ PREDICTION_COINS = [
 
 # ── Composite weights — exact match to predictions.js / backtest-runner.js ──
 COMPOSITE_WEIGHTS = dict(
-    ema=0.18, structure=0.17, momentum=0.14, persistence=0.12, macd=0.10,
-    obv=0.09, volume=0.08, vwap=0.06, adx=0.05,
-    rsi=0.04, bands=0.04, williamsR=0.04, stochrsi=0.03, mfi=0.03, ichimoku=0.02,
+    # ── Quantum Empirical Calibration (QHO Ground-State Model) ───────────────
+    # 15-min crypto binary = GROUND STATE (n=0) = mean-reversion dominant.
+    # Trend indicators (HMA, momentum) are excited-state perturbations.
+    # Empirical eigenvalues: bands +0.27, williamsR +0.13, structure +0.12
+    #                        hma -0.17, momentum -0.25, vwap -0.17 (contrarian)
+    # HMA = quantum SELECTION RULE / gate operator only. Weight = 0.05.
+    # ─────────────────────────────────────────────────────────────────────────
+    # Ground-state mean-reversion eigenstates
+    bands=0.14,       # WR 77%(ETH)/62%(BTC) — lowered from 0.22; too dominant globally
+    williamsR=0.10,   # WR 63%(ETH)/54%(BTC) — lowered from 0.17 for global balance
+    structure=0.12,   # WR 62%(BTC)/58%(ETH) — price structure energy level
+    mfi=0.09,         # WR 56%(ETH)          — money flow density
+    volume=0.08,      # ★ RAISED from 0.02 — BEST for SOL/XRP/BNB/HYPE (58–80% WR!)
+    # Mid-tier confirmation
+    macd=0.08,        # good for SOL/BNB momentum shells
+    persistence=0.07, # candle continuation — suppress via bias for SOL/XRP/BNB
+    obv=0.06,         # volume accumulation — top for XRP h1/h5
+    vwma=0.06,        # VWMA volume-weighted confirmation
+    ema=0.05,         # EMA cross — suppress via bias for SOL/XRP
+    sma=0.05,         # ★ NEW — SMA cross for trend confirmation (less lag than EMA)
+    # Quantum gate operators (minimal direct field weight)
+    hma=0.05,         # GATE ONLY — 33% WR BTC at h15m; drives regime modulation only
+    rsi=0.04,         # mixed coin-dependent; bias handles per-coin
+    adx=0.04,         # DI± directional vote (adx_gate separate)
+    ichimoku=0.03,    # cloud — top BNB/SOL
 )
+# Outer orbital — coin-specific, activated via PER_COIN_INDICATOR_BIAS multipliers
+OUTER_ORBITAL_WEIGHTS = dict(
+    momentum=0.05,   # SOL/BNB only — globally 25–39% WR (contrarian elsewhere)
+    vwap=0.05,       # BNB inner (5× bias); 33–43% WR globally
+    stochrsi=0.04,   # DOGE highBeta squeeze only
+)
+
 SCORE_AMPLIFIER  = 1.6
 LIVE_WINDOW      = 300   # candles used by live app
 BACKTEST_MIN_OBS = 36    # warm-up bars
+
+# ── Per-coin orbital indicator bias (mirrors predictions.js PER_COIN_INDICATOR_BIAS) ─
+PER_COIN_INDICATOR_BIAS = {
+    "BTC":  dict(hma=0.5,  vwma=1.0,  bands=3.5, williamsR=3.5, structure=2.0, mfi=1.8,
+                 volume=1.4, obv=1.0, persistence=1.2, macd=0.7,
+                 momentum=0.2, vwap=0.3, rsi=0.6, ichimoku=0.5),
+    "ETH":  dict(hma=0.7,  vwma=1.4,  bands=3.8, williamsR=3.2, mfi=2.2, structure=1.8,
+                 volume=1.6, persistence=1.3, obv=0.6, macd=0.8,
+                 momentum=0.25, vwap=0.3, rsi=1.0),
+    "SOL":  dict(hma=1.2,  vwma=1.5,
+                 volume=2.0,
+                 structure=2.0, bands=1.5,    # consistently best in BOTH windows
+                 williamsR=1.5, macd=0.8,
+                 momentum=2.5,   # ★ RAISED: consistently best h1m-h10m (69-74% WR)
+                 rsi=1.8,        # ★ RAISED: consistently best h1m-h10m (62-71% WR)
+                 vwap=2.0,       # ★ RAISED: best at h10m+ (72-88% WR)
+                 mfi=0.5,        # mixed — moderate weight
+                 obv=0.4,
+                 persistence=0.1, ema=0.1, adx=0.1),   # consistently worst — stay killed
+    "XRP":  dict(hma=0.8,  vwma=0.05,  # ★ kill vwma (25-36% WR = consistently worst!)
+                 volume=4.0,  obv=2.5, rsi=2.5,
+                 sma=0.0,         # ★ KILL — SMA 38-42% at h1/h5, 33% at h15m; worse than structure/volume
+                 mfi=0.05,        # ★ kill mfi (34-46% WR = consistently worst!)
+                 momentum=1.8, williamsR=2.2, structure=2.0, bands=1.2,
+                 stochrsi=1.5,    # ★ raise stochrsi (56-59% WR = consistently best!)
+                 vwap=0.1,        # 0% WR at XRP h15m — keep killed
+                 ema=0.15, persistence=0.15, adx=0.15, macd=0.4),
+    "HYPE": dict(hma=0.3,  vwma=2.0,  volume=5.0, mfi=4.5, rsi=3.5,
+                 bands=0.15, structure=0.2, obv=0.25, williamsR=0.4, ema=0.5, momentum=0.5),
+    "DOGE": dict(hma=0.4,  vwma=1.6,  bands=4.5, mfi=3.2, structure=2.5, stochrsi=2.0,
+                 ema=0.15, rsi=0.15, vwap=0.08, obv=0.35, momentum=0.3, williamsR=0.7),
+    "BNB":  dict(hma=1.5,  vwma=2.5,     # reduce vwma (can spike BULL falsely)
+                 volume=3.0,
+                 sma=0.0,         # ★ KILL — 67-69% standalone but composite inverted (8-9%); overfitting
+                 vwap=0.05,   # ★ KILL — mean-reversion; fires BULL during ADX-low crash bounces
+                 ema=2.5,     # consistently best h5m-h10m (78-69% WR)
+                 ichimoku=2.0,
+                 momentum=3.5,
+                 adx=3.5,     # ★ RAISE — 76%(h1m) 69%(h10m); DI-/DI+ direction vote critical
+                 persistence=2.5, # ★ RAISE — 69%(h10m); trend persistence for trending coin
+                 macd=2.0,    # 66%(h15m) — raise for trend confirmation
+                 mfi=0.05,    # ★ KILL — fires BULL when oversold, unchecked during low-ADX bounce
+                 obv=0.4,
+                 bands=0.05, williamsR=0.05, rsi=0.05, stochrsi=0.1, structure=0.15),
+}
+SIGNAL_DISABLED_COINS = {"HYPE", "DOGE"}  # pending Birdeye/Dexscreener feeds
 
 # ── Quantum spin model (h-subshell: l=5, m_l = -5…+5, 11 states) ────────────
 SPIN_STATES = list(range(-5, 6))          # [-5,-4,...,+4,+5]
@@ -106,10 +181,10 @@ DEFAULT_FILTERS = {
 BACKTEST_FILTER_OVERRIDES = {
     "BTC":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.23,0.54),(5,0.28,0.58),(10,0.33,0.62),(15,0.38,0.66)]},
     "ETH":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.23,0.54),(5,0.28,0.58),(10,0.33,0.62),(15,0.38,0.66)]},
-    "SOL":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.20,0.52),(5,0.25,0.56),(10,0.30,0.60),(15,0.35,0.64)]},
-    "XRP":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.19,0.52),(5,0.23,0.56),(10,0.28,0.60),(15,0.32,0.64)]},
+    "SOL":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.30,0.56),(5,0.34,0.59),(10,0.37,0.62),(15,0.40,0.65)]},
+    "XRP":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.28,0.56),(5,0.32,0.59),(10,0.36,0.62),(15,0.40,0.65)]},
     "DOGE": {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.28,0.58),(5,0.32,0.60),(10,0.35,0.62),(15,0.38,0.66)]},
-    "BNB":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.20,0.54),(5,0.25,0.58),(10,0.29,0.62),(15,0.33,0.64)]},
+    "BNB":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.30,0.57),(5,0.34,0.60),(10,0.37,0.63),(15,0.40,0.66)]},
     "HYPE": {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.20,0.56),(5,0.25,0.60),(10,0.30,0.62),(15,0.33,0.64)]},
 }
 
@@ -194,6 +269,45 @@ def calc_ema_arr(data: np.ndarray, period: int) -> np.ndarray:
     for i in range(1, len(data)):
         out[i] = data[i] * k + out[i - 1] * (1 - k)
     return out
+
+def calc_sma_arr(data: np.ndarray, period: int) -> np.ndarray:
+    """Simple moving average — unweighted average of last `period` bars."""
+    out = np.empty(len(data))
+    for i in range(len(data)):
+        sl = data[max(0, i - period + 1): i + 1]
+        out[i] = np.mean(sl)
+    return out
+
+def calc_wma(data: np.ndarray, period: int) -> np.ndarray:
+    """Linearly-weighted moving average — most-recent bar gets highest weight."""
+    n = len(data)
+    result = np.empty(n)
+    for i in range(n):
+        sl = data[max(0, i - period + 1): i + 1]
+        p  = len(sl)
+        w  = np.arange(1, p + 1, dtype=float)
+        result[i] = np.dot(sl, w) / w.sum()
+    return result
+
+def calc_hma(data: np.ndarray, period: int = 16) -> np.ndarray:
+    """Hull MA: WMA(2×WMA(n/2) − WMA(n), floor(√n)). Nearly lag-free."""
+    if len(data) < 4:
+        return np.full(len(data), data[-1] if len(data) else 0.0)
+    half  = max(int(period // 2), 2)
+    sqrtn = max(int(period ** 0.5), 2)
+    return calc_wma(2 * calc_wma(data, half) - calc_wma(data, period), sqrtn)
+
+def calc_vwma(candles: list[dict], period: int = 20) -> np.ndarray:
+    """Volume-Weighted MA: Σ(close×vol)/Σvol over n bars."""
+    n = len(candles)
+    result = np.empty(n)
+    for i in range(n):
+        sl  = candles[max(0, i - period + 1): i + 1]
+        pv  = sum(c["c"] * (c["v"] or 1.0) for c in sl)
+        sv  = sum(c["v"] or 1.0 for c in sl)
+        result[i] = pv / sv if sv > 0 else candles[i]["c"]
+    return result
+
 
 def calc_vwap(candles: list[dict]) -> np.ndarray:
     tp  = np.array([(c["h"] + c["l"] + c["c"]) / 3 for c in candles])
@@ -387,11 +501,15 @@ def summarize_agreement(sv: dict) -> dict:
 # SIGNAL MODEL  (exact parity with buildSignalModel in backtest-runner.js)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_signal_model(candles: list[dict]) -> Optional[dict]:
+def build_signal_model(candles: list[dict], coin: str = "") -> Optional[dict]:
     if len(candles) < 26:
         return None
+    if coin.upper() in SIGNAL_DISABLED_COINS:
+        return None  # no edge pending external feed
+
     closes    = np.array([c["c"] for c in candles])
     last_price= closes[-1]
+    bias      = PER_COIN_INDICATOR_BIAS.get(coin.upper(), {})
 
     # RSI
     rsi       = calc_rsi(closes)
@@ -405,6 +523,12 @@ def build_signal_model(candles: list[dict]) -> Optional[dict]:
     ema21     = calc_ema_arr(closes, 21)
     ema_cross = (ema9[-1] - ema21[-1]) / (ema21[-1] or 1) * 100
     ema_sig   = clamp(ema_cross * 5, -1, 1)
+
+    # SMA cross (Simple Moving Average for XRP and trend confirmation)
+    sma9      = calc_sma_arr(closes, 9)
+    sma21     = calc_sma_arr(closes, 21)
+    sma_cross = (sma9[-1] - sma21[-1]) / (sma21[-1] or 1) * 100
+    sma_sig   = clamp(sma_cross * 5, -1, 1)
 
     # VWAP
     vwap_rolling = calc_vwap(candles[-80:] if len(candles) >= 80 else candles)
@@ -483,32 +607,56 @@ def build_signal_model(candles: list[dict]) -> Optional[dict]:
     else:           mfi_sig = (mfi-50)/50*0.35
     mfi_sig = clamp(mfi_sig, -1, 1)
 
-    # Trend regime modulation (suppress contrarian in strong trend)
-    is_bull = ema_cross > 0.15 and adx_r["pdi"] > adx_r["mdi"] and adx_r["adx"] > 22
-    is_bear = ema_cross < -0.15 and adx_r["mdi"] > adx_r["pdi"] and adx_r["adx"] > 22
+    # HMA — primary trend filter
+    hma_line  = calc_hma(closes, 16)
+    hma_curr  = hma_line[-1];  hma_prev = hma_line[-2] if len(hma_line) > 1 else hma_curr
+    hma_prev2 = hma_line[-3] if len(hma_line) > 2 else hma_prev
+    hma_slope = (hma_curr - hma_prev2) / (abs(hma_prev2) or 1) * 100
+    hma_dev   = (last_price - hma_curr) / (abs(hma_curr) or 1) * 100
+    hma_sig   = clamp(hma_slope * 8, -0.7, 0.7)
+    if abs(hma_dev) > 0.4: hma_sig += clamp(-hma_dev * 0.28, -0.3, 0.3)
+    hma_sig = clamp(hma_sig, -1, 1)
+
+    # VWMA — volume-weighted trend confirmation
+    vwma_line  = calc_vwma(candles, 20)
+    vwma_curr  = vwma_line[-1];  vwma_prev = vwma_line[-4] if len(vwma_line) > 3 else vwma_line[0]
+    vwma_slope = (vwma_curr - vwma_prev) / (abs(vwma_prev) or 1) * 100
+    vwma_dev   = (last_price - vwma_curr) / (abs(vwma_curr) or 1) * 100
+    vma_sig    = clamp(vwma_slope * 6, -0.6, 0.6) + clamp(vwma_dev * 0.35, -0.4, 0.4)
+    vma_sig    = clamp(vma_sig, -1, 1)
+
+    # Trend regime modulation — HMA slope as primary trend detector
+    is_bull = hma_slope > 0.04 and adx_r["pdi"] > adx_r["mdi"] and adx_r["adx"] > 22
+    is_bear = hma_slope < -0.04 and adx_r["mdi"] > adx_r["pdi"] and adx_r["adx"] > 22
     if is_bull or is_bear:
-        sf = clamp((adx_r["adx"] - 22) / 28, 0, 0.70)
+        sf = clamp((adx_r["adx"] - 22) / 28, 0, 0.80)  # max 80% suppression (was 0.70)
         if is_bull:
             if rsi_sig   < 0: rsi_sig   *= (1 - sf)
             if stoch_sig < 0: stoch_sig *= (1 - sf)
             if wr_sig    < 0: wr_sig    *= (1 - sf)
-            if band_sig  < 0: band_sig  *= (1 - sf * 0.6)
-            if mfi_sig   < 0: mfi_sig   *= (1 - sf * 0.6)
+            if band_sig  < 0: band_sig  *= (1 - sf * 0.75)   # was 0.6 → more aggressive
+            if mfi_sig   < 0: mfi_sig   *= (1 - sf * 0.75)
+            if vwap_sig  < 0: vwap_sig  *= (1 - sf * 0.70)   # ★ NEW — VWAP mean-rev suppression
         else:
             if rsi_sig   > 0: rsi_sig   *= (1 - sf)
             if stoch_sig > 0: stoch_sig *= (1 - sf)
             if wr_sig    > 0: wr_sig    *= (1 - sf)
-            if band_sig  > 0: band_sig  *= (1 - sf * 0.6)
-            if mfi_sig   > 0: mfi_sig   *= (1 - sf * 0.6)
+            if band_sig  > 0: band_sig  *= (1 - sf * 0.75)   # was 0.6 → suppress bounce in crash
+            if mfi_sig   > 0: mfi_sig   *= (1 - sf * 0.75)
+            if vwap_sig  > 0: vwap_sig  *= (1 - sf * 0.70)   # ★ NEW — suppress VWAP bounce in crash
 
-    sv = dict(rsi=rsi_sig, ema=ema_sig, vwap=vwap_sig, obv=obv_sig, volume=vol_sig,
+    sv = dict(rsi=rsi_sig, ema=ema_sig, sma=sma_sig, vwap=vwap_sig, obv=obv_sig, volume=vol_sig,
               momentum=mom_sig, bands=band_sig, persistence=pers["signal"],
               structure=struc["signal"], macd=macd_sig, stochrsi=stoch_sig,
-              adx=adx_sig, ichimoku=ichi_sig, williamsR=wr_sig, mfi=mfi_sig)
+              adx=adx_sig, ichimoku=ichi_sig, williamsR=wr_sig, mfi=mfi_sig,
+              hma=hma_sig, vwma=vma_sig)
 
     keys = list(sv.keys())
-    total_w = sum(COMPOSITE_WEIGHTS.get(k, 0) for k in keys) or 1.0
-    raw = sum(sv[k] * COMPOSITE_WEIGHTS.get(k, 0) for k in keys) / total_w
+    # Apply per-coin orbital bias: inner + outer orbital weights × coinBias
+    eff_w = {k: ((COMPOSITE_WEIGHTS.get(k) or OUTER_ORBITAL_WEIGHTS.get(k, 0)) * bias.get(k, 1.0))
+             for k in keys}
+    total_w = sum(eff_w.values()) or 1.0
+    raw = sum(sv[k] * eff_w[k] for k in keys) / total_w
     adx_gate = max(0.25, adx_r["adx"] / 20) if adx_r["adx"] < 20 else 1.0
     score = clamp(raw * SCORE_AMPLIFIER * adx_gate, -1, 1)
     agr   = summarize_agreement(sv)
@@ -637,7 +785,7 @@ def run_backtest(sym: str, candles: list[dict],
         start_idx = max(52, BACKTEST_MIN_OBS)
         for idx in range(start_idx, len(candles) - h_bars):
             win = candles[max(0, idx - LIVE_WINDOW + 1): idx + 1]
-            model = build_signal_model(win)
+            model = build_signal_model(win, coin=sym)
             if model is None:
                 continue
 
