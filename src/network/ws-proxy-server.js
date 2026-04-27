@@ -9,7 +9,7 @@ const WebSocket = require('ws');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
-const PythLazerWebSocketHandler = require('./pyth-lazer-websocket');
+const PythLazerWebSocketHandler = require('../feeds/pyth-lazer-websocket');
 
 const PORT = 3011;
 const WSS_PORT = 3012;

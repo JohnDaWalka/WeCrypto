@@ -4,7 +4,7 @@ const fs   = require('fs');
 const { spawn } = require('child_process');
 
 // ── Kalshi Worker Bridge ──────────────────────────────────────────────────
-const { startKalshiWorker, stopKalshiWorker } = require('./kalshi-ipc-bridge.js');
+const { startKalshiWorker, stopKalshiWorker } = require('./src/kalshi/kalshi-ipc-bridge.js');
 
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
