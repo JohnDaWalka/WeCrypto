@@ -99,8 +99,9 @@
     const prevPrice = prevSample.price;
 
     // Determine if this sample moves toward or away from CFM
-    const divergence = Math.abs(tracker.cfmPrice - tracker.kalshiPrice);
-    const moveTowardCFM = 
+    // Use initial edge (stored in cents 0-1.0) — not cfmPrice vs kalshiPrice which
+    // have incompatible scales (crypto price $thousands vs Kalshi 0-100 probability).
+    const moveTowardCFM =
       (tracker.direction === 'YES' && newPrice > prevPrice) ||
       (tracker.direction === 'NO' && newPrice < prevPrice);
 
@@ -144,8 +145,10 @@
         tracker.reversalStartedAt = now;
       }
       
-      // Check if move has exhausted (reversal back to original price)
-      const priceReturnRatio = Math.abs(newPrice - tracker.kalshiPrice) / divergence;
+      // Check if move has exhausted — Kalshi price returned close to entry price
+      // Use 10¢ / edge ratio relative to initial edge magnitude
+      const edgeMagnitude = Math.max(0.01, tracker.edge); // edge stored in 0-1.0 cents
+      const priceReturnRatio = Math.abs(newPrice - tracker.kalshiPrice) / (edgeMagnitude * 100);
       if (priceReturnRatio < 0.10 && elapsedSeconds > 6) {
         // Price moved less than 10% of original divergence = exhausted
         newState = SUSTENANCE_STATE.EXHAUSTED;

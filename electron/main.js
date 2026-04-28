@@ -183,6 +183,23 @@ ipcMain.handle('kalshi:loadCredentials', async () => {
   }
 });
 
+// ── IPC: Load Birdeye API key ──────────────────────────────────────
+ipcMain.handle('birdeye:loadApiKey', async () => {
+  try {
+    const keyPath = path.join(__dirname, '../secrets/BIRDEYE-API-KEY.txt');
+    if (!fs.existsSync(keyPath)) {
+      return { success: false, error: 'BIRDEYE-API-KEY.txt not found in secrets/' };
+    }
+    const key = fs.readFileSync(keyPath, 'utf8').trim();
+    if (!key) {
+      return { success: false, error: 'BIRDEYE-API-KEY.txt is empty' };
+    }
+    return { success: true, apiKey: key };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // ── IPC: File system helpers for DataLogger ────────────────────────────────
 ipcMain.handle('data:ensureDir', async (_, dirPath) => {
   try { fs.mkdirSync(dirPath, { recursive: true }); return true; }
@@ -203,6 +220,55 @@ ipcMain.handle('data:writeFile', async (_, filePath, content) => {
     fs.writeFileSync(filePath, content, 'utf8');
     return true;
   } catch (e) { return false; }
+});
+
+// ── IPC: Enumerate all available storage roots (local, network, cloud) ──────
+ipcMain.handle('storage:getDrives', async () => {
+  const found = [];
+
+  // ── Local / mapped drive letters C-Z ─────────────────────────────────────
+  for (let code = 67; code <= 90; code++) {        // 'C' … 'Z'
+    const letter = String.fromCharCode(code);
+    const root   = `${letter}:\\`;
+    try { fs.accessSync(root, fs.constants.R_OK); found.push({ type: 'local', letter, root }); }
+    catch (_) {}
+  }
+
+  // ── Network / UNC shares via `net use` ────────────────────────────────────
+  try {
+    const { execSync } = require('child_process');
+    const out = execSync('net use', { encoding: 'utf8', timeout: 3000 });
+    const re  = /\\\\[\w\-.]+\\[\w\-.$]+/g;
+    for (const unc of (out.match(re) || [])) {
+      if (!found.some(d => d.root === unc + '\\')) {
+        found.push({ type: 'network', letter: null, root: unc + '\\' });
+      }
+    }
+  } catch (_) {}
+
+  // ── Cloud sync folders (OneDrive / Google Drive) ──────────────────────────
+  const home = process.env.USERPROFILE || '';
+  const cloudCandidates = [
+    `${home}\\OneDrive`,
+    `${home}\\Google Drive`,
+    `${home}\\My Drive`,
+  ];
+  try {
+    if (home && fs.existsSync(home)) {
+      for (const name of fs.readdirSync(home)) {
+        if (name.startsWith('OneDrive')) {
+          const p = path.join(home, name);
+          if (!cloudCandidates.includes(p)) cloudCandidates.push(p);
+        }
+      }
+    }
+  } catch (_) {}
+  for (const p of cloudCandidates) {
+    try { if (fs.existsSync(p)) found.push({ type: 'cloud', letter: null, root: p }); }
+    catch (_) {}
+  }
+
+  return found;
 });
 
 function createWindow() {

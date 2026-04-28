@@ -659,6 +659,106 @@
       console.table(rows);
       return rows;
     },
+    tune() {
+      const log = window._15mResolutionLog || [];
+      if (log.length === 0) { console.log('❌ No settlement data available'); return null; }
+      
+      const coins = [...new Set(log.map(e => e.sym))];
+      const tuneReport = {};
+      
+      coins.forEach(sym => {
+        const entries = log.filter(e => e.sym === sym);
+        if (entries.length < 3) return; // skip coins with < 3 trades
+        
+        // Per-coin accuracy
+        const correct = entries.filter(e => e.modelCorrect === true).length;
+        const accuracy = (correct / entries.length * 100).toFixed(1);
+        
+        // Edge threshold analysis — bucket by edgeCents
+        const edgeBuckets = [
+          { min: 0,  max: 5,  label: '0-5¢' },
+          { min: 5,  max: 10, label: '5-10¢' },
+          { min: 10, max: 20, label: '10-20¢' },
+          { min: 20, max: 999, label: '20+¢' },
+        ];
+        
+        const edgeAnalysis = edgeBuckets.map(bucket => {
+          const inBucket = entries.filter(e => e.edgeCents != null && e.edgeCents >= bucket.min && e.edgeCents < bucket.max);
+          const wins = inBucket.filter(e => e.modelCorrect === true).length;
+          const rate = inBucket.length > 0 ? (wins / inBucket.length * 100).toFixed(1) : '—';
+          return { ...bucket, trades: inBucket.length, wins, rate };
+        });
+        
+        // Volatility impact
+        const volBuckets = ['low', 'medium', 'high'];
+        const volAnalysis = volBuckets.map(vol => {
+          const inVol = entries.filter(e => (e.volatility?.toLowerCase() || 'medium') === vol);
+          const wins = inVol.filter(e => e.modelCorrect === true).length;
+          const rate = inVol.length > 0 ? (wins / inVol.length * 100).toFixed(1) : '—';
+          return { volatility: vol, trades: inVol.length, wins, rate };
+        });
+        
+        // Time bias — early vs late entries
+        const early = entries.filter(e => (e.entrySecsLeft ?? 300) > 60);
+        const late = entries.filter(e => (e.entrySecsLeft ?? 300) <= 60);
+        const earlyRate = early.length > 0 ? (early.filter(e => e.modelCorrect).length / early.length * 100).toFixed(1) : '—';
+        const lateRate = late.length > 0 ? (late.filter(e => e.modelCorrect).length / late.length * 100).toFixed(1) : '—';
+        
+        // Fade analysis — when model disagrees with crowd
+        const fadeEntries = entries.filter(e => e.crowdFade === true);
+        const fadeWins = fadeEntries.filter(e => e.modelCorrect === true).length;
+        const fadeRate = fadeEntries.length > 0 ? (fadeWins / fadeEntries.length * 100).toFixed(1) : '—';
+        
+        tuneReport[sym] = {
+          total: entries.length,
+          accuracy: `${accuracy}%`,
+          edgeAnalysis,
+          volAnalysis,
+          timeOfEntry: { early: `${earlyRate}% (${early.length})`, late: `${lateRate}% (${late.length})` },
+          fadePerf: { trades: fadeEntries.length, rate: fadeRate, wins: fadeWins },
+        };
+      });
+      
+      console.log('\n╔══════════════════════════════════════════════════════╗');
+      console.log('║            DEEP MODEL TUNING ANALYSIS                ║');
+      console.log('║          (Last ' + log.length + ' settled markets)                ║');
+      console.log('╚══════════════════════════════════════════════════════╝\n');
+      
+      coins.forEach(sym => {
+        const t = tuneReport[sym];
+        if (!t) return;
+        console.log(`\n📊 ${sym.padEnd(6)} — ${t.total} trades, ${t.accuracy} accuracy`);
+        console.log('  ├─ Edge Thresholds:');
+        t.edgeAnalysis.forEach(e => {
+          const indicator = e.rate !== '—' ? (parseFloat(e.rate) >= 55 ? '✅' : parseFloat(e.rate) >= 50 ? '⚠️ ' : '❌') : '—';
+          console.log(`  │  ${indicator} ${e.label.padEnd(7)} → ${e.rate.padEnd(5)}% (${e.trades} trades)`);
+        });
+        console.log('  ├─ Volatility Impact:');
+        t.volAnalysis.forEach(v => {
+          const rate = v.rate !== '—' ? parseFloat(v.rate).toFixed(0) : '—';
+          console.log(`  │  ${v.volatility.padEnd(8)} → ${rate.padEnd(3)}% (${v.trades} trades)`);
+        });
+        console.log(`  ├─ Entry Timing: Early=${t.timeOfEntry.early} | Late=${t.timeOfEntry.late}`);
+        console.log(`  └─ Fade Performance: ${t.fadePerf.wins}/${t.fadePerf.trades} (${t.fadePerf.rate}% win rate)`);
+      });
+      
+      console.log('\n💡 RECOMMENDATIONS:');
+      Object.entries(tuneReport).forEach(([sym, t]) => {
+        const lowEdge = t.edgeAnalysis.find(e => e.label === '0-5¢');
+        const highEdge = t.edgeAnalysis.find(e => e.label === '20+¢');
+        const lowRate = lowEdge?.rate !== '—' ? parseFloat(lowEdge.rate) : 50;
+        const highRate = highEdge?.rate !== '—' ? parseFloat(highEdge.rate) : 50;
+        
+        if (lowRate < 50 && highRate > 55) {
+          console.log(`  • ${sym}: RAISE minimum edge threshold (high-edge trades ~${highRate}% vs low ~${lowRate}%)`);
+        }
+        if (parseFloat(t.fadePerf.rate || 0) > 55 && t.fadePerf.trades > 2) {
+          console.log(`  • ${sym}: Crowd-fade strategy working well (${t.fadePerf.rate}%) — consider scaling`);
+        }
+      });
+      
+      return tuneReport;
+    },
   };
 
 })();

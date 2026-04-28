@@ -166,22 +166,24 @@
    * Risk management: circuit breakers
    */
   const riskState = {
-    reversalCount: 0,
-    lastReversal: null,
+    reversalTimestamps: [],  // timestamps of each reversal (for 30-min rolling window)
     shouldPause: false,
     pauseUntil: null
   };
 
   function onReversalDetected() {
-    riskState.reversalCount++;
-    riskState.lastReversal = Date.now();
+    const now = Date.now();
+    const windowStart = now - 30 * 60 * 1000;
 
-    // 3 reversals in 30 min = pause for 15 min
-    const reversalsSince30min = (Date.now() - 30 * 60 * 1000);
-    if (riskState.lastReversal > reversalsSince30min && riskState.reversalCount >= 3) {
+    // Purge reversals older than 30 minutes
+    riskState.reversalTimestamps = riskState.reversalTimestamps.filter(t => t > windowStart);
+    riskState.reversalTimestamps.push(now);
+
+    // 3+ reversals within the rolling 30-min window → pause for 15 min
+    if (riskState.reversalTimestamps.length >= 3) {
       riskState.shouldPause = true;
-      riskState.pauseUntil = Date.now() + 15 * 60 * 1000;
-      console.warn('[KalshiEntry] 3 reversals detected — pausing for 15 min');
+      riskState.pauseUntil = now + 15 * 60 * 1000;
+      console.warn('[KalshiEntry] 3 reversals in 30 min — pausing for 15 min');
     }
   }
 

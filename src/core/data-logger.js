@@ -1,12 +1,17 @@
-// data-logger.js  v2.0
+// data-logger.js  v2.1
 // ══════════════════════════════════════════════════════════════════════════════
 // Hybrid JSONL logger + Ctrl+D debug overlay
 //
-// Writes every 60s to:
-//   F:\WECRYP\data\YYYY-MM-DD\{category}.jsonl              (local)
-//   Z:\YYYY-MM-DD\{category}.jsonl            (Google Drive primary)
-//   W:\My Drive\WECRYP0-data\YYYY-MM-DD\{category}.jsonl   (Google Drive fallback)
+// Writes every 60s to ALL available storage roots discovered at startup:
+//   F:\WECRYP\data\YYYY-MM-DD\{category}.jsonl          (primary dev drive)
+//   D:\WECRYP0-data\YYYY-MM-DD\{category}.jsonl         (local D: drive)
+//   C:\WECRYP0-data\...  E:\WECRYP0-data\...            (any other local drives)
+//   Z:\WECRYP0-data\...                                  (Google Drive mapped)
+//   \\server\share\WECRYP0-data\...                      (UNC network shares)
+//   OneDrive\WECRYP0-data\...                            (personal OneDrive)
+//   OneDrive - Azure\WECRYP0-data\...                    (business OneDrive)
 //
+// Drive list is built dynamically via storage:getDrives IPC at load time.
 // Categories: predictions · decisions · cfm_snapshots · shell_events ·
 //             resolver_outcomes · errors
 // ══════════════════════════════════════════════════════════════════════════════
@@ -14,9 +19,37 @@
 (function () {
   'use strict';
 
-  const LOCAL_ROOT  = 'F:\\WECRYP\\data';
-  const DRIVE_PATHS = ['Z:\\', 'W:\\My Drive\\WECRYP0-data'];
-  const FLUSH_MS    = 60_000;
+  const LOCAL_ROOT = 'F:\\WECRYP\\data';   // primary dev drive — always written first
+  let   DRIVE_PATHS = [];                   // populated by discoverDrives() on startup
+  const FLUSH_MS   = 60_000;
+
+  // ── Async drive discovery — runs once on load ─────────────────────────────
+  async function discoverDrives() {
+    try {
+      if (!window.desktopApp?.getDrives) return;
+      const drives = await window.desktopApp.getDrives();
+      const paths  = [];
+      for (const d of drives) {
+        if (d.type === 'local' && d.letter) {
+          const L = d.letter.toUpperCase();
+          if (L === 'F') continue;               // already covered by LOCAL_ROOT
+          paths.push(`${L}:\\WECRYP0-data`);
+        } else if (d.type === 'network' && d.root) {
+          // UNC path — root already ends with '\', e.g. \\server\share\
+          paths.push(`${d.root}WECRYP0-data`);
+        } else if (d.type === 'cloud' && d.root) {
+          paths.push(`${d.root}\\WECRYP0-data`);
+        }
+      }
+      DRIVE_PATHS = paths;
+      console.log('[DataLogger] storage roots:', [LOCAL_ROOT, ...DRIVE_PATHS].join(' | '));
+    } catch (e) {
+      console.warn('[DataLogger] drive discovery failed:', e.message);
+      // Fallback to known drives
+      DRIVE_PATHS = ['D:\\WECRYP0-data', 'Z:\\WECRYP0-data'];
+      console.log('[DataLogger] fallback storage roots:', [LOCAL_ROOT, ...DRIVE_PATHS].join(' | '));
+    }
+  }
 
   // ── Buffer + Stats ──────────────────────────────────────────────────────────
   const _buf = {};   // category → string[]
@@ -283,7 +316,7 @@
       <span style="font-size:15px;font-weight:800;color:var(--color-primary,#7c6aff)">⚙ WeCrypto Debug Metrics</span>
       <span style="font-size:10px;color:var(--color-text-muted)">
         Uptime <b>${upMin}m</b> · <b>${s.session.flushCount}</b> flushes · <b>${kb} KB</b> written ·
-        F:\\WECRYP\\data + Z:\\WeCrypto-data + W:\\My Drive\\WECRYP0-data · <kbd style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">Ctrl+D</kbd> close
+        <b>${1 + DRIVE_PATHS.length}</b> storage root(s) active · <kbd style="background:rgba(255,255,255,0.1);padding:1px 4px;border-radius:3px">Ctrl+D</kbd> close
       </span>
     </div>
 
@@ -339,10 +372,10 @@
              </div>`}
 
         <div style="margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:6px;font-size:10px;color:var(--color-text-muted);line-height:1.9">
-          <div style="font-weight:700;color:var(--color-text,#e2e8f0);margin-bottom:4px">💾 Storage Paths</div>
-          <div>📁 Local: <code>F:\\WECRYP\\data\\${todayStr()}</code></div>
-          <div>☁ Drive (primary): <code>Z:\\${todayStr()}</code></div>
-          <div>☁ Drive (fallback): <code>W:\\My Drive\\WECRYP0-data\\${todayStr()}</code></div>
+          <div style="font-weight:700;color:var(--color-text,#e2e8f0);margin-bottom:4px">💾 Storage Paths (${1 + DRIVE_PATHS.length} roots)</div>
+          <div>📁 Primary: <code>F:\\WECRYP\\data\\${todayStr()}</code></div>
+          ${DRIVE_PATHS.map(p => `<div>💾 Mirror: <code>${p}\\${todayStr()}</code></div>`).join('')}
+          ${DRIVE_PATHS.length === 0 ? '<div style="color:var(--color-gold)">⚠ Discovering drives…</div>' : ''}
           <div style="margin-top:6px">Categories: predictions · decisions · cfm_snapshots · shell_events · resolver_outcomes · errors</div>
         </div>
 
@@ -438,11 +471,14 @@
     logResolverOutcome,
     logOutcome,
     logError,
-    flush:     flushAll,
-    getStats:  () => _stats,
-    showDebug: showOverlay,
-    hideDebug: hideOverlay,
+    flush:         flushAll,
+    getStats:      () => _stats,
+    getWritePaths: (category) => filePaths(category || 'export'),
+    showDebug:     showOverlay,
+    hideDebug:     hideOverlay,
   };
 
-  console.log('[DataLogger] v2.0 — F:\\WECRYP\\data + Z:\\WeCrypto-data + W:\\My Drive\\WECRYP0-data | flush=60s | Ctrl+D=debug overlay | hourly_kalshi tracking enabled');
+  // Kick off async drive discovery — populates DRIVE_PATHS before first flush
+  discoverDrives();
+  console.log('[DataLogger] v2.1 — dynamic storage discovery started | primary=' + LOCAL_ROOT + ' | flush=60s | Ctrl+D=debug overlay');
 })();

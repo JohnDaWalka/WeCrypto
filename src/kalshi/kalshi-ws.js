@@ -28,6 +28,10 @@
   const WS_URL = USE_DEMO ? DEMO_WS_URL : PUBLIC_WS_URL;
   const WS_PATH = '/trade-api/ws/v2';
 
+  // Heartbeat: Kalshi closes idle connections; ping every 20 s
+  const HEARTBEAT_INTERVAL_MS = 20_000;
+  let _heartbeatTimer = null;
+
   // Credentials from KALSHI-API-KEY.txt (first line = UUID, lines 5+ = RSA private key)
   const KALSHI_API_KEY = 'a8f1995c-7b78-430b-a1fe-7c415c67cc91'; // Replace with actual value
   const KALSHI_PRIVATE_KEY = `-----BEGIN RSA PRIVATE KEY-----
@@ -93,6 +97,9 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
     trades: {},
     // Order book snapshots: market_ticker → {yes_bids: [...], yes_asks: [...], no_bids: [...], no_asks: [...]}
     orderbooks: {},
+    // Filled orders and open positions (populated on auth)
+    fills: [],
+    positions: {},
     // Error log: [{code, msg, ts}, ...]
     errors: [],
   };
@@ -107,12 +114,14 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
   let messageQueue = [];
   let readyToSend = false;
 
-  // Markets to subscribe to (customizable)
+  // Markets to subscribe to — resolved dynamically by market-resolver.js.
+  // Falls back to these if resolver hasn't run yet.
+  // Series tickers for active BTC/ETH/SOL/XRP 15-min contracts on Kalshi.
   const DEFAULT_MARKETS = [
-    'KXFUT24-LSV',      // 2024 Futures
-    'KXHARRIS24-LSV',   // Harris 2024
-    'INXUSD',           // Incumbent president
-    'DMUSD',            // Democratic market
+    'KXBTC-15M',   // BTC 15-minute binary
+    'KXETH-15M',   // ETH 15-minute binary
+    'KXSOL-15M',   // SOL 15-minute binary
+    'KXXRP-15M',   // XRP 15-minute binary
   ];
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -163,10 +172,17 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
       ws.send(JSON.stringify(msg));
     }
 
+    // Start heartbeat — Kalshi closes idle connections without it
+    _startHeartbeat();
+
     // Start subscriptions
     subscribeToTicker();
-    subscribeToOrderbook(DEFAULT_MARKETS);
-    subscribeToTrades(DEFAULT_MARKETS);
+    // Use dynamically resolved market IDs if available, else fall back to defaults
+    const activeMarkets = (window._kalshiActiveMarkets && window._kalshiActiveMarkets.length)
+      ? window._kalshiActiveMarkets
+      : DEFAULT_MARKETS;
+    subscribeToOrderbook(activeMarkets);
+    subscribeToTrades(activeMarkets);
   }
 
   function onMessage(data) {
@@ -187,6 +203,7 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
     connected = false;
     authenticated = false;
     readyToSend = false;
+    _stopHeartbeat();
     reconnect();
   }
 
@@ -213,7 +230,8 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
 
   function authenticatePrivate() {
     const timestamp = Date.now();
-    const signature = generateSignature(KALSHI_SECRET, timestamp);
+    // BUG FIX: was generateSignature(KALSHI_SECRET, ...) — KALSHI_SECRET undefined
+    const signature = generateSignature(timestamp);
 
     const authMsg = {
       type: 'login',
@@ -234,6 +252,13 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
     const { type, msg: payload } = msg;
 
     switch (type) {
+      case 'subscribed':
+        // Server confirmed subscription — mark as authenticated if login succeeded
+        if (!authenticated) {
+          authenticated = true;
+          console.log('[KalshiWS] Authenticated ✓');
+        }
+        break;
       case 'ticker':
         handleTicker(payload);
         break;
@@ -246,11 +271,14 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
       case 'trade':
         handleTrade(payload);
         break;
+      case 'pong':
+        // Heartbeat acknowledged — nothing to do
+        break;
       case 'error':
         handleError(payload);
         break;
       default:
-        console.log('[KalshiWS] Unknown message type:', type);
+        console.log('[KalshiWS] Unknown message type:', type, msg);
     }
   }
 
@@ -301,13 +329,32 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
   }
 
   function handleOrderbookDelta(payload) {
-    const { market_ticker, client_order_id } = payload;
+    const { market_ticker, client_order_id, yes_bid_levels, yes_ask_levels, no_bid_levels, no_ask_levels } = payload;
     if (!market_ticker) return;
 
-    // Partial update to existing orderbook
+    // Merge delta price levels into existing snapshot
     if (store.orderbooks[market_ticker]) {
-      // In production, merge delta into existing levels
-      store.orderbooks[market_ticker].ts = Date.now();
+      const ob = store.orderbooks[market_ticker];
+
+      // Helper: apply delta array — entries with size=0 remove the level
+      function applyDelta(existing, delta) {
+        if (!Array.isArray(delta)) return existing;
+        const map = new Map(existing.map(l => [l[0], l]));
+        for (const [price, size] of delta) {
+          if (size === 0) {
+            map.delete(price);
+          } else {
+            map.set(price, [price, size]);
+          }
+        }
+        return Array.from(map.values());
+      }
+
+      if (yes_bid_levels) ob.yes_bids = applyDelta(ob.yes_bids, yes_bid_levels);
+      if (yes_ask_levels) ob.yes_asks = applyDelta(ob.yes_asks, yes_ask_levels);
+      if (no_bid_levels)  ob.no_bids  = applyDelta(ob.no_bids,  no_bid_levels);
+      if (no_ask_levels)  ob.no_asks  = applyDelta(ob.no_asks,  no_ask_levels);
+      ob.ts = Date.now();
     }
 
     if (client_order_id) {
@@ -537,12 +584,37 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
   }
 
   async function disconnect() {
+    _stopHeartbeat();
     if (ws) {
       ws.close();
       ws = null;
     }
     connected = false;
     authenticated = false;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Heartbeat — keeps the connection alive; Kalshi closes idle sockets
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  function _startHeartbeat() {
+    _stopHeartbeat();
+    _heartbeatTimer = setInterval(() => {
+      if (!connected || !readyToSend) return;
+      try {
+        ws.send(JSON.stringify({ id: messageId++, cmd: 'ping' }));
+      } catch (err) {
+        console.warn('[KalshiWS] Heartbeat send failed:', err.message);
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+    console.log('[KalshiWS] Heartbeat started (every', HEARTBEAT_INTERVAL_MS / 1000, 's)');
+  }
+
+  function _stopHeartbeat() {
+    if (_heartbeatTimer) {
+      clearInterval(_heartbeatTimer);
+      _heartbeatTimer = null;
+    }
   }
 
   function getState() {

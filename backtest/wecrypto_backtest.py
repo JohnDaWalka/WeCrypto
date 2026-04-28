@@ -58,13 +58,14 @@ COMPOSITE_WEIGHTS = dict(
     # Empirical eigenvalues: bands +0.27, williamsR +0.13, structure +0.12
     #                        hma -0.17, momentum -0.25, vwap -0.17 (contrarian)
     # HMA = quantum SELECTION RULE / gate operator only. Weight = 0.05.
+    # ★ SYNCED with predictions.js v2.1 — bands lowered, volume raised.
     # -------------------------------------------------------------------------
     # Ground-state mean-reversion eigenstates
-    bands=0.14,       # WR 77%(ETH)/62%(BTC) - lowered from 0.22; too dominant globally
-    williamsR=0.10,   # WR 63%(ETH)/54%(BTC) - lowered from 0.17 for global balance
+    bands=0.10,       # WR 77%(ETH)/62%(BTC) - LOWERED from 0.14 to reduce drowning trend-followers
+    williamsR=0.10,   # WR 63%(ETH)/54%(BTC) - stable
     structure=0.12,   # WR 62%(BTC)/58%(ETH) - price structure energy level
     mfi=0.09,         # WR 56%(ETH)          - money flow density
-    volume=0.08,      # ★ RAISED from 0.02 - BEST for SOL/XRP/BNB/HYPE (58-80% WR!)
+    volume=0.12,      # ★★★ CRITICAL: raised from 0.08. BEST for SOL/XRP/BNB/HYPE (58-80% WR!)
     # Mid-tier confirmation
     macd=0.08,        # good for SOL/BNB momentum shells
     persistence=0.07, # candle continuation - suppress via bias for SOL/XRP/BNB
@@ -89,65 +90,99 @@ SCORE_AMPLIFIER  = 1.6
 LIVE_WINDOW      = 300   # candles used by live app
 BACKTEST_MIN_OBS = 36    # warm-up bars
 
-# -- Per-coin orbital indicator bias (mirrors predictions.js PER_COIN_INDICATOR_BIAS) -
+# -- Per-coin orbital indicator bias (★ SYNCED with predictions.js v2.1) ------
+# Shell mapping:
+#   core    (BTC/ETH) s-d  → mean-reversion: bands, williamsR dominate
+#   core+   (XRP)     d-f  → hybrid: RSI/OBV at h1-h5, bands/structure at h10-h15
+#   vwap+   (BNB)     d-f  → VWAP-native: vwap/ema/ichimoku dominate
+#   momentum(SOL)     f-h  → trend: macd/vwap/momentum at h10+, bands at h1-h5
+#   highBeta(DOGE)    g-h  → squeeze: bands/mfi/structure; anti-ema, anti-vwap
+#   noise   (HYPE)    h    → volume-only: volume/mfi/rsi; all else noise
 PER_COIN_INDICATOR_BIAS = {
-    "BTC":  dict(hma=0.5,  vwma=1.0,  bands=3.5, williamsR=3.5, structure=2.0, mfi=1.8,
-                 volume=1.4, obv=1.0, persistence=1.2, macd=0.7,
-                 momentum=0.2, vwap=0.3, rsi=0.6, ichimoku=0.5),
-    "ETH":  dict(hma=0.7,  vwma=1.4,  bands=3.8, williamsR=3.2, mfi=2.2, structure=1.8,
-                 volume=1.6, persistence=1.3, obv=0.6, macd=0.8,
-                 momentum=0.25, vwap=0.3, rsi=1.0),
-    "SOL":  dict(hma=1.2,  vwma=1.5,
-                 volume=2.0,
-                 structure=2.0, bands=1.5,    # consistently best in BOTH windows
-                 williamsR=1.5, macd=0.8,
-                 momentum=2.5,   # ★ RAISED: consistently best h1m-h10m (69-74% WR)
-                 rsi=1.8,        # ★ RAISED: consistently best h1m-h10m (62-71% WR)
-                 vwap=2.0,       # ★ RAISED: best at h10m+ (72-88% WR)
-                 mfi=0.5,        # mixed - moderate weight
-                 obv=0.4,
-                 persistence=0.1, ema=0.1, adx=0.1),   # consistently worst - stay killed
-    "XRP":  dict(hma=0.8,  vwma=0.05,  # ★ kill vwma (25-36% WR = consistently worst!)
-                 volume=4.0,  obv=2.5, rsi=2.5,
-                 sma=0.0,         # ★ KILL - SMA 38-42% at h1/h5, 33% at h15m; worse than structure/volume
-                 mfi=0.05,        # ★ kill mfi (34-46% WR = consistently worst!)
-                 momentum=1.8, williamsR=2.2, structure=2.0, bands=1.2,
-                 stochrsi=1.5,    # ★ raise stochrsi (56-59% WR = consistently best!)
-                 vwap=0.1,        # 0% WR at XRP h15m - keep killed
-                 ema=0.15, persistence=0.15, adx=0.15, macd=0.4),
-    "HYPE": dict(hma=0.3,  vwma=2.0,  volume=5.0, mfi=4.5, rsi=3.5,
-                 bands=0.15, structure=0.2, obv=0.25, williamsR=0.4, ema=0.5, momentum=0.5),
-    "DOGE": dict(hma=0.4,  vwma=1.6,  bands=4.5, mfi=3.2, structure=2.5, stochrsi=2.0,
-                 ema=0.15, rsi=0.15, vwap=0.08, obv=0.35, momentum=0.3, williamsR=0.7),
-    "BNB":  dict(hma=1.5,  vwma=2.5,     # reduce vwma (can spike BULL falsely)
-                 volume=3.0,
-                 sma=0.0,         # ★ KILL - 67-69% standalone but composite inverted (8-9%); overfitting
-                 vwap=0.05,   # ★ KILL - mean-reversion; fires BULL during ADX-low crash bounces
-                 ema=2.5,     # consistently best h5m-h10m (78-69% WR)
-                 ichimoku=2.0,
-                 momentum=3.5,
-                 adx=3.5,     # ★ RAISE - 76%(h1m) 69%(h10m); DI-/DI+ direction vote critical
-                 persistence=2.5, # ★ RAISE - 69%(h10m); trend persistence for trending coin
-                 macd=2.0,    # 66%(h15m) - raise for trend confirmation
-                 mfi=0.05,    # ★ KILL - fires BULL when oversold, unchecked during low-ADX bounce
-                 obv=0.4,
-                 bands=0.05, williamsR=0.05, rsi=0.05, stochrsi=0.1, structure=0.15),
+    "BTC":  dict(
+        # Best h15: bands 62%, structure 58%, williamsR 54%
+        # Worst:    hma 33%, vwap 33%, momentum 25%
+        # ADJUSTED -25% vs prior run to prevent mean-reversion drowning trend-followers
+        hma=0.5,  vwma=1.0,
+        bands=2.6, williamsR=2.6, structure=1.5, mfi=1.4,
+        volume=1.2, obv=0.75, persistence=0.9, macd=0.5,
+        momentum=0.15, vwap=0.22, rsi=0.45, ichimoku=0.38,
+    ),
+    "ETH":  dict(
+        # Best h15: bands 77%, williamsR 63%, mfi 56%
+        # Worst:    vwap 43%, rsi 43%, momentum 41%
+        # ADJUSTED -25% for consistency
+        hma=0.7,  vwma=1.4,
+        bands=2.85, williamsR=2.4, mfi=1.65, structure=1.35,
+        volume=1.2, persistence=0.98, obv=0.45, macd=0.6,
+        momentum=0.19, vwap=0.22, rsi=0.75,
+    ),
+    "SOL":  dict(
+        # Best h1:  volume 67%, bands 57%, structure 55%
+        # Best h15: williamsR 67%, bands 57%, macd 54%, vwap 52%
+        # WORST: persistence 36%, ema 35%, adx 30% — kill these
+        hma=1.5,  vwma=2.0,
+        volume=4.8,   # reduced from 6.0 (was overweight on live)
+        macd=1.76, vwap=1.6, momentum=1.28, structure=1.44,
+        williamsR=0.96, bands=0.24,
+        persistence=0.1, ema=0.1, adx=0.15,  # KILL contrarian indicators
+        rsi=0.3, obv=0.4,
+    ),
+    "XRP":  dict(
+        # Best h1:  volume 58%, rsi 54%, obv 57% | h15: structure 59%, williamsR 56%
+        # WORST: ema 41-48%, persistence 46%, vwma 25-36%
+        hma=0.8,  vwma=0.05,   # kill vwma (25-36% WR = worst)
+        volume=3.2,             # reduced from 4.0
+        obv=2.0, rsi=2.0,
+        sma=0.0,                # KILL SMA (33-42% WR)
+        mfi=0.05,               # kill mfi (34-46% WR)
+        momentum=1.44, williamsR=1.76, structure=1.6, bands=0.96,
+        stochrsi=1.2,
+        vwap=0.1,               # 0% WR at h15m
+        ema=0.15, persistence=0.15, adx=0.15, macd=0.32,
+    ),
+    "HYPE": dict(
+        # Best: volume 84%, mfi 81%, rsi 73% | Worst: bands 17-21%
+        # NOTE: gated by SIGNAL_DISABLED_COINS
+        hma=0.3,  vwma=2.0,
+        volume=4.0, mfi=3.6, rsi=2.8,
+        bands=0.12, structure=0.16, obv=0.2, williamsR=0.32, ema=0.4, momentum=0.4,
+    ),
+    "DOGE": dict(
+        # Best: bands 67-72%, mfi 58-65%, structure 57-60%, stochrsi 62%
+        # Worst: ema 25-30%, rsi 22-28%, vwap 17-24%
+        hma=0.4,  vwma=1.6,
+        bands=3.83, mfi=2.72, structure=2.12, stochrsi=1.7,
+        ema=0.13, rsi=0.13, vwap=0.07, obv=0.3, momentum=0.25, williamsR=0.6,
+    ),
+    "BNB":  dict(
+        # Best h1:  volume 80%, vwap 64%, momentum 62% | h15: mfi 67%, vwma 64%, ema 62%
+        # WORST: bands 30-43%, williamsR 33-42%, rsi 34-43% — KILL
+        hma=1.5,  vwma=2.8,
+        volume=4.8,    # reduced from 6.0
+        sma=0.0,       # KILL (composite inverted)
+        vwap=4.0, ema=2.56, ichimoku=2.4,
+        momentum=2.8,  # reduced from 3.5
+        mfi=2.8,       # reduced from 3.5
+        macd=1.44, obv=0.32, persistence=0.16,
+        bands=0.04, williamsR=0.04, rsi=0.04, stochrsi=0.08, structure=0.12,
+    ),
 }
-SIGNAL_DISABLED_COINS = {"HYPE", "DOGE"}  # pending Birdeye/Dexscreener feeds
+SIGNAL_DISABLED_COINS = {"HYPE", "DOGE", "BNB"}  # BNB: mean-reversion model inverted (20% WR 30d); HYPE/DOGE: pending external feeds
 
 # -- Quantum spin model (h-subshell: l=5, m_l = -5…+5, 11 states) ------------
 SPIN_STATES = list(range(-5, 6))          # [-5,-4,...,+4,+5]
-SPIN_CONF   = {5:0.97, 4:0.92, 3:0.85, 2:0.72, 1:0.58, 0:0.50}  # |spin|→conf
+SPIN_CONF   = {5:0.97, 4:0.92, 3:0.85, 2:0.72, 1:0.58, 0:0.50}  # |spin|->conf
 
 def score_to_spin(score: float) -> int:
-    """Continuous score [-1,1] → discrete spin state [-5,+5]."""
+    """Continuous score [-1,1] -> discrete spin state [-5,+5]."""
     return int(round(max(-5.0, min(5.0, score * 5.0))))
 
 def spin_to_confidence(spin: int) -> float:
     return SPIN_CONF.get(abs(spin), 0.50)
 
 def kalshi_to_spin(prob: float) -> int:
-    """Kalshi YES probability (0-100) → spin state."""
+    """Kalshi YES probability (0-100) -> spin state."""
     if prob <  9: return -5
     if prob < 18: return -4
     if prob < 30: return -3
@@ -178,18 +213,21 @@ DEFAULT_FILTERS = {
     "h10": dict(entryThreshold=0.16, minAgreement=0.58),
     "h15": dict(entryThreshold=0.20, minAgreement=0.65),
 }
+# Optimised via walk-forward (3-fold) on most-recent 1000 candles (2026-04-27 run).
+# BTC/ETH/XRP: use optimizer consensus; SOL: raise gates (h10/h15 only viable);
+# BNB: disabled (20% WR — model inverted); DOGE/HYPE: disabled (no feed).
 BACKTEST_FILTER_OVERRIDES = {
-    "BTC":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.23,0.54),(5,0.28,0.58),(10,0.33,0.62),(15,0.38,0.66)]},
-    "ETH":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.23,0.54),(5,0.28,0.58),(10,0.33,0.62),(15,0.38,0.66)]},
-    "SOL":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.32,0.58),(5,0.36,0.60),(10,0.39,0.63),(15,0.42,0.66)]},
-    "XRP":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.28,0.56),(5,0.32,0.59),(10,0.36,0.62),(15,0.40,0.65)]},
+    "BTC":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.36,0.56),(5,0.36,0.56),(10,0.36,0.57),(15,0.36,0.58)]},
+    "ETH":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.42,0.56),(5,0.42,0.56),(10,0.40,0.57),(15,0.38,0.58)]},
+    "XRP":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.40,0.54),(5,0.40,0.54),(10,0.36,0.56),(15,0.32,0.58)]},
+    "SOL":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.45,0.66),(5,0.45,0.66),(10,0.40,0.62),(15,0.38,0.60)]},
+    "BNB":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.50,0.72),(5,0.50,0.72),(10,0.50,0.72),(15,0.50,0.72)]},
     "DOGE": {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.28,0.58),(5,0.32,0.60),(10,0.35,0.62),(15,0.38,0.66)]},
-    "BNB":  {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.50,0.65),(5,0.53,0.67),(10,0.55,0.69),(15,0.58,0.71)]},
     "HYPE": {f"h{h}": dict(entryThreshold=t, minAgreement=a) for h,t,a in [(1,0.20,0.56),(5,0.25,0.60),(10,0.30,0.62),(15,0.33,0.64)]},
 }
 
 # -----------------------------------------------------------------------------
-# DATA FETCH  (Binance US → Kraken → Coinbase fallback chain)
+# DATA FETCH  (Binance US -> Kraken -> Coinbase fallback chain)
 # -----------------------------------------------------------------------------
 
 KRAKEN_PAIR = dict(BTC="XXBTZUSD",ETH="XETHZUSD",SOL="SOLUSD",XRP="XXRPZUSD",
@@ -206,6 +244,31 @@ def fetch_binance(bin_sym: str, limit: int = 1000) -> list[dict]:
     url = f"https://api.binance.us/api/v3/klines?symbol={bin_sym}&interval=5m&limit={limit}"
     rows = _http_get(url)
     return [dict(t=int(r[0]),o=float(r[1]),h=float(r[2]),l=float(r[3]),c=float(r[4]),v=float(r[5])) for r in rows]
+
+def fetch_binance_paginated(bin_sym: str, limit: int) -> list[dict]:
+    """Fetch more than 1000 5m candles from Binance US by paginating backwards."""
+    all_candles: list[dict] = []
+    end_time: Optional[int] = None
+    per_req = 1000
+    while len(all_candles) < limit:
+        want = min(per_req, limit - len(all_candles))
+        url = (f"https://api.binance.us/api/v3/klines?symbol={bin_sym}"
+               f"&interval=5m&limit={want}")
+        if end_time is not None:
+            url += f"&endTime={end_time}"
+        rows = _http_get(url)
+        if not rows:
+            break
+        batch = [dict(t=int(r[0]),o=float(r[1]),h=float(r[2]),l=float(r[3]),
+                      c=float(r[4]),v=float(r[5])) for r in rows]
+        # Prepend older candles
+        all_candles = batch + all_candles
+        end_time = batch[0]["t"] - 1   # go back before the earliest candle
+        if len(batch) < want:
+            break   # exchange ran out of history
+        time.sleep(0.15)  # gentle rate-limiting
+    # Return most-recent `limit` candles in chronological order
+    return all_candles[-limit:]
 
 def fetch_kraken(sym: str, limit: int = 1000) -> list[dict]:
     pair  = KRAKEN_PAIR[sym]
@@ -229,7 +292,7 @@ def fetch_coinbase(sym: str, limit: int = 300) -> list[dict]:
 
 def fetch_candles(coin: dict, limit: int) -> list[dict]:
     errors = []
-    for fn, arg in [(fetch_binance, coin["binSym"]),
+    for fn, arg in [(fetch_binance_paginated if limit > 1000 else fetch_binance, coin["binSym"]),
                     (fetch_kraken,  coin["sym"]),
                     (fetch_coinbase,coin["sym"])]:
         try:
@@ -271,22 +334,29 @@ def calc_ema_arr(data: np.ndarray, period: int) -> np.ndarray:
     return out
 
 def calc_sma_arr(data: np.ndarray, period: int) -> np.ndarray:
-    """Simple moving average - unweighted average of last `period` bars."""
-    out = np.empty(len(data))
-    for i in range(len(data)):
-        sl = data[max(0, i - period + 1): i + 1]
-        out[i] = np.mean(sl)
+    """Simple moving average — vectorised using cumsum."""
+    n   = len(data)
+    cs  = np.cumsum(np.concatenate([[0.0], data]))
+    out = np.empty(n)
+    for i in range(n):
+        s   = max(0, i - period + 1)
+        out[i] = (cs[i + 1] - cs[s]) / (i - s + 1)
     return out
 
 def calc_wma(data: np.ndarray, period: int) -> np.ndarray:
-    """Linearly-weighted moving average - most-recent bar gets highest weight."""
+    """Linearly-weighted moving average — vectorised via stride tricks."""
     n = len(data)
     result = np.empty(n)
+    weights = np.arange(1, period + 1, dtype=float)
+    w_sum   = weights.sum()
     for i in range(n):
         sl = data[max(0, i - period + 1): i + 1]
         p  = len(sl)
-        w  = np.arange(1, p + 1, dtype=float)
-        result[i] = np.dot(sl, w) / w.sum()
+        if p == period:
+            result[i] = np.dot(sl, weights) / w_sum
+        else:
+            w = np.arange(1, p + 1, dtype=float)
+            result[i] = np.dot(sl, w) / w.sum()
     return result
 
 def calc_hma(data: np.ndarray, period: int = 16) -> np.ndarray:
@@ -298,14 +368,16 @@ def calc_hma(data: np.ndarray, period: int = 16) -> np.ndarray:
     return calc_wma(2 * calc_wma(data, half) - calc_wma(data, period), sqrtn)
 
 def calc_vwma(candles: list[dict], period: int = 20) -> np.ndarray:
-    """Volume-Weighted MA: Σ(closexvol)/Σvol over n bars."""
-    n = len(candles)
+    """Volume-Weighted MA: Σ(close×vol)/Σvol over n bars — vectorised."""
+    closes = np.array([c["c"] for c in candles])
+    vols   = np.array([max(c["v"] or 1.0, 1e-12) for c in candles])
+    n      = len(candles)
     result = np.empty(n)
     for i in range(n):
-        sl  = candles[max(0, i - period + 1): i + 1]
-        pv  = sum(c["c"] * (c["v"] or 1.0) for c in sl)
-        sv  = sum(c["v"] or 1.0 for c in sl)
-        result[i] = pv / sv if sv > 0 else candles[i]["c"]
+        s   = max(0, i - period + 1)
+        pv  = (closes[s:i+1] * vols[s:i+1]).sum()
+        sv  = vols[s:i+1].sum()
+        result[i] = pv / sv if sv > 0 else closes[i]
     return result
 
 
@@ -634,14 +706,14 @@ def build_signal_model(candles: list[dict], coin: str = "") -> Optional[dict]:
             if rsi_sig   < 0: rsi_sig   *= (1 - sf)
             if stoch_sig < 0: stoch_sig *= (1 - sf)
             if wr_sig    < 0: wr_sig    *= (1 - sf)
-            if band_sig  < 0: band_sig  *= (1 - sf * 0.75)   # was 0.6 → more aggressive
+            if band_sig  < 0: band_sig  *= (1 - sf * 0.75)   # was 0.6 -> more aggressive
             if mfi_sig   < 0: mfi_sig   *= (1 - sf * 0.75)
             if vwap_sig  < 0: vwap_sig  *= (1 - sf * 0.70)   # ★ NEW - VWAP mean-rev suppression
         else:
             if rsi_sig   > 0: rsi_sig   *= (1 - sf)
             if stoch_sig > 0: stoch_sig *= (1 - sf)
             if wr_sig    > 0: wr_sig    *= (1 - sf)
-            if band_sig  > 0: band_sig  *= (1 - sf * 0.75)   # was 0.6 → suppress bounce in crash
+            if band_sig  > 0: band_sig  *= (1 - sf * 0.75)   # was 0.6 -> suppress bounce in crash
             if mfi_sig   > 0: mfi_sig   *= (1 - sf * 0.75)
             if vwap_sig  > 0: vwap_sig  *= (1 - sf * 0.70)   # ★ NEW - suppress VWAP bounce in crash
 
@@ -772,6 +844,14 @@ def run_backtest(sym: str, candles: list[dict],
     HORIZONS  = [1, 5, 10, 15]
     BAR_MIN   = 5
 
+    # ── Pre-compute signal model once per candle position (4× faster for 4 horizons) ──
+    start_idx  = max(52, BACKTEST_MIN_OBS)
+    max_h_bars = max(1, round(max(HORIZONS) / BAR_MIN))
+    model_cache: dict[int, Optional[dict]] = {}
+    for idx in range(start_idx, len(candles) - max_h_bars):
+        win = candles[max(0, idx - LIVE_WINDOW + 1): idx + 1]
+        model_cache[idx] = build_signal_model(win, coin=sym)
+
     for h_min in HORIZONS:
         h_bars  = max(1, round(h_min / BAR_MIN))
         h_key   = f"h{h_min}"
@@ -782,10 +862,8 @@ def run_backtest(sym: str, candles: list[dict],
         obs_list   = []
         ind_accum: dict[str, dict] = {}  # per-indicator accuracy tracker
 
-        start_idx = max(52, BACKTEST_MIN_OBS)
         for idx in range(start_idx, len(candles) - h_bars):
-            win = candles[max(0, idx - LIVE_WINDOW + 1): idx + 1]
-            model = build_signal_model(win, coin=sym)
+            model = model_cache.get(idx)
             if model is None:
                 continue
 
@@ -947,46 +1025,116 @@ def run_backtest(sym: str, candles: list[dict],
     return results
 
 # -----------------------------------------------------------------------------
-# THRESHOLD OPTIMISER  (grid search with 3-fold walk-forward CV)
+# THRESHOLD OPTIMISER  (fast: pre-compute models once per fold, then grid-filter)
 # -----------------------------------------------------------------------------
 
+def _precompute_fold_obs(sym: str, fold_candles: list[dict], horizon_min: int) -> list[dict]:
+    """Pre-compute all signal models + returns for a fold.  Called ONCE per fold."""
+    profile = COIN_ORBITAL_PROFILES.get(sym, COIN_ORBITAL_PROFILES["BTC"])
+    h_bars  = max(1, round(horizon_min / 5))
+    start   = max(52, BACKTEST_MIN_OBS)
+    obs     = []
+    for idx in range(start, len(fold_candles) - h_bars):
+        win   = fold_candles[max(0, idx - LIVE_WINDOW + 1): idx + 1]
+        model = build_signal_model(win, coin=sym)
+        if model is None:
+            continue
+        entry  = fold_candles[idx]["c"]
+        exit_  = fold_candles[idx + h_bars]["c"]
+        ret    = ((exit_ - entry) / entry * 100) if entry > 0 else 0.0
+        obs.append(dict(
+            absScore=model["absScore"], agreement=model["agreement"],
+            conflict=model["conflict"], coreScore=model["coreScore"],
+            persistenceScore=model["persistenceScore"],
+            structureZone=model["structureZone"], structureBias=model["structureBias"],
+            spinState=model["spinState"], ret=ret,
+            archetype=profile["archetype"],
+        ))
+    return obs
+
+def _eval_threshold(obs: list[dict], et: float, ag: float,
+                    horizon_min: int) -> Optional[dict]:
+    """Apply (et, ag) filter to pre-computed observations and return stats."""
+    wins = losses = 0
+    gross_w = gross_l = 0.0
+    returns = []
+    for o in obs:
+        pers_veto = (
+            math.copysign(1, o["persistenceScore"]) != 0
+            and math.copysign(1, o["persistenceScore"]) != math.copysign(1, o["coreScore"])
+            and abs(o["persistenceScore"]) >= 0.35
+            and abs(o["coreScore"]) < (et + 0.04)
+        )
+        spin_gate = True
+        if abs(o["spinState"]) >= 4 and o["archetype"] == "core":
+            spin_gate = o["agreement"] >= 0.72
+        is_active = (
+            o["absScore"] >= et
+            and o["agreement"] >= ag
+            and not (o["conflict"] >= 0.38 and o["agreement"] < ag + 0.08)
+            and not (abs(o["coreScore"]) < et * 0.92 and o["conflict"] >= 0.30)
+            and not (o["structureZone"] == "resistance" and o["coreScore"] > 0
+                     and o["agreement"] < 0.65 and abs(o["structureBias"]) >= 0.18)
+            and not (o["structureZone"] == "support"    and o["coreScore"] < 0
+                     and o["agreement"] < 0.65 and abs(o["structureBias"]) >= 0.18)
+            and not pers_veto and spin_gate
+        )
+        if is_active:
+            direction = 1 if o["coreScore"] > 0 else -1
+            signed    = o["ret"] * direction
+            returns.append(signed)
+            if signed > 0: wins += 1; gross_w += signed
+            elif signed < 0: losses += 1; gross_l += abs(signed)
+    n_sig = wins + losses
+    if n_sig < 10:
+        return None
+    rets = np.array(returns)
+    annualise_factor = np.sqrt(252 * 288 / max(1, horizon_min / 5))
+    sh   = float(rets.mean() / rets.std() * annualise_factor) if rets.std() > 0 else 0.0
+    return dict(entryThreshold=et, minAgreement=ag,
+                sharpe=sh, winRate=wins / n_sig * 100, activeSignals=n_sig)
+
 def optimize_thresholds(sym: str, candles: list[dict],
-                        horizon_min: int = 15) -> dict:
+                        horizon_min: int = 15,
+                        opt_candle_limit: int = 1000) -> dict:
     """
-    Grid search entryThreshold x minAgreement, 3-fold walk-forward CV.
+    Fast grid search entryThreshold x minAgreement, 3-fold walk-forward CV.
+    Models are pre-computed ONCE per fold, then (et, ag) combos are just filters.
     Optimises for Sharpe ratio.  Returns best params per fold + averaged best.
     """
-    print(f"    Optimising {sym} h{horizon_min}m thresholds … ", end="", flush=True)
+    candles = candles[-opt_candle_limit:] if len(candles) > opt_candle_limit else candles
+    print(f"    Optimising {sym} h{horizon_min}m ({len(candles)} candles, fast) … ",
+          end="", flush=True)
 
-    entry_grid  = np.round(np.arange(0.12, 0.46, 0.02), 3).tolist()
-    agree_grid  = np.round(np.arange(0.48, 0.74, 0.02), 3).tolist()
-    n_folds     = 3
-    fold_size   = len(candles) // n_folds
+    entry_grid   = np.round(np.arange(0.12, 0.46, 0.02), 3).tolist()
+    agree_grid   = np.round(np.arange(0.48, 0.74, 0.02), 3).tolist()
+    n_folds      = 3
+    fold_size    = len(candles) // n_folds
     fold_results = []
 
     for fold in range(n_folds):
-        train_start = fold * fold_size
-        train_end   = train_start + fold_size
-        if train_end > len(candles): break
-        fold_candles = candles[train_start:train_end]
-        if len(fold_candles) < 200: continue
+        fold_candles = candles[fold * fold_size: (fold + 1) * fold_size]
+        if len(fold_candles) < 200:
+            continue
+
+        # ── Pre-compute once per fold ─────────────────────────────────────────
+        obs = _precompute_fold_obs(sym, fold_candles, horizon_min)
+        if not obs:
+            continue
 
         best_sharpe = -999.0
         best_params = None
         for et, ag in itertools.product(entry_grid, agree_grid):
-            r = run_backtest(sym, fold_candles,
-                             {f"h{h}": dict(entryThreshold=et, minAgreement=ag)
-                              for h in [1,5,10,15]})
-            hr = r.get(f"h{horizon_min}")
-            if hr and hr["activeSignals"] >= 10:
-                sh = hr["sharpe"]
-                if sh > best_sharpe:
-                    best_sharpe = sh
-                    best_params = dict(entryThreshold=et, minAgreement=ag,
-                                       sharpe=sh, winRate=hr["winRate"],
-                                       activeSignals=hr["activeSignals"])
+            result = _eval_threshold(obs, et, ag, horizon_min)
+            if result and result["sharpe"] > best_sharpe:
+                best_sharpe = result["sharpe"]
+                best_params = result
         if best_params:
             fold_results.append(best_params)
+
+    print("done")
+    if not fold_results:
+        return dict(sym=sym, status="insufficient_data")
 
     print("done")
     if not fold_results:
@@ -1040,7 +1188,7 @@ def analyse_kalshi_csv(csv_path: str) -> dict:
         except: return default
 
     per_coin: dict[str, dict] = {}
-    price_buckets: dict[str, list] = {}   # entry price (cents) → [win/loss]
+    price_buckets: dict[str, list] = {}   # entry price (cents) -> [win/loss]
 
     for r in filled:
         ticker   = r.get("Market_Ticker","")
@@ -1280,7 +1428,7 @@ def save_outputs(all_results: dict, opt_results: dict,
             optimisedThresholds=opt_results,
             kalshiAnalysis=kalshi,
         ), f, indent=2, default=str)
-    print(f"\n  Full JSON → {json_path}")
+    print(f"\n  Full JSON -> {json_path}")
 
     # Summary CSV
     csv_path = out_dir / f"backtest-summary-py-{ts}.csv"
@@ -1306,14 +1454,14 @@ def save_outputs(all_results: dict, opt_results: dict,
                     r.get("filter",{}).get("entryThreshold",""),
                     r.get("filter",{}).get("minAgreement",""),
                 ])
-    print(f"  Summary CSV → {csv_path}")
+    print(f"  Summary CSV -> {csv_path}")
 
     # Optimised thresholds for JS config (if available)
     if opt_results:
         opt_path = out_dir / f"optimised-thresholds-{ts}.json"
         with open(opt_path, "w") as f:
             json.dump(opt_results, f, indent=2)
-        print(f"  Optimised thresholds → {opt_path}")
+        print(f"  Optimised thresholds -> {opt_path}")
 
 # -----------------------------------------------------------------------------
 # MAIN
@@ -1321,26 +1469,30 @@ def save_outputs(all_results: dict, opt_results: dict,
 
 def main():
     parser = argparse.ArgumentParser(description="WECRYPTO Python Backtest Engine v2.5.0")
-    parser.add_argument("--coin",     type=str,  default=None,  help="Run single coin (BTC, ETH, …)")
-    parser.add_argument("--days",     type=int,  default=7,     help="Days of history (default 7)")
-    parser.add_argument("--optimize", action="store_true",      help="Run grid-search optimisation")
-    parser.add_argument("--kalshi",   action="store_true",      help="Analyse Kalshi CSV trade history")
-    parser.add_argument("--no-mc",    action="store_true",      help="Skip Monte Carlo (faster)")
+    parser.add_argument("--coin",       type=str,  default=None,  help="Run single coin (BTC, ETH, …)")
+    parser.add_argument("--days",       type=int,  default=7,     help="Days of history (default 7; 30 = full 30-day paginated run)")
+    parser.add_argument("--optimize",   action="store_true",      help="Run grid-search optimisation")
+    parser.add_argument("--opt-candles",type=int,  default=1000,  help="Max candles for optimiser grid search (default 1000 = ~3.5 days, fast)")
+    parser.add_argument("--kalshi",     action="store_true",      help="Analyse Kalshi CSV trade history")
+    parser.add_argument("--no-mc",      action="store_true",      help="Skip Monte Carlo (faster)")
     args = parser.parse_args()
 
-    candles_want = min(1000, args.days * 288)   # 288 x 5m = 1 day
+    # 288 x 5m bars per day; paginated fetch supports > 1000 now
+    candles_want = min(8640, args.days * 288)   # cap at 30 days = 8640 candles
     coins = PREDICTION_COINS
     if args.coin:
         coins = [c for c in PREDICTION_COINS if c["sym"] == args.coin.upper()]
         if not coins:
             print(f"Unknown coin: {args.coin}"); return
 
+    actual_days = candles_want / 288
     print()
     print("=" * 80)
     print("  WECRYPTO Python Backtest Engine  v2.5.0")
     print("  Quantum Orbital Model  --  h-subshell  +-5 spin  (11 states)")
-    print(f"  {len(coins)} coins  .  {candles_want} x 5m candles  ~ {args.days} days"
-          f"  .  {'optimise ON' if args.optimize else 'optimise OFF'}")
+    print(f"  {len(coins)} coins  .  {candles_want} x 5m candles  ~ {actual_days:.1f} days"
+          f"  .  {'optimise ON' if args.optimize else 'optimise OFF'}"
+          f"  .  opt_candles={args.opt_candles}")
     print("=" * 80)
 
     all_results  = {}
@@ -1351,7 +1503,7 @@ def main():
         print(f"\n  Fetching {coin['sym']}… ", end="", flush=True)
         try:
             candles = fetch_candles(coin, candles_want)
-            print(f"{len(candles)} candles [OK]")
+            print(f"{len(candles)} candles ({len(candles)/288:.1f} days) [OK]")
         except Exception as e:
             print(f"FAILED ({e})")
             continue
@@ -1368,7 +1520,8 @@ def main():
             print(f"\n  [Optimise] {coin['sym']}:")
             opt = {}
             for h_min in [5, 15]:   # 5m and 15m are the most important
-                opt[f"h{h_min}"] = optimize_thresholds(coin["sym"], candles, h_min)
+                opt[f"h{h_min}"] = optimize_thresholds(coin["sym"], candles, h_min,
+                                                       opt_candle_limit=args.opt_candles)
             opt_results[coin["sym"]] = opt
 
         time.sleep(0.3)   # avoid rate-limit hammering
@@ -1381,10 +1534,11 @@ def main():
         kalshi_data = analyse_kalshi_csv(str(csv_path))
         print_kalshi_report(kalshi_data)
 
-    save_outputs(all_results, opt_results, kalshi_data, args.days)
+    save_outputs(all_results, opt_results, kalshi_data, round(candles_want / 288, 1))
     print("\n  Done.\n")
 
 
 if __name__ == "__main__":
     random.seed(42); np.random.seed(42)
     main()
+

@@ -66,7 +66,9 @@
    */
   function spinToConfidence(spinState, coinSymbol) {
     const clipped = Math.max(-5, Math.min(5, spinState));
-    const metadata = SPIN_STATES[String(clipped)] || SPIN_STATES[0];
+    // Guard against -0: Object.is(-0, 0) is false but String(-0) === '0' is fine
+    const key = clipped === 0 ? '0' : String(Math.round(clipped));
+    const metadata = SPIN_STATES[key] || SPIN_STATES['0'];
 
     let baseConfidence = metadata.confidence;
 
@@ -222,8 +224,8 @@
       agreement: {
         aligned: sameDirection,
         alignmentScore,
-        cfmLabel: SPIN_STATES[String(Math.round(cfmSpin))].label,
-        kalshiLabel: SPIN_STATES[String(kalshiSpin)].label,
+        cfmLabel: SPIN_STATES[cfmSpin === 0 ? '0' : String(Math.round(cfmSpin))]?.label ?? 'Unknown',
+        kalshiLabel: SPIN_STATES[String(kalshiSpin)]?.label ?? 'Unknown',
       },
       confidenceBoost,
       execSizeMultiplier,
@@ -327,16 +329,83 @@
     };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Candle Alignment Boost
+  //
+  // maturity: 0.0 = contract just opened, 1.0 = contract expiring
+  //   maturity < 0.20 → early entry window → small positive boost (+0.06)
+  //   maturity > 0.80 → contract near expiry → penalty (-0.12) — theta decay
+  //   otherwise       → neutral (0)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function getCandleAlignmentBoost(maturity) {
+    if (typeof maturity !== 'number' || isNaN(maturity)) return 0;
+    const m = Math.max(0, Math.min(1, maturity));
+    if (m < 0.20) return  0.06;   // early entry — candle just started
+    if (m > 0.80) return -0.12;   // near expiry — theta bleed risk
+    return 0;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Session Boost
+  //
+  // Mirrors SESSION_SCORE_MULT from predictions.js (kept in sync manually).
+  // Returns a multiplier to apply to final confidence.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const SESSION_SCORE_MULT = {
+    'NY Open':       { BTC: 1.20, ETH: 1.35, XRP: 1.28, SOL: 1.05, BNB: 1.05, HYPE: 0.80, DOGE: 0.80 },
+    'NY Session':    { BTC: 1.05, ETH: 1.12, XRP: 1.05, SOL: 0.95, BNB: 1.00, HYPE: 0.80, DOGE: 0.80 },
+    'NY Close':      { BTC: 1.00, ETH: 1.05, XRP: 0.95, SOL: 0.95, BNB: 1.00, HYPE: 0.80, DOGE: 0.80 },
+    'London Open':   { BTC: 0.76, ETH: 0.72, XRP: 0.70, SOL: 0.82, BNB: 0.85, HYPE: 0.75, DOGE: 0.75 },
+    'London Session':{ BTC: 0.82, ETH: 0.78, XRP: 0.76, SOL: 0.86, BNB: 0.90, HYPE: 0.80, DOGE: 0.80 },
+    'Asia Open':     { BTC: 0.92, ETH: 0.90, XRP: 0.95, SOL: 1.00, BNB: 1.18, HYPE: 0.85, DOGE: 0.85 },
+    'Asia Session':  { BTC: 0.90, ETH: 0.88, XRP: 0.92, SOL: 0.98, BNB: 1.10, HYPE: 0.82, DOGE: 0.82 },
+    'Dead Zone':     { BTC: 0.75, ETH: 0.75, XRP: 0.75, SOL: 0.78, BNB: 0.80, HYPE: 0.70, DOGE: 0.70 },
+  };
+
+  function getSessionBoost(coin, sessionLabel) {
+    if (!sessionLabel || !coin) return 1.0;
+    const row = SESSION_SCORE_MULT[sessionLabel];
+    if (!row) return 1.0;
+    return row[coin.toUpperCase()] ?? 1.0;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Per-Coin Regime → Spin Adjustment
+  //
+  // Some coins show systematic directional bias in certain regimes.
+  // Returns an additive spin delta (e.g. +0.5 means shift blended spin up 0.5)
+  // ─────────────────────────────────────────────────────────────────────────────
+  const REGIME_SPIN_BIAS = {
+    BTC:  { tight: 0, normal: 0, elevated:  0.5, extreme: -0.5 },
+    ETH:  { tight: 0, normal: 0, elevated:  0.5, extreme: -0.5 },
+    XRP:  { tight: 0, normal: 0, elevated:  0.5, extreme: -0.5 },
+    SOL:  { tight: 0, normal: 0, elevated:  1.0, extreme: -1.0 },  // momentum — amplify regime
+    HYPE: { tight: 0, normal: 0, elevated:  1.0, extreme: -1.0 },
+    BNB:  { tight: 0, normal: 0, elevated:  0.0, extreme:  0.0 },  // disabled-equivalent
+    DOGE: { tight: 0, normal: 0, elevated:  0.5, extreme:  0.0 },  // highBeta — no extreme amplify
+  };
+
+  function getRegimeSpinAdjustment(coin, regime) {
+    if (!coin || !regime) return 0;
+    const bias = REGIME_SPIN_BIAS[coin.toUpperCase()];
+    return bias ? (bias[regime] ?? 0) : 0;
+  }
+
   /**
    * Main Enhancement Entry Point (For Spin States)
-   * 
-   * Takes 7-state quantized spin signal and blends with Kalshi
-   * Returns enhanced prediction with execution guidance
+   *
+   * Takes a CFM spin state (-5..+5) and blends with Kalshi market price,
+   * candle maturity, session timing, and per-coin regime bias.
+   * Returns enhanced prediction with full execution guidance.
+   *
+   * @param {object} prediction    - CFM prediction object (must have .sym)
+   * @param {number} cfmSpinState  - CFM spin -5..+5
+   * @param {object} [volatility]  - { atrPct: number }
+   * @param {object} [context]     - optional { maturity: 0-1, session: string }
    */
-  function enhanceWithKalshiSpinStates(prediction, cfmSpinState, volatility) {
+  function enhanceWithKalshiSpinStates(prediction, cfmSpinState, volatility, context) {
     if (!window._kalshiByTicker) {
-      // No Kalshi data — use CFM spin as-is
-      return enhancePredictionFromSpinState(prediction, cfmSpinState, null, volatility);
+      return enhancePredictionFromSpinState(prediction, cfmSpinState, null, volatility, context);
     }
 
     const sym = prediction.sym;
@@ -344,31 +413,38 @@
     const kalshiData = window._kalshiByTicker[ticker];
 
     if (!kalshiData) {
-      return enhancePredictionFromSpinState(prediction, cfmSpinState, null, volatility);
+      return enhancePredictionFromSpinState(prediction, cfmSpinState, null, volatility, context);
     }
 
     // 1. Detect regime
     const volRegime = detectVolatilityRegime(volatility);
 
-    // 2. Blend CFM spin with Kalshi spin
-    const blend = blendSpinStates(cfmSpinState, kalshiData.price, volRegime.regime);
+    // 2. Per-coin regime→spin bias adjustment
+    const spinBias = getRegimeSpinAdjustment(sym, volRegime.regime);
+    const biasedSpin = Math.max(-5, Math.min(5, cfmSpinState + spinBias));
 
-    // 3. Enhance from blended spin
+    // 3. Blend CFM spin with Kalshi spin
+    const blend = blendSpinStates(biasedSpin, kalshiData.price, volRegime.regime);
+
+    // 4. Enhance from blended spin (passes context for candle + session boosts)
     return enhancePredictionFromSpinState(
       prediction,
       blend.blendedSpin,
       blend,
-      volRegime
+      volRegime,
+      context
     );
   }
 
   /**
    * Convert Spin State to Prediction
-   * Handles confidence calculation, size adjustment, and filtering
+   * Handles confidence calculation, size adjustment, and filtering.
+   *
+   * @param {object} context - optional { maturity: 0-1, session: string }
    */
-  function enhancePredictionFromSpinState(prediction, spinState, blend, volRegime) {
+  function enhancePredictionFromSpinState(prediction, spinState, blend, volRegime, context) {
     // Convert spin to confidence
-    const spinMeta = spinToConfidence(spinState);
+    const spinMeta = spinToConfidence(spinState, prediction.sym);
 
     // Start with base confidence from spin state
     let finalConf = spinMeta.baseConfidence * 100;
@@ -387,6 +463,16 @@
         finalConf *= 0.80;
       }
     }
+
+    // Apply session boost (multiplier from SESSION_SCORE_MULT)
+    const sessionLabel = context?.session ?? null;
+    const sessionMult = getSessionBoost(prediction.sym, sessionLabel);
+    finalConf *= sessionMult;
+
+    // Apply candle maturity alignment boost/penalty (additive percentage points)
+    const maturity = context?.maturity ?? null;
+    const candleBoost = getCandleAlignmentBoost(maturity);
+    finalConf += candleBoost * 100;
 
     // Cap confidence by regime
     const maxConf = volRegime?.regime === 'tight' ? 72
@@ -438,6 +524,14 @@
           confidenceBoost: blend?.confidenceBoost ?? 1.0,
           execSizeMultiplier: blend?.execSizeMultiplier ?? 1.0,
         },
+        candleAlignment: {
+          maturity: maturity ?? null,
+          boost: candleBoost,
+        },
+        session: {
+          label: sessionLabel,
+          multiplier: sessionMult,
+        },
       },
       // Kalshi contract execution guidance
       kalshiExecution: {
@@ -449,6 +543,8 @@
         executionProbability: (finalConf / 100) * 0.85,  // add friction for realism
         regime: volRegime?.regime ?? 'normal',
         consensusStrength: blend?.agreement?.alignmentScore ?? 0,
+        session: sessionLabel,
+        maturity: maturity,
       },
     };
   }
@@ -458,7 +554,7 @@
     // Main entry points
     enhanceWithKalshi: enhanceWithKalshiSpinStates,
     enhanceFromSpinState: enhancePredictionFromSpinState,
-    
+
     // Utilities
     spinToConfidence,
     spinStates: SPIN_STATES,
@@ -466,8 +562,17 @@
     detectVolatilityRegime,
     blendSpinStates,
     calibrateForRegime,
-    
+
+    // New: candle timing + session + regime spin
+    getCandleAlignmentBoost,
+    getSessionBoost,
+    getRegimeSpinAdjustment,
+
     // Metadata
     SPIN_STATES,
+    SESSION_SCORE_MULT,
+    REGIME_SPIN_BIAS,
   };
+
+  console.log('[KalshiEnhancements] Loaded — h-subshell 11-state, candle timing, session + regime spin active');
 })();

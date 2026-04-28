@@ -2,8 +2,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktopApp', {
   isElectron: true,
-  proxyPort:  () => ipcRenderer.invoke('proxy:port'),
+  proxyPort:             () => ipcRenderer.invoke('proxy:port'),
   loadKalshiCredentials: () => ipcRenderer.invoke('kalshi:loadCredentials'),
+  loadBirdeyeApiKey:     () => ipcRenderer.invoke('birdeye:loadApiKey'),
+  // Returns all local drives (C-Z), UNC network shares, and cloud sync folders
+  getDrives:             () => ipcRenderer.invoke('storage:getDrives'),
 });
 
 contextBridge.exposeInMainWorld('dataStore', {

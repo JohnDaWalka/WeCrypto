@@ -20,7 +20,7 @@ const args = process.argv.slice(2);
 const getArg = (flag) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : null; };
 const FILTER_COIN  = getArg('--coin')?.toUpperCase() || null;
 const DAYS_BACK    = parseInt(getArg('--days') || '7', 10);
-const CANDLES_WANT = Math.min(1000, DAYS_BACK * 288);  // 288 × 5m = 1 day
+const CANDLES_WANT = DAYS_BACK * 288;  // 288 × 5m = 1 day; no hard cap — fetchCandles paginates
 
 // ── Coins (matches PREDICTION_COINS in data.js) ─────────────────
 const PREDICTION_COINS = [
@@ -43,23 +43,207 @@ const SHORT_HORIZON_FILTERS = {
   h15: { entryThreshold: 0.20, minAgreement: 0.65 },
 };
 const BACKTEST_FILTER_OVERRIDES = {
-  // Retuned 2025-07 based on 30-day backtest: all win_rates <50% & avg_edge <0 across board
-  // Rule applied: +0.04 entryThreshold, +0.04 minAgreement per horizon (XRP h10/h15 +0.05 due to deep negative edge)
-  BTC:  { h1: { entryThreshold: 0.27, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.62 }, h10: { entryThreshold: 0.37, minAgreement: 0.66 }, h15: { entryThreshold: 0.42, minAgreement: 0.70 } },
-  ETH:  { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.33, minAgreement: 0.62 }, h10: { entryThreshold: 0.37, minAgreement: 0.66 }, h15: { entryThreshold: 0.41, minAgreement: 0.69 } },
-  SOL:  { h1: { entryThreshold: 0.25, minAgreement: 0.56 }, h5: { entryThreshold: 0.30, minAgreement: 0.60 }, h10: { entryThreshold: 0.34, minAgreement: 0.64 }, h15: { entryThreshold: 0.39, minAgreement: 0.68 } },
-  XRP:  { h1: { entryThreshold: 0.23, minAgreement: 0.56 }, h5: { entryThreshold: 0.27, minAgreement: 0.60 }, h10: { entryThreshold: 0.33, minAgreement: 0.64 }, h15: { entryThreshold: 0.37, minAgreement: 0.68 } },
-  DOGE: { h1: { entryThreshold: 0.32, minAgreement: 0.62 }, h5: { entryThreshold: 0.36, minAgreement: 0.64 }, h10: { entryThreshold: 0.39, minAgreement: 0.66 }, h15: { entryThreshold: 0.42, minAgreement: 0.70 } },
-  BNB:  { h1: { entryThreshold: 0.24, minAgreement: 0.57 }, h5: { entryThreshold: 0.29, minAgreement: 0.61 }, h10: { entryThreshold: 0.33, minAgreement: 0.65 }, h15: { entryThreshold: 0.37, minAgreement: 0.67 } },
-  HYPE: { h1: { entryThreshold: 0.22, minAgreement: 0.56 }, h5: { entryThreshold: 0.24, minAgreement: 0.56 }, h10: { entryThreshold: 0.26, minAgreement: 0.58 }, h15: { entryThreshold: 0.28, minAgreement: 0.60 } },
+  // Retuned 2026-04-27 via 30-day walk-forward optimization (Python engine v2.5.0).
+  // 7-day backtest 2026-04-28 Kalshi WR (W/L/S): BTC 52.1%, ETH 54.9%, XRP 60.2%
+  // SOL re-tuned 2026-04-30: mean-reversion profile, maxThreshold 0.55 cap — 55.1% WR (78 signals, PF 1.99)
+  // DISABLED (per backtest): BNB 33.3%, HYPE 39.3%, DOGE (no feed)
+  BTC:  { h1: { entryThreshold: 0.36, minAgreement: 0.56 }, h5: { entryThreshold: 0.36, minAgreement: 0.56 }, h10: { entryThreshold: 0.36, minAgreement: 0.57 }, h15: { entryThreshold: 0.36, minAgreement: 0.58 } },
+  ETH:  { h1: { entryThreshold: 0.42, minAgreement: 0.56 }, h5: { entryThreshold: 0.42, minAgreement: 0.56 }, h10: { entryThreshold: 0.40, minAgreement: 0.57 }, h15: { entryThreshold: 0.38, minAgreement: 0.58 } },
+  XRP:  { h1: { entryThreshold: 0.40, minAgreement: 0.54 }, h5: { entryThreshold: 0.40, minAgreement: 0.54 }, h10: { entryThreshold: 0.36, minAgreement: 0.56 }, h15: { entryThreshold: 0.32, minAgreement: 0.58 } },
+  SOL:  { h1: { entryThreshold: 0.45, minAgreement: 0.66 }, h5: { entryThreshold: 0.45, minAgreement: 0.66 }, h10: { entryThreshold: 0.40, minAgreement: 0.62 }, h15: { entryThreshold: 0.41, minAgreement: 0.64, maxThreshold: 0.55 } },
+  BNB:  { h1: { entryThreshold: 0.50, minAgreement: 0.72 }, h5: { entryThreshold: 0.50, minAgreement: 0.72 }, h10: { entryThreshold: 0.50, minAgreement: 0.72 }, h15: { entryThreshold: 0.50, minAgreement: 0.72 } },
+  DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
+  HYPE: { h1: { entryThreshold: 0.20, minAgreement: 0.56 }, h5: { entryThreshold: 0.25, minAgreement: 0.60 }, h10: { entryThreshold: 0.30, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },
 };
+// ── Weights — synced with predictions.js (2026-04-28) ──────────────
 const COMPOSITE_WEIGHTS = {
-  ema: 0.18, structure: 0.17, momentum: 0.14, persistence: 0.12, macd: 0.10,
-  obv: 0.09, volume: 0.08, vwap: 0.06, adx: 0.05,
-  rsi: 0.04, bands: 0.04, williamsR: 0.04, stochrsi: 0.03, mfi: 0.03, ichimoku: 0.02,
-  // book, flow, mktSentiment are 0 in historical backtest (no live data)
+  // Trend / directional
+  supertrend:  0.10,
+  hma:         0.07,
+  vwma:        0.06,
+  ema:         0.05,
+  sma:         0.03,
+  macd:        0.07,
+  persistence: 0.07,
+  // Mean-reversion / oscillators
+  bands:       0.08,
+  keltner:     0.05,
+  williamsR:   0.07,
+  rsi:         0.06,
+  cci:         0.05,
+  stochrsi:    0.04,
+  // Volume / flow
+  volume:      0.10,
+  obv:         0.07,
+  cmf:         0.07,
+  mfi:         0.07,
+  // Structure / trend quality
+  structure:   0.10,
+  ichimoku:    0.05,
+  adx:         0.04,
+  fisher:      0.04,
 };
-const SCORE_AMPLIFIER = 1.6; // trend-heavy weights; 1.6× maps strong trend to ~0.7-0.9
+
+// Outer orbital signals — absent from COMPOSITE_WEIGHTS; used as fallback via ?? operator.
+const OUTER_ORBITAL_WEIGHTS = {
+  momentum: 0.05,
+  vwap:     0.05,
+};
+
+// Per-coin indicator bias multipliers — synced with predictions.js (2026-04-28).
+// Applied as: effectiveWeight(key) = (COMPOSITE_WEIGHTS[key] ?? OUTER_ORBITAL_WEIGHTS[key] ?? 0) * (coinBias[key] ?? 1.0)
+// PER_COIN_INDICATOR_BIAS — Data-driven from 7-day h15 backtest per-indicator accuracy
+// Updated 2026-04-29. Each value = multiplier on COMPOSITE_WEIGHTS for that coin.
+// Best/Worst indicators per coin sourced directly from backtest-runner.js diagnostic output.
+const PER_COIN_INDICATOR_BIAS = {
+  BTC: {
+    // h15 best: stochrsi 64%, vwma 62%, volume 60%
+    // h15 worst: momentum 32%, obv 36%, hma 37%
+    stochrsi: 3.5,  // ★ 64% best — was 0.3 (criminally underweighted)
+    vwma:     2.5,  // ★ 62% best
+    volume:   2.2,  // ★ 60% best
+    // Keep proven mean-reversion core
+    bands:      2.5, williamsR: 2.0, structure: 1.4, fisher: 1.3, keltner: 1.6, cci: 1.2,
+    cmf: 1.0, rsi: 0.8, macd: 0.6, persistence: 0.8, ema: 0.5, ichimoku: 0.3, adx: 0.3,
+    vwap: 0.2, sma: 0.2,
+    // Kill worst performers
+    momentum: 0.05,  // 32% worst
+    obv:      0.1,   // 36% worst
+    hma:      0.1,   // 37% worst — confirmed bad for BTC at h15
+    mfi:      0.5,
+    supertrend: 0.4,
+  },
+  ETH: {
+    // h15 best: rsi 82%, stochrsi 56%, williamsR 55%
+    // h15 worst: mfi 38%, momentum 43%, hma 45%
+    rsi:      5.0,  // ★ 82% best — massive signal
+    stochrsi: 3.5,  // ★ 56% best — was 0.2 (completely ignored!)
+    williamsR: 3.0, // ★ 55% best
+    bands:    2.5,  // proven mean-reversion core
+    structure: 1.4, keltner: 1.2, cci: 0.9, fisher: 0.8, cmf: 0.6,
+    volume: 0.9, persistence: 0.8, obv: 0.5, macd: 0.4,
+    ema: 0.35, sma: 0.1, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.3,
+    // Kill worst performers
+    mfi:      0.05,  // 38% worst — was 1.8
+    momentum: 0.05,  // 43% worst
+    hma:      0.05,  // 45% worst
+  },
+  SOL: {
+    // h15 best (14d v2, 203 signals — RELIABLE): bands 61%, williamsR 58%, fisher 58%
+    // h15 worst (14d v2, 203 signals):          rsi 29%, momentum 38%, hma 41%
+    // h15 prior best: structure 54-65%, cci 58%, keltner 60%
+    // Insight: hma is 41% individual accuracy but acts as useful contrarian filter
+    // Kill list: vwap(37%), mfi(21%), stochrsi(27%), rsi(26-29%), ema(36%), persistence(31-38%)
+    bands:       6.5,   // ★ 61/60/73/61/59% — most reliable, confirmed across all runs
+    fisher:      4.5,   // ★ 58% with 202 samples — very reliable
+    williamsR:   4.0,   // ★ 58% with 202 samples — very reliable
+    structure:   3.5,   // ★ 54-65% — structural bias (not in worst)
+    cci:         3.5,   // ★ 58% in prior 14d run (~50-55% this run, not in worst)
+    keltner:     3.0,   // ATR-based band companion (not in worst)
+    hma:         4.0,   // ⚠ 41% individual acc BUT weight 4.0 acts as quality gate (203 vs 378 signals)
+    obv:         0.8,   // volume direction — mild keep
+    macd:        0.3,
+    ichimoku:    0.2,
+    adx:         0.2,
+    vwma:        0.1,
+    volume:      0.2,   // context-dependent — demote
+    sma:         0.0,
+    // Kill confirmed worst (large reliable 14d sample):
+    vwap:        0.05,  // ✗ 37% with 75 samples
+    rsi:         0.05,  // ✗ 26-29% consistently worst
+    persistence: 0.05,  // ✗ 31-38% — consistently worst
+    ema:         0.05,  // ✗ 36% worst
+    cmf:         0.05,  // ✗ consistently bad
+    supertrend:  0.05,  // ✗ 33-34% worst
+    momentum:    0.05,  // ✗ 38% in 14d run
+    mfi:         0.05,  // ✗ 21% in run 5
+    stochrsi:    0.05,  // ✗ 27% in run 5
+  },
+  XRP: {
+    // h15 best: structure 72%, volume 66%, vwap 65%, fisher 69-70% (h1/h10)
+    // h15 worst: momentum 28%, vwma 31%, hma 31%
+    structure: 5.0,  // ★ 72% best — was 1.8
+    volume:    4.5,  // ★ 66% best — confirmed
+    vwap:      4.0,  // ★ 65% best — was 0.15 (outrageously underweighted)
+    fisher:    2.5,  // 70% at h1/h5, strong signal
+    rsi:       2.0,  // 80-100% at h1/h10 — keep high
+    obv:       1.5,  // volume direction confirm
+    williamsR: 1.2,  // moderate keep (was proven in original)
+    bands:     0.8, supertrend: 0.5, cci: 0.5, cmf: 0.6, keltner: 0.4,
+    macd: 0.3, stochrsi: 0.8, persistence: 0.2, ema: 0.2, adx: 0.2, ichimoku: 0.2,
+    sma: 0.0,
+    mfi: 0.1,
+    // Kill confirmed worst performers
+    momentum: 0.05,  // 28% worst — was 1.4
+    vwma:     0.05,  // 31% worst — was 0.15 (already low but still hurting)
+    hma:      0.05,  // 31% worst — was 0.6
+  },
+  HYPE: {
+    // h15 best: williamsR 79%, fisher 77%, cci 75%, bands 78% (h1/h5)
+    // h15 worst: momentum 28%, hma 35%, macd 37%
+    // SURPRISE: HYPE is pure mean-reversion at h15 — NOT volume/momentum
+    williamsR: 6.5,  // ★ 79% best — prior 0.4 was disastrously wrong
+    fisher:    5.0,  // ★ 77% best — extreme price detection
+    cci:       4.5,  // ★ 75% best — was 0.5
+    bands:     3.0,  // ★ 78% best at h1/h5 — complementary
+    keltner:   2.0,  // ATR-based bands — follows bands signal
+    rsi:       1.5,  // oscillator — complements williamsR
+    stochrsi:  1.2,  // overbought/oversold confirmation
+    structure: 0.8,  // minor support/resistance
+    obv:       0.5, persistence: 0.4, vwap: 0.3, ema: 0.3,
+    cmf: 0.3, adx: 0.3, ichimoku: 0.2, sma: 0.0, vwma: 0.2, supertrend: 0.1,
+    // Kill confirmed worst performers
+    momentum: 0.05,  // 28% worst — was 1.5
+    hma:      0.05,  // 35% worst — was 1.2
+    macd:     0.1,   // 37% worst — was 1.2
+    // Demote previously assumed dominant but unproven at h15
+    volume:   0.3,   // was 4.5 — not in h15 best list
+    mfi:      0.3,   // was 3.5 — not in h15 best list
+  },
+  DOGE: {
+    // h15 best: obv 68%, volume 61%, cmf 60%
+    // h15 worst: stochrsi 36%, momentum 42%, vwma 43%
+    obv:    4.5,  // ★ 68% best — was 0.3 (massive correction)
+    volume: 3.5,  // ★ 61% best
+    cmf:    3.0,  // ★ 60% best — was 0.5 (major correction)
+    bands:  2.5,  // proven extreme mean-reversion
+    mfi:    2.0,  // keep — was proven in original
+    structure: 1.8, fisher: 1.8, keltner: 1.2, cci: 1.0, williamsR: 0.8,
+    rsi: 0.5, persistence: 0.3, ema: 0.3, macd: 0.2, ichimoku: 0.2, adx: 0.1,
+    hma: 0.3, sma: 0.0, supertrend: 0.2, vwap: 0.1,
+    // Kill confirmed worst performers
+    stochrsi: 0.05,  // 36% worst — was 1.7
+    momentum: 0.05,  // 42% worst — was 0.25
+    vwma:     0.05,  // 43% worst — was 1.5
+  },
+  BNB: {
+    // h15 best: sma 92%, mfi 91%, ema 86% (NOTE: only 14 signals — high noise)
+    // h15 worst: structure 0%, keltner 17%, williamsR 29%
+    // Use data cautiously given tiny sample; align with original research where consistent
+    sma:    5.0,  // ★ 92% best — was 0.0 (!!!)
+    mfi:    4.5,  // ★ 91% best — confirmed across prior research too
+    ema:    4.0,  // ★ 86% best — confirmed
+    vwap:   3.5,  // 64% from prior research — consistent trend
+    hma:    3.0,  // 60% from prior research
+    vwma:   2.5,  // 63% from prior research
+    volume: 3.5,  // 80% from prior research
+    momentum: 2.0, persistence: 2.0, macd: 1.5, ichimoku: 2.0, supertrend: 2.0,
+    cmf: 1.5, obv: 0.5, fisher: 0.8, cci: 0.3, adx: 0.5,
+    // Kill confirmed worst (and consistent with prior research)
+    structure:  0.01,  // 0% worst — certain kill
+    keltner:    0.05,  // 17% worst
+    williamsR:  0.05,  // 29% worst — consistent with prior research
+    bands:      0.05,  // prior research: 30-43% — confirmed bad
+    rsi:        0.05,  // prior research: 34-43% — confirmed bad
+    stochrsi:   0.05,  // aligned with kill-mean-reversion theme
+  },
+};
+
+const SCORE_AMPLIFIER = 1.6;
+// NOTE: live engine also applies mdtScoreMult (~0.88–1.18×) and sessMult (~0.70–1.35×).
+// These require live market/session data and cannot be simulated historically.
+// A borderline live score may be 0–60% higher than its equivalent backtest score —
+// keep this in mind when comparing live signal frequency to backtest stats.
 const BACKTEST_MIN_TRAIN_OBS = 36;
 
 // ── Utility ─────────────────────────────────────────────────────
@@ -230,6 +414,144 @@ function calcATR(candles, period = 14) {
   return sum / period;
 }
 
+function calcHMA(data, period) {
+  period = period || 16;
+  if (data.length < period * 2) return data.slice(-1);
+  function wma(arr, n) {
+    if (arr.length < n) return [arr[arr.length - 1]];
+    const result = [];
+    for (let i = n - 1; i < arr.length; i++) {
+      let sum = 0, wSum = 0;
+      for (let j = 0; j < n; j++) { sum += arr[i - j] * (n - j); wSum += (n - j); }
+      result.push(sum / wSum);
+    }
+    return result;
+  }
+  const half = Math.floor(period / 2);
+  const sqrtP = Math.floor(Math.sqrt(period));
+  const wmaHalf = wma(data, half);
+  const wmaFull = wma(data, period);
+  const minLen = Math.min(wmaHalf.length, wmaFull.length);
+  const diff = [];
+  for (let i = 0; i < minLen; i++) diff.push(2 * wmaHalf[wmaHalf.length - minLen + i] - wmaFull[wmaFull.length - minLen + i]);
+  return wma(diff, sqrtP);
+}
+
+function calcVWMA(candles, period) {
+  period = period || 20;
+  const result = [];
+  for (let i = 0; i < candles.length; i++) {
+    const slice = candles.slice(Math.max(0, i - period + 1), i + 1);
+    let pv = 0, v = 0;
+    for (const c of slice) { pv += c.c * (c.v || 1); v += (c.v || 1); }
+    result.push(v > 0 ? pv / v : candles[i].c);
+  }
+  return result;
+}
+
+function calcSMA(data, period) {
+  const result = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) { result.push(data[i]); continue; }
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += data[j];
+    result.push(sum / period);
+  }
+  return result;
+}
+
+function calcSupertrend(candles, period, multiplier) {
+  period = period || 10; multiplier = multiplier || 3.0;
+  if (candles.length < period + 2) return { signal: 0, bullish: null };
+  const trs = [];
+  for (let i = 1; i < candles.length; i++) {
+    const c = candles[i], p = candles[i - 1];
+    trs.push(Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c)));
+  }
+  let atr = trs.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  const atrs = [atr];
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+    atrs.push(atr);
+  }
+  let finalUpper = 0, finalLower = 0, supertrend = 0, bullish = false;
+  let initialized = false;
+  for (let i = 0; i < atrs.length; i++) {
+    const ci = candles[i + 1];
+    const hl2 = (ci.h + ci.l) / 2;
+    const rawUpper = hl2 + multiplier * atrs[i];
+    const rawLower = hl2 - multiplier * atrs[i];
+    const prevClose = candles[i].c;
+    if (!initialized) {
+      finalUpper = rawUpper; finalLower = rawLower;
+      supertrend = rawUpper; bullish = false; initialized = true;
+    } else {
+      const newUpper = (rawUpper < finalUpper || prevClose > finalUpper) ? rawUpper : finalUpper;
+      const newLower = (rawLower > finalLower || prevClose < finalLower) ? rawLower : finalLower;
+      const prevST = supertrend;
+      if (prevST === finalUpper) {
+        bullish = ci.c > newUpper;
+        supertrend = bullish ? newLower : newUpper;
+      } else {
+        bullish = ci.c >= newLower;
+        supertrend = bullish ? newLower : newUpper;
+      }
+      finalUpper = newUpper; finalLower = newLower;
+    }
+  }
+  return { signal: bullish ? 1 : -1, bullish, supertrend };
+}
+
+function calcCCI(candles, period) {
+  period = period || 14;
+  if (candles.length < period) return 0;
+  const slice = candles.slice(-period);
+  const tps = slice.map(c => (c.h + c.l + c.c) / 3);
+  const mean = tps.reduce((s, v) => s + v, 0) / period;
+  const meanDev = tps.reduce((s, v) => s + Math.abs(v - mean), 0) / period;
+  return meanDev > 0 ? (tps[tps.length - 1] - mean) / (0.015 * meanDev) : 0;
+}
+
+function calcCMF(candles, period) {
+  period = period || 20;
+  if (candles.length < period) return 0;
+  const slice = candles.slice(-period);
+  let mfvSum = 0, volSum = 0;
+  for (const c of slice) {
+    const range = c.h - c.l;
+    const vol = c.v || 1;
+    const mfm = range > 0 ? ((c.c - c.l) - (c.h - c.c)) / range : 0;
+    mfvSum += mfm * vol; volSum += vol;
+  }
+  return volSum > 0 ? mfvSum / volSum : 0;
+}
+
+function calcFisher(candles, period) {
+  period = period || 10;
+  if (candles.length < period) return 0;
+  const slice = candles.slice(-period);
+  const hh = Math.max(...slice.map(c => c.h));
+  const ll = Math.min(...slice.map(c => c.l));
+  const close = candles[candles.length - 1].c;
+  const range = hh - ll;
+  let value = range > 0 ? 2 * ((close - ll) / range) - 1 : 0;
+  value = Math.max(-0.999, Math.min(0.999, value));
+  return 0.5 * Math.log((1 + value) / (1 - value));
+}
+
+function calcKeltner(candles, period, mult) {
+  period = period || 20; mult = mult || 2.0;
+  if (candles.length < period) return { position: 0.5 };
+  const closes = candles.map(c => c.c);
+  const ema = calcEMA(closes, period);
+  const middle = ema[ema.length - 1];
+  const atr = calcATR(candles, period);
+  const upper = middle + mult * atr;
+  const lower = middle - mult * atr;
+  const width = Math.max(upper - lower, middle * 0.0001);
+  return { position: Math.max(0, Math.min(1, (closes[closes.length - 1] - lower) / width)) };
+}
+
 function calcBollinger(closes, period = 20) {
   if (closes.length < period) { const last = closes[closes.length - 1] || 0; return { position: 0.5 }; }
   const slice  = closes.slice(-period);
@@ -300,7 +622,9 @@ function signalFromScore(score) {
 }
 
 // ── Main signal model (no book/flow/mktSentiment — historical only) ─
-function buildSignalModel(candles) {
+// hma, vwma, sma are not computed (no live-equivalent historical signal available);
+// their weights contribute 0 to numerator and denominator alike (excluded via Object.keys(sv)).
+function buildSignalModel(candles, sym = null) {
   if (!candles || candles.length < 26) return null;
   const closes   = candles.map(c => c.c);
   const lastPrice = closes[closes.length - 1];
@@ -390,6 +714,61 @@ function buildSignalModel(candles) {
   else mfiSig = (mfi - 50) / 50 * 0.35;
   mfiSig = clamp(mfiSig, -1, 1);
 
+  // ── New indicators ──────────────────────────────────────────────────
+  // HMA signal
+  const hmaLine  = calcHMA(closes, 16);
+  const hmaCurr  = hmaLine.length ? hmaLine[hmaLine.length - 1] : lastPrice;
+  const hmaPrev  = hmaLine.length > 1 ? hmaLine[hmaLine.length - 2] : hmaCurr;
+  const hmaPrev2 = hmaLine.length > 2 ? hmaLine[hmaLine.length - 3] : hmaPrev;
+  const hmaSlope   = (hmaCurr - hmaPrev2) / (Math.abs(hmaPrev2) || 1) * 100;
+  const hmaDevPct  = (lastPrice - hmaCurr) / (Math.abs(hmaCurr) || 1) * 100;
+  let hmaSig = clamp(hmaSlope * 8, -0.7, 0.7);
+  if (Math.abs(hmaDevPct) > 0.4) hmaSig += clamp(-hmaDevPct * 0.28, -0.3, 0.3);
+  hmaSig = clamp(hmaSig, -1, 1);
+
+  // VWMA signal
+  const vwmaLine   = calcVWMA(candles, 20);
+  const vwmaCurr   = vwmaLine[vwmaLine.length - 1];
+  const vwmaPrev   = vwmaLine.length > 3 ? vwmaLine[vwmaLine.length - 4] : vwmaCurr;
+  const vwmaSlope  = (vwmaCurr - vwmaPrev) / (Math.abs(vwmaPrev) || 1) * 100;
+  const vwmaDevPct = (lastPrice - vwmaCurr) / (Math.abs(vwmaCurr) || 1) * 100;
+  let vwmaSig = clamp(vwmaSlope * 6, -0.6, 0.6);
+  vwmaSig += clamp(vwmaDevPct * 0.35, -0.4, 0.4);
+  vwmaSig = clamp(vwmaSig, -1, 1);
+
+  // SMA signal
+  const sma9arr = calcSMA(closes, 9);
+  const sma21arr = calcSMA(closes, 21);
+  const smaCross = (sma9arr[sma9arr.length - 1] - sma21arr[sma21arr.length - 1]) / (Math.abs(sma21arr[sma21arr.length - 1]) || 1) * 100;
+  const smaSig = clamp(smaCross * 5, -1, 1);
+
+  // Supertrend signal
+  const stR = calcSupertrend(candles, 10, 3.0);
+  const supertrendSig = stR.signal;
+
+  // CCI signal — trend-filtered
+  const cciVal = calcCCI(candles, 14);
+  let cciSig = 0;
+  if (cciVal > 150) cciSig = -clamp((cciVal - 100) / 150, 0, 1);
+  else if (cciVal < -150) cciSig = clamp((-100 - cciVal) / 150, 0, 1);
+  else cciSig = clamp(-cciVal / 200, -0.3, 0.3);
+  cciSig = clamp(cciSig, -1, 1);
+
+  // CMF signal — Chaikin Money Flow
+  const cmfVal = calcCMF(candles, 20);
+  const cmfSig = clamp(cmfVal * 2.5, -1, 1);
+
+  // Fisher Transform signal
+  const fisherVal = calcFisher(candles, 10);
+  const fisherSig = clamp(-fisherVal / 2.5, -1, 1);
+
+  // Keltner Channels
+  const kelt = calcKeltner(candles, 20, 2.0);
+  let keltSig = 0;
+  if (kelt.position >= 0.88) keltSig = -clamp((kelt.position - 0.88) / 0.12, 0, 1);
+  else if (kelt.position <= 0.12) keltSig = clamp((0.12 - kelt.position) / 0.12, 0, 1);
+  else keltSig = clamp(-(kelt.position - 0.5) * 0.45, -0.22, 0.22);
+
   // Trend Regime Modulation — suppress contrarian oscillator signals in strong trends
   const isBullTrend = emaCross > 0.15 && adxR.pdi > adxR.mdi && adxR.adx > 22;
   const isBearTrend = emaCross < -0.15 && adxR.mdi > adxR.pdi && adxR.adx > 22;
@@ -410,13 +789,21 @@ function buildSignalModel(candles) {
     }
   }
 
-  const sv = { rsi: rsiSig, ema: emaSig, vwap: vwapSig, obv: obvSig, volume: volSig,
-               momentum: momSig, bands: bandSig, persistence: persistence.signal, structure: structure.signal,
-               macd: macdSig, stochrsi: stochSig, adx: adxSig, ichimoku: ichiSig, williamsR: wRSig, mfi: mfiSig };
+  const sv = {
+    rsi: rsiSig, ema: emaSig, vwap: vwapSig, obv: obvSig, volume: volSig,
+    momentum: momSig, bands: bandSig, persistence: persistence.signal, structure: structure.signal,
+    macd: macdSig, stochrsi: stochSig, adx: adxSig, ichimoku: ichiSig, williamsR: wRSig, mfi: mfiSig,
+    hma: hmaSig, vwma: vwmaSig, sma: smaSig,
+    supertrend: supertrendSig, cci: cciSig, cmf: cmfSig, fisher: fisherSig, keltner: keltSig,
+  };
 
+  // Apply per-coin indicator bias (matches live predictions.js composite scoring).
+  // effectiveWeight = (COMPOSITE_WEIGHTS[k] ?? OUTER_ORBITAL_WEIGHTS[k] ?? 0) * (coinBias[k] ?? 1.0)
+  const coinBias = (sym && PER_COIN_INDICATOR_BIAS[sym]) ? PER_COIN_INDICATOR_BIAS[sym] : {};
   const keys = Object.keys(sv);
-  const totalWeight = keys.reduce((s, k) => s + (COMPOSITE_WEIGHTS[k] || 0), 0) || 1;
-  const rawComposite = keys.reduce((s, k) => s + sv[k] * (COMPOSITE_WEIGHTS[k] || 0), 0) / totalWeight;
+  const effW = k => (COMPOSITE_WEIGHTS[k] ?? OUTER_ORBITAL_WEIGHTS[k] ?? 0) * (coinBias[k] ?? 1.0);
+  const totalWeight = keys.reduce((s, k) => s + effW(k), 0) || 1;
+  const rawComposite = keys.reduce((s, k) => s + sv[k] * effW(k), 0) / totalWeight;
   // ADX gate: suppress signal in flat/ranging markets; amplify to realistic confidence range
   const adxGate = adxR.adx < 20 ? Math.max(0.25, adxR.adx / 20) : 1.0;
   const score = clamp(rawComposite * SCORE_AMPLIFIER * adxGate, -1, 1);
@@ -449,7 +836,7 @@ function runBacktest(sym, candles) {
 
     for (let idx = startIdx; idx < candles.length - horizonBars; idx++) {
       const windowCandles = candles.slice(Math.max(0, idx - LIVE_WINDOW + 1), idx + 1);
-      const model = buildSignalModel(windowCandles);
+      const model = buildSignalModel(windowCandles, sym);
       if (!model) continue;
 
       const entry = candles[idx].c;
@@ -463,6 +850,7 @@ function runBacktest(sym, candles) {
         && Math.abs(_directCore) < (filter.entryThreshold + 0.04);
 
       const isActive = model.absScore >= filter.entryThreshold && model.agreement >= filter.minAgreement
+        && !(filter.maxThreshold && model.absScore > filter.maxThreshold)  // mean-reversion cap: extreme signals overshoot
         && !(model.conflict >= 0.38 && model.agreement < filter.minAgreement + 0.08)
         && !(Math.abs(model.coreScore||0) < filter.entryThreshold * 0.92 && model.conflict >= 0.30)
         && !(model.structureZone === 'resistance' && model.coreScore > 0 && model.agreement < 0.65 && Math.abs(model.structureBias||0) >= 0.18)
@@ -605,12 +993,36 @@ async function fetchCoinbaseCandles(sym, limit = 300) {
 }
 
 async function fetchBinanceUSCandles(symbol, limit = 1000) {
-  const url = `https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=5m&limit=${limit}`;
-  const { status, body } = await httpGet(url);
-  if (status !== 200) throw new Error(`Binance.US HTTP ${status}`);
-  const rows = JSON.parse(body);
-  if (!Array.isArray(rows)) throw new Error(`Bad response: ${body.slice(0,100)}`);
-  return rows.map(r => ({ t: Number(r[0]), o: parseFloat(r[1]), h: parseFloat(r[2]), l: parseFloat(r[3]), c: parseFloat(r[4]), v: parseFloat(r[5]) }));
+  const PAGE = 1000;  // Binance max per request
+  if (limit <= PAGE) {
+    const url = `https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=5m&limit=${limit}`;
+    const { status, body } = await httpGet(url);
+    if (status !== 200) throw new Error(`Binance.US HTTP ${status}`);
+    const rows = JSON.parse(body);
+    if (!Array.isArray(rows)) throw new Error(`Bad response: ${body.slice(0,100)}`);
+    return rows.map(r => ({ t: Number(r[0]), o: parseFloat(r[1]), h: parseFloat(r[2]), l: parseFloat(r[3]), c: parseFloat(r[4]), v: parseFloat(r[5]) }));
+  }
+  // Paginate backwards: fetch PAGE candles, then older pages
+  const pages = [];
+  let endTime = null;
+  let remaining = limit;
+  while (remaining > 0) {
+    const fetchCount = Math.min(PAGE, remaining);
+    const url = endTime
+      ? `https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=5m&limit=${fetchCount}&endTime=${endTime}`
+      : `https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=5m&limit=${fetchCount}`;
+    const { status, body } = await httpGet(url);
+    if (status !== 200) throw new Error(`Binance.US HTTP ${status}`);
+    const rows = JSON.parse(body);
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    pages.unshift(rows);  // prepend older data
+    endTime = Number(rows[0][0]) - 1;  // set endTime to just before oldest candle
+    remaining -= rows.length;
+    if (rows.length < fetchCount) break;  // no more data
+    await new Promise(r => setTimeout(r, 150));  // small delay between pages
+  }
+  const all = pages.flat();
+  return all.map(r => ({ t: Number(r[0]), o: parseFloat(r[1]), h: parseFloat(r[2]), l: parseFloat(r[3]), c: parseFloat(r[4]), v: parseFloat(r[5]) }));
 }
 
 async function fetchCandles(coin, limit) {
@@ -704,7 +1116,7 @@ function runDebugChecks(sym, candles, backtestResults) {
   let neutralCount = 0;
   candles.slice(-50).forEach((_, i) => {
     if (i < 26) return;
-    const m = buildSignalModel(candles.slice(0, candles.length - 50 + i + 1));
+    const m = buildSignalModel(candles.slice(0, candles.length - 50 + i + 1), sym);
     if (m && m.absScore < 0.05) neutralCount++;
   });
   if (neutralCount > 25) issues.push(`⚠️  Model outputs near-zero score on ${neutralCount}/50 recent candles — signals may be cancelling out`);

@@ -1,4 +1,4 @@
-﻿// ================================================================
+// ================================================================
 // WE CFM Orchestrator — Application Shell
 // Benchmark feeds via Crypto.com Exchange API (no key required)
 // Supporting flow and wallet data via Blockscout public API
@@ -1434,7 +1434,13 @@
         const _kalshiDir   = ka.kalshiYesPct >= 50 ? 'up' : 'down';
         const _fadeActive  = _modelDir !== 'wait' && _modelDir !== _kalshiDir;
         const _fadeSolid   = _fadeActive && Math.abs(_modelScore) >= 0.20;
-        const _betAction   = _modelDir === 'up' ? 'YES' : _modelDir === 'down' ? 'NO' : null;
+        // betAction: same priority as prediction card — Kalshi certainty → CDF yesPct → raw score
+        const _snapDir     = ka.kalshiYesPct >= 90 ? 'up'
+                           : ka.kalshiYesPct <= 10 ? 'down'
+                           : (ka.modelYesPct ?? 50) >= 58 ? 'up'
+                           : (ka.modelYesPct ?? 50) <= 42 ? 'down'
+                           : _modelDir;
+        const _betAction   = _snapDir === 'up' ? 'YES' : _snapDir === 'down' ? 'NO' : null;
 
         // ── Update Market Divergence tracker for this coin ──────────────────
         const _mdiv = updateMarketDivergence(coin.sym, _modelDir, _kalshiDir, ka.kalshiYesPct, _modelScore);
@@ -1808,6 +1814,18 @@
       entry._strikeDir     = strikeDir    ?? 'above';
       entry._cbSettlePrice = cbSettlePrice ?? null;
       entry._kalshiResult  = kalshiResult  ?? null;  // raw 'yes'/'no'
+      
+      // ── Record trade for adaptive tuning ─────────────────────────
+      if (window._adaptiveTuner && entry.modelScore != null && entry.modelCorrect != null) {
+        window._adaptiveTuner.recordTrade(sym, {
+          score: entry.modelScore,
+          prediction: entry.modelScore > 0 ? 'UP' : 'DOWN',
+          actual: entry.modelCorrect ? 'correct' : 'wrong',
+          correct: entry.modelCorrect === true,
+          fprFlag: entry.modelCorrect === false && Math.abs(entry.modelScore) > 0.25,
+        });
+      }
+      
       saveKalshiLog();
       if (currentView === 'predictions' && predsLoaded) updateAccuracyBadge();
       break;
@@ -1915,7 +1933,7 @@
     if (n >= 1) return '$' + fmt(n, 2);
     if (n >= 0.01) return '$' + fmt(n, 4);
     if (n > 0) return '$' + n.toFixed(8);
-    return '$0.00';
+    return '—';  // price of 0 means unavailable, not truly zero
   }
 
   function fmtPct(n) {
@@ -5878,11 +5896,25 @@
   }
 
   function predictionCard(p) {
-    // ── Model-primary verdict ─────────────────────────────────────────────
-    // Model score drives the direction call. Kalshi odds are displayed as
-    // a secondary overlay — the FADE/CONFIRM banner shows when they disagree.
-    // Kalshi fills in ONLY when the model is neutral (score in ±0.12 band)
-    // AND Kalshi has meaningful edge (≥15pp from 50%).
+    if (!p || !p.sym) {
+      console.warn('[predictionCard] Missing prediction object or sym:', p);
+      return `<div class="pred-card" style="padding:20px 16px;border-left:4px solid var(--color-red,#ff4444)">
+        <div style="font-weight:700;color:var(--color-red,#ff4444);font-size:13px">⚠ Invalid Prediction</div>
+        <div style="font-size:11px;color:var(--color-text-muted,#aaa);margin-top:6px">Prediction object missing sym field</div>
+      </div>`;
+    }
+    if (!Number.isFinite(p.score)) {
+      console.warn('[predictionCard] Missing score for:', p.sym);
+      p.score = 0;
+    }
+    // ── Verdict ──────────────────────────────────────────────────────────────
+    // Priority order:
+    //   1. Kalshi certainty (≥90% / ≤10%) — trust near-certain market consensus, never fade
+    //   2. CDF modelYesPct — P(close ≥ strike): correct metric for binary contracts (not raw score direction)
+    //   3. Raw score direction — fallback when no Kalshi ref is set yet
+    //   4. Kalshi tiebreak — when model is neutral and Kalshi has clear edge
+    // Raw model score (UP/DOWN) = "will price move?" — WRONG basis for binary "close above strike" contracts.
+    // modelYesPct = P(projected target ≥ strike) via normal CDF — this is the RIGHT metric.
     const _k15mCV    = window.PredictionMarkets?.getCoin(p.sym);
     const _k15mV     = _k15mCV?.kalshi15m ?? null;
     const kalshiProb = _k15mV?.probability ?? _k15mCV?.combinedProb ?? null;
@@ -5892,13 +5924,30 @@
     const modelDir  = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'wait';
     const kalshiDir = kalshiProb !== null ? (kalshiProb >= 0.5 ? 'up' : 'down') : null;
 
+    // CDF alignment — P(close ≥ strike); available once Kalshi ref price is set
+    const _kAlignEarly = p.projections?.p15?.kalshiAlign ?? null;
+
     let verdictDir, verdictSource;
-    if (modelDir !== 'wait') {
-      // Model has conviction — it leads
+    if (kalshiProb !== null && kalshiProb >= 0.90) {
+      // ≥90% YES — near-certain; no model edge justifies fading this
+      verdictDir    = 'up';
+      verdictSource = 'kalshi-certain';
+    } else if (kalshiProb !== null && kalshiProb <= 0.10) {
+      // ≤10% YES — near-certain NO; trust the market
+      verdictDir    = 'down';
+      verdictSource = 'kalshi-certain';
+    } else if (_kAlignEarly?.modelYesPct != null) {
+      // Use CDF P(close ≥ strike) — correct for binary contracts
+      const myp = _kAlignEarly.modelYesPct;
+      if      (myp >= 58) { verdictDir = 'up';    verdictSource = 'model-cdf'; }
+      else if (myp <= 42) { verdictDir = 'down';   verdictSource = 'model-cdf'; }
+      else if (kalshiProb !== null && kalshiEdge >= 0.15) { verdictDir = kalshiDir; verdictSource = 'kalshi'; }
+      else                { verdictDir = 'wait';   verdictSource = 'neutral'; }
+    } else if (modelDir !== 'wait') {
+      // No Kalshi ref yet — fall back to raw price direction
       verdictDir    = modelDir;
       verdictSource = 'model';
     } else if (kalshiProb !== null && kalshiEdge >= 0.15) {
-      // Model neutral, but Kalshi has strong edge — use Kalshi as tiebreak
       verdictDir    = kalshiDir;
       verdictSource = 'kalshi';
     } else {
@@ -5906,11 +5955,11 @@
       verdictSource = 'neutral';
     }
 
-    // Fade flags: model calling opposite of Kalshi crowd
+    // Fade flag: raw price direction conflicts with Kalshi crowd (informational only — betAction does NOT use this)
     const _fadeActive = kalshiDir !== null && modelDir !== 'wait' && modelDir !== kalshiDir;
     const _fadeSolid  = _fadeActive && Math.abs(p.score) >= 0.20;
     const _fadeSoft   = _fadeActive && !_fadeSolid;
-    // Bet action: YES = price ≥ strike (UP); NO = price < strike (DOWN)
+    // Bet action derived from verdictDir (Kalshi-certainty and CDF-aware — not raw score direction)
     const _betAction  = verdictDir === 'up' ? 'YES' : verdictDir === 'down' ? 'NO' : null;
     const compositeEdge = 0.75 * Math.abs(p.score) + 0.25 * (kalshiEdge ?? 0);
 
@@ -5932,12 +5981,10 @@
     const _liveKColorCard = _liveKProbCard == null  ? 'var(--color-text-muted)'
                           : _liveKProbCard >= 0.5   ? 'var(--color-green)' : 'var(--color-red)';
 
-    // Session quality badge— London open (UTC 7–12) is consistently worst session (-7-10% WR)
+    // Session badge (informational only — session multipliers removed; all sessions treated equally)
     const _nowUTC = new Date().getUTCHours();
     const isLondonSession = _nowUTC >= 7 && _nowUTC < 12;
-    const londonBadge = isLondonSession
-      ? `<span class="pred-session-warn" title="London open 7–12 UTC historically underperforms by 7–10% win-rate">⚠ London hrs</span>`
-      : '';
+    const londonBadge = '';
 
     // Model calibration notices for problem coins
     const _uncalibrated = { HYPE: 'Limited data — extreme thresholds active', DOGE: 'Meme-coin regime — higher threshold required' };
@@ -6119,7 +6166,12 @@
           </div>
           <div>
             <div class="pred-coin-price">${fmtPrice(p.price)}</div>
-            <div class="pred-coin-src">${p.source} &middot; ${p.candleCount || '?'} x 5m${p.candleCount1m ? ` · ${p.candleCount1m} x 1m` : ''}</div>
+            <div class="pred-coin-src">${p.source === 'error'
+              ? `<span style="color:var(--color-orange,#f90);font-size:9px">⚠ ${p.error ? p.error.slice(0, 50) : 'compute error'} — will retry</span>`
+              : p.source === 'loading'
+                ? `<span style="color:var(--color-text-muted,#888);font-size:9px">⏳ loading candles…</span>`
+                : `${p.source} &middot; ${p.candleCount || '?'} x 5m${p.candleCount1m ? ` · ${p.candleCount1m} x 1m` : ''}`
+            }</div>
           </div>
           <div class="pred-expand-icon">${expanded ? '−' : '+'}</div>
         </div>
@@ -6478,8 +6530,8 @@
             ${ind.bands ? `<div class="ind-item"><span class="ind-name">Bands</span><span class="ind-val ${indClass(ind.bands.signal)}">${ind.bands.label}</span></div>` : ''}
             ${ind.persistence ? `<div class="ind-item"><span class="ind-name">Persistence</span><span class="ind-val ${indClass(ind.persistence.signal)}">${ind.persistence.label}</span></div>` : ''}
             ${ind.structure ? `<div class="ind-item"><span class="ind-name">Structure</span><span class="ind-val ${indClass(ind.structure.signal)}">${ind.structure.label}</span></div>` : ''}
-            ${ind.book ? `<div class="ind-item"><span class="ind-name">Book</span><span class="ind-val ${ind.book.imbalance > 0.2 ? 'bull' : ind.book.imbalance < -0.2 ? 'bear' : 'flat'}">${ind.book.label.split('\u2014')[0]}</span></div>` : ''}
-            ${ind.flow ? `<div class="ind-item"><span class="ind-name">Tape</span><span class="ind-val ${ind.flow.aggressor === 'buyers' ? 'bull' : ind.flow.aggressor === 'sellers' ? 'bear' : 'flat'}">${ind.flow.label.split('(')[0]}</span></div>` : ''}
+            ${ind.book ? `<div class="ind-item"><span class="ind-name">Book</span><span class="ind-val ${ind.book.imbalance > 0.2 ? 'bull' : ind.book.imbalance < -0.2 ? 'bear' : 'flat'}">${(ind.book.label || "—").split('\u2014')[0]}</span></div>` : ''}
+            ${ind.flow ? `<div class="ind-item"><span class="ind-name">Tape</span><span class="ind-val ${ind.flow.aggressor === 'buyers' ? 'bull' : ind.flow.aggressor === 'sellers' ? 'bear' : 'flat'}">${(ind.flow.label || "—").split('(')[0]}</span></div>` : ''}
             ${fastTiming ? `<div class="ind-item"><span class="ind-name">Pooled 1m</span><span class="ind-val ${fastTiming.score > 0.12 ? 'bull' : fastTiming.score < -0.12 ? 'bear' : 'flat'}">${fastTiming.label}</span></div>` : ''}
           </div>
 
@@ -6538,7 +6590,7 @@
         <!-- Footer: always visible -->
         <div class="pred-footer">
           <div>
-            <span class="vol-badge ${p.volatility.label.toLowerCase()}">Vol: ${p.volatility.label} (${p.volatility.atrPct.toFixed(2)}%)</span>
+            <span class="vol-badge ${(p.volatility?.label || 'unknown').toLowerCase()}">Vol: ${p.volatility?.label || 'Unknown'} (${(p.volatility?.atrPct || 0).toFixed(2)}%)</span>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             ${scalpCount > 0 ? `<span style="font-size:9px;padding:2px 5px;background:var(--color-green-dim);color:var(--color-green);border-radius:9999px;font-weight:700">${scalpCount} scalp</span>` : ''}
@@ -7563,7 +7615,7 @@
       <div style="padding:16px;max-width:1400px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
           <span style="font-size:18px;font-weight:800">📋 Contract Log</span>
-          <span style="font-size:11px;color:var(--color-text-muted)">${log.length} contracts · Local + Z:\\WeCrypto-data · localStorage cache</span>
+          <span style="font-size:11px;color:var(--color-text-muted)">${log.length} contracts · All local &amp; cloud drives · localStorage cache</span>
         </div>
         ${statBar}
         <div style="overflow-x:auto">
@@ -7582,16 +7634,16 @@
       </div>`;
   }
 
-  // ── Export contract log to Drive + local ──────────────────────────────────
+  // ── Export contract log to all discovered drives + local ──────────────────
   window._exportContractLog = async function() {
     const log = window._15mResolutionLog || [];
-    const day = new Date().toISOString().slice(0, 10);
     const content = log.map(e => JSON.stringify(e)).join('\n');
-    const paths = [
-      `Z:\\${day}\\contract-export.jsonl`,
-      `W:\\My Drive\\WECRYP0-data\\${day}\\contract-export.jsonl`,
-      `F:\\WECRYP\\data\\${day}\\contract-export.jsonl`,
-    ];
+    // Use DataLogger's discovered paths so we always write everywhere
+    const paths = window.DataLogger?.getWritePaths('contract-export') || [];
+    if (!paths.length) {
+      alert('DataLogger not ready — try again in a moment');
+      return;
+    }
     let written = 0;
     for (const p of paths) {
       try {
@@ -7911,6 +7963,108 @@
   // ── Order Book HUD — initialise after DOM is ready ──────────────
   initOBHud();
 
+  // ── Load Birdeye API Key (Electron IPC) ──────────────────────────
+  (async function loadBirdeyeKey() {
+    try {
+      if (typeof window.desktopApp?.loadBirdeyeApiKey === 'function') {
+        const res = await window.desktopApp.loadBirdeyeApiKey();
+        if (res.success && res.apiKey) {
+          window.BIRDEYE_API_KEY = res.apiKey;
+          console.log('[Birdeye] API key loaded from secrets/BIRDEYE-API-KEY.txt');
+        } else {
+          console.warn('[Birdeye] Failed to load API key:', res.error);
+        }
+      }
+    } catch (err) {
+      console.warn('[Birdeye] Error loading API key:', err.message);
+    }
+  })();
+
+  // ── Initialize Adaptive Tuning Modules ────────────────────────────
+  (function initializeAdaptiveModules() {
+    try {
+      if (typeof AdaptiveTuner !== 'undefined') {
+        window._adaptiveTuner = new AdaptiveTuner();
+        console.log('[App] AdaptiveTuner initialized');
+
+        // Schedule tuning to run every 15 minutes (match trade timeframe)
+        setInterval(async () => {
+          try {
+            const result = await window._adaptiveTuner.runTuningCycle({ validatePyth: true, dryRun: false });
+            if (result.totalAdjustments > 0) {
+              console.log(`[AdaptiveTuner] ${result.totalAdjustments} thresholds adjusted at ${new Date().toLocaleTimeString()}`);
+            }
+          } catch (err) {
+            console.warn('[AdaptiveTuner] Cycle failed:', err.message);
+          }
+        }, 15 * 60 * 1000); // 15 minutes
+
+        console.log('[App] AdaptiveTuner scheduled for every 15 minutes');
+      }
+      if (typeof PythSettlementValidator !== 'undefined') {
+        window._pythSettlementValidator = new PythSettlementValidator();
+        console.log('[App] PythSettlementValidator initialized');
+
+        // Feed Pyth volatility data to adaptive tuner every 60 seconds
+        setInterval(async () => {
+          if (!window._pythSettlementValidator || !window._adaptiveTuner) return;
+          try {
+            const TRACKING_COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
+            for (const sym of TRACKING_COINS) {
+              const priceData = await window._pythSettlementValidator.getCurrentPrice(sym);
+              window._pythSettlementValidator.recordPrice(sym, priceData.price);
+              const vol = window._pythSettlementValidator.getVolatility(sym);
+              window._adaptiveTuner.volatilityRegime[sym] = vol;
+            }
+          } catch (err) {
+            // Silently skip if Pyth API unavailable
+          }
+        }, 60000); // Every 60 seconds
+
+        console.log('[App] PythSettlementValidator tracking volatility every 60s');
+      }
+      if (typeof HolderMetrics !== 'undefined') {
+        window.HolderMetrics.start();
+        console.log('[App] HolderMetrics initialized and auto-refreshing');
+      }
+      // Initialize Panel Data Monitor
+      if (typeof PanelDataMonitor !== 'undefined') {
+        // Register prediction data channel
+        PanelDataMonitor.register(
+          'predictions',
+          async () => window._predictions || {},
+          null,
+          { interval: 10000, critical: true }
+        );
+
+        // Register hourly ranges panel channel
+        if (window.HourlyRanges) {
+          PanelDataMonitor.register(
+            'hourly-ranges',
+            async () => window.HourlyRanges.getAll?.() || [],
+            null,
+            { interval: 30000, critical: false }
+          );
+        }
+
+        // Register hourly kalshi tracker channel
+        if (window.HourlyKalshiTracker) {
+          PanelDataMonitor.register(
+            'kalshi-tracker',
+            async () => window.HourlyKalshiTracker.stats?.() || {},
+            null,
+            { interval: 15000, critical: false }
+          );
+        }
+
+        PanelDataMonitor.start();
+        console.log('[App] PanelDataMonitor initialized');
+      }
+    } catch (err) {
+      console.warn('[App] Failed to initialize adaptive modules:', err.message);
+    }
+  })();
+
   // ── KalshiDebug console API ──────────────────────────────────────
   // Accessible from DevTools console for live inspection.
   window.KalshiDebug = {
@@ -7951,3 +8105,5 @@
   console.log('[KalshiDebug] API ready — KalshiDebug.audit(sym) .orch(sym) .scorecard() .dump(sym)');
 
 })();
+
+

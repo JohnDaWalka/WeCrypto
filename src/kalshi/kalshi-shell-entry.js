@@ -1,12 +1,14 @@
 /**
- * Kalshi 15-Min Entry: Shell-Based Only
- * 
- * Single source of truth: Ionization Shell States
- * 
- * BTC/ETH (7 shells):  -3, -2, -1, 0, +1, +2, +3
- * SOL (5 shells):      -2, -1, 0, +1, +2
- * 
- * Entry rule: If shell reaches ±3 (or ±2 for 5-shell coins), EXECUTE
+ * Kalshi 15-Min Entry: H-Subshell 11-State Model
+ *
+ * Aligned with KalshiEnhancements (kalshi-prediction-enhancements.js).
+ * Uses the full 11-state h-subshell (-5..+5) spin system, not the old 3-shell model.
+ *
+ * Entry thresholds per coin orbital profile:
+ *   core    (BTC/ETH)  — execute at |spin| >= 3  (s-d stable ground state)
+ *   core+   (XRP)      — execute at |spin| >= 3
+ *   momentum(SOL/HYPE) — execute at |spin| >= 2  (outer-shell reactive)
+ *   highBeta(DOGE)     — execute at |spin| >= 3  (noise at ±4/±5, gate tighter)
  */
 
 (function() {
@@ -15,140 +17,118 @@
   window.KalshiShellEntry = window.KalshiShellEntry || {};
 
   /**
-   * Per-coin shell configuration
+   * Per-coin h-subshell entry configuration
+   * spinRange: natural range (-maxSpin..+maxSpin)
+   * entryThreshold: minimum |spin| to trigger execution
+   * confidence map: spin level → base confidence
    */
   const COIN_SHELL_CONFIG = {
     BTC: {
-      shells: 7,
-      maxShell: 3,
-      entryThreshold: 3,      // Execute at Shell ±3
-      confidence_3: 0.95,
-      confidence_2: 0.80,
-      confidence_1: 0.60
+      profile: 'core',
+      spinRange: 5,         // full h-subshell range supported
+      entryThreshold: 3,    // execute at |spin| >= 3
+      confidence: { 5: 0.92, 4: 0.82, 3: 0.72, 2: 0.58, 1: 0.45 },
     },
     ETH: {
-      shells: 7,
-      maxShell: 3,
+      profile: 'core',
+      spinRange: 5,
       entryThreshold: 3,
-      confidence_3: 0.95,
-      confidence_2: 0.80,
-      confidence_1: 0.60
-    },
-    BNB: {
-      shells: 7,
-      maxShell: 3,
-      entryThreshold: 3,
-      confidence_3: 0.95,
-      confidence_2: 0.80,
-      confidence_1: 0.60
+      confidence: { 5: 0.92, 4: 0.82, 3: 0.72, 2: 0.58, 1: 0.45 },
     },
     XRP: {
-      shells: 5,
-      maxShell: 2,
-      entryThreshold: 2,      // Execute at Shell ±2 (no ±3 for 5-shell)
-      confidence_2: 0.90,
-      confidence_1: 0.70
+      profile: 'core_plus',
+      spinRange: 5,
+      entryThreshold: 3,
+      confidence: { 5: 0.90, 4: 0.80, 3: 0.70, 2: 0.60, 1: 0.48 },
     },
     SOL: {
-      shells: 5,
-      maxShell: 2,
-      entryThreshold: 2,
-      confidence_2: 0.90,
-      confidence_1: 0.70
+      profile: 'momentum',
+      spinRange: 5,
+      entryThreshold: 2,    // outer-shell reactive — ±2 is sufficient conviction
+      confidence: { 5: 0.88, 4: 0.78, 3: 0.68, 2: 0.60, 1: 0.50 },
     },
     HYPE: {
-      shells: 7,
-      maxShell: 3,
-      entryThreshold: 3,
-      confidence_3: 0.95,
-      confidence_2: 0.80,
-      confidence_1: 0.60
+      profile: 'momentum',
+      spinRange: 5,
+      entryThreshold: 2,
+      confidence: { 5: 0.88, 4: 0.78, 3: 0.68, 2: 0.60, 1: 0.50 },
     },
     DOGE: {
-      shells: 7,
-      maxShell: 3,
-      entryThreshold: 3,
-      confidence_3: 0.95,
-      confidence_2: 0.80,
-      confidence_1: 0.60
-    }
+      profile: 'highBeta',
+      spinRange: 5,
+      entryThreshold: 3,    // highBeta: ±4/±5 are noisy, still require ±3
+      confidence: { 5: 0.80, 4: 0.72, 3: 0.65, 2: 0.55, 1: 0.44 },
+    },
+    BNB: {
+      profile: 'core_plus',
+      spinRange: 5,
+      entryThreshold: 4,    // disabled-equivalent — needs near-extreme spin
+      confidence: { 5: 0.70, 4: 0.60, 3: 0.50, 2: 0.40, 1: 0.35 },
+    },
   };
 
   /**
-   * Main entry decision: Shell state only
-   * 
-   * @param {string} coin - BTC, ETH, SOL, etc
-   * @param {number} shellState - -3 to +3
-   * @param {number} baseConfidence - from shell model (0-100)
+   * Main entry decision using h-subshell spin state
+   *
+   * @param {string} coin       - BTC, ETH, SOL, etc
+   * @param {number} spinState  - float -5..+5 (from KalshiEnhancements blendedSpin)
+   * @param {number} [baseConf] - optional override base confidence (0-1)
    * @returns {object} decision
    */
-  function makeShellEntry(coin, shellState, baseConfidence) {
-    const cfg = COIN_SHELL_CONFIG[coin];
+  function makeShellEntry(coin, spinState, baseConf) {
+    const cfg = COIN_SHELL_CONFIG[coin.toUpperCase()];
     if (!cfg) {
       return { trade: false, reason: 'unknown_coin' };
     }
 
-    const absShell = Math.abs(shellState);
+    const absSpin = Math.abs(spinState);
+    const spinLevel = Math.min(5, Math.round(absSpin));  // round to nearest integer level
 
-    // Check if shell reached entry threshold
-    if (absShell >= cfg.entryThreshold) {
+    if (absSpin >= cfg.entryThreshold) {
+      const confidence = baseConf != null ? baseConf : (cfg.confidence[spinLevel] ?? 0.50);
       return {
         trade: true,
-        reason: 'shell_threshold_reached',
+        reason: 'spin_threshold_reached',
         coin,
-        shellState,
-        shellCount: cfg.shells,
-        baseConfidence,
+        spinState,
+        spinLevel,
+        profile: cfg.profile,
+        entryThreshold: cfg.entryThreshold,
+        confidence,
         action: {
-          direction: shellState > 0 ? 'YES' : 'NO',
-          quantity: calculateQuantityFromShell(coin, absShell),
-          confidence: baseConfidence
-        }
+          direction: spinState > 0 ? 'YES' : 'NO',
+          quantity: calculateQuantityFromSpin(absSpin),
+          confidence,
+        },
       };
     }
 
-    // Below threshold: don't trade
     return {
       trade: false,
-      reason: 'below_shell_threshold',
+      reason: 'below_spin_threshold',
       coin,
-      shellState,
+      spinState,
+      spinLevel,
       threshold: cfg.entryThreshold,
-      required: cfg.entryThreshold
     };
   }
 
   /**
-   * Position sizing based on shell intensity
-   * Higher shell = higher conviction = larger position
+   * Position sizing based on spin intensity (h-subshell scale 0-5)
+   * 1 → 1 contract | 2 → 2 | 3 → 3 | 4 → 4 | 5 → 5
    */
-  function calculateQuantityFromShell(coin, shellIntensity) {
-    // shellIntensity: 0-3
-    // 0: 1 contract (minimal)
-    // 1: 2 contracts
-    // 2: 3 contracts
-    // 3: 5 contracts (max)
-    const quantities = [1, 2, 3, 5];
-    return quantities[Math.min(3, shellIntensity)] || 1;
+  function calculateQuantityFromSpin(absSpin) {
+    return Math.max(1, Math.min(5, Math.round(absSpin)));
   }
 
-  /**
-   * Validate coin configuration exists
-   */
   function isValidCoin(coin) {
-    return !!COIN_SHELL_CONFIG[coin];
+    return !!COIN_SHELL_CONFIG[coin.toUpperCase()];
   }
 
-  /**
-   * Get shell config for coin
-   */
   function getConfig(coin) {
-    return COIN_SHELL_CONFIG[coin];
+    return COIN_SHELL_CONFIG[coin.toUpperCase()];
   }
 
-  /**
-   * Get all configs
-   */
   function getAllConfigs() {
     return COIN_SHELL_CONFIG;
   }
@@ -156,12 +136,12 @@
   // Export
   window.KalshiShellEntry = {
     makeShellEntry,
-    calculateQuantityFromShell,
+    calculateQuantityFromSpin,
     isValidCoin,
     getConfig,
     getAllConfigs,
-    COIN_SHELL_CONFIG
+    COIN_SHELL_CONFIG,
   };
 
-  console.log('[KalshiShellEntry] Loaded — Shell-based entry framework active');
+  console.log('[KalshiShellEntry] Loaded — H-subshell 11-state entry framework active');
 })();
