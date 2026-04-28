@@ -28,6 +28,7 @@ Thumbs.db
 # Rust/Tauri
 src-tauri/
 cargo-target/
+proxy/target/
 *.rlib
 *.pdb
 
