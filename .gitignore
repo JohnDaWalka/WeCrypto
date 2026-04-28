@@ -58,6 +58,7 @@ data/
 *.bak
 *.tmp
 .tmp.driveupload/
+.tmp.drivedownload/
 
 # Config
 config.toml
