@@ -30,19 +30,7 @@
   const GECKO_ONLY = new Set(['HYPE', 'BNB']);
   const BIN_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
   const MEXC_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
-  
-  // BYBIT PROXY CONFIGURATION (HTTP 451 Bypass)
-  const BYBIT_BASE_DIRECT = 'https://api.bybit.com/v5';
-  const BYBIT_USE_PROXY = process.env.BYBIT_USE_PROXY === 'true';
-  const BYBIT_PROXY_URL = process.env.BYBIT_PROXY_URL || 'https://cors-anywhere.herokuapp.com';
-  
-  function getBybitUrl(path) {
-    if (BYBIT_USE_PROXY) {
-      return `${BYBIT_PROXY_URL}/https://api.bybit.com/v5${path}`;
-    }
-    return `${BYBIT_BASE_DIRECT}${path}`;
-  }
-  
+  const BYBIT_BASE = 'https://api.bybit.com/v5';
   const BYBIT_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
   const KUCOIN_BASE = 'https://api.kucoin.com/api/v1';
   const KUCOIN_SYMS = { BTC: 'BTC-USDT', ETH: 'ETH-USDT', SOL: 'SOL-USDT', XRP: 'XRP-USDT', HYPE: 'HYPE-USDT', DOGE: 'DOGE-USDT', BNB: 'BNB-USDT' };
@@ -875,7 +863,7 @@
     const symbol = BYBIT_SYMS[sym];
     if (!symbol) return [];
     await waitExchangeJitter();
-    const res = await fetchWithTimeout(getBybitUrl(`/market/kline?category=spot&symbol=${symbol}&interval=${bybitInterval(tf)}&limit=${limit}`), 10000);
+    const res = await fetchWithTimeout(`${BYBIT_BASE}/market/kline?category=spot&symbol=${symbol}&interval=${bybitInterval(tf)}&limit=${limit}`, 10000);
     if (!res.ok) return fetchBINCandles(sym, tf === '1m' ? '1m' : tf === '5m' ? '5m' : '15m', limit);
     const json = await res.json();
     if (json.retCode !== 0 || !Array.isArray(json.result?.list)) return fetchBINCandles(sym, tf === '1m' ? '1m' : tf === '5m' ? '5m' : '15m', limit);
@@ -894,7 +882,7 @@
     const symbol = BYBIT_SYMS[sym];
     if (!symbol) return null;
     await waitExchangeJitter();
-    const res = await fetchWithTimeout(getBybitUrl(`/market/orderbook?category=spot&symbol=${symbol}&limit=20`), 7000);
+    const res = await fetchWithTimeout(`${BYBIT_BASE}/market/orderbook?category=spot&symbol=${symbol}&limit=20`, 7000);
     if (!res.ok) return fetchBINBook(sym);
     const json = await res.json();
     if (json.retCode !== 0 || !json.result) return fetchBINBook(sym);
@@ -908,7 +896,7 @@
     const symbol = BYBIT_SYMS[sym];
     if (!symbol) return [];
     await waitExchangeJitter();
-    const res = await fetchWithTimeout(getBybitUrl(`/market/recent-trade?category=spot&symbol=${symbol}&limit=${limit}`), 7000);
+    const res = await fetchWithTimeout(`${BYBIT_BASE}/market/recent-trade?category=spot&symbol=${symbol}&limit=${limit}`, 7000);
     if (!res.ok) return fetchBINTrades(sym, limit);
     const json = await res.json();
     if (json.retCode !== 0 || !Array.isArray(json.result?.list)) return fetchBINTrades(sym, limit);
