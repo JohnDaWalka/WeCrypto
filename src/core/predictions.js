@@ -3034,6 +3034,17 @@
     const mom = closes.length > 6 ? ((closes[closes.length - 1] - closes[closes.length - 7]) / (closes[closes.length - 7] || 1)) * 100 : 0;
     const momSig = clamp(mom / 2, -1, 1);
 
+    // DIAGNOSTIC: RTI dampening analysis for weak coins
+    const isWeakCoin = options.sym && ['HYPE', 'DOGE', 'BNB'].includes(options.sym.toUpperCase());
+    if (isWeakCoin && candles && candles.length > 0) {
+      const rawClose = candles[candles.length - 1].c;
+      const rtiClose = rtiCandles && rtiCandles[rtiCandles.length - 1]?.rtiClose;
+      const dampingPct = rtiClose && rawClose ? Math.abs(rtiClose - rawClose) / rawClose * 100 : 0;
+      if (dampingPct > 0.1) {  // Log significant dampening
+        console.debug(`[RTI-DIAG] ${options.sym}: raw=${rawClose.toFixed(4)} rti=${rtiClose?.toFixed(4) || 'N/A'} damp=${dampingPct.toFixed(2)}% mom=${mom.toFixed(1)}%`);
+      }
+    }
+
     const atr = calcATR(candles);
     const atrPct = lastPrice > 0 ? (atr / lastPrice) * 100 : 0;
     const bands = calcBollinger(closes);
@@ -3293,6 +3304,16 @@
     };
     const driverSummary = summarizeSignalDrivers(signalVector, indicatorsSummary);
     const dir = score > 0.12 ? 'UP' : score < -0.12 ? 'DOWN' : 'FLAT';
+
+    // DIAGNOSTIC: Signal composition analysis for weak coins
+    if (isWeakCoin && Math.abs(score) > 0.20) {  // Interesting signals only
+      const topIndicators = Object.entries(signalVector)
+        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+        .slice(0, 5)
+        .map(([k, v]) => `${k}=${v.toFixed(2)}`);
+      const conf = confidenceFromScore(Math.abs(score));
+      console.debug(`[SIGNAL-COMP] ${options.sym}: score=${score.toFixed(3)} conf=${conf}% dir=${dir} bull=${agreement.bulls}/${agreement.active} top: ${topIndicators.join(' ')}`);
+    }
 
     return {
       price: lastPrice,
