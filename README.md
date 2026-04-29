@@ -1,394 +1,150 @@
+# WeCrypto Kalshi Prediction Markets Audit Site
 
-> **Predictions dashboard for Kalshi UP/DOWN crypto binary contracts**
-> Built on a subatomic orbital model — signal packets orbit each coin's nucleus, weighted by orbital profile, fused into a single EV-optimised trade intent.
-> Includes real-time PYTH momentum exit system and live blockchain wallet intelligence.
+This repository contains a React + Vite site that presents an evidence-first audit of a futures-direction / target-price prediction workflow associated with Kalshi-style prediction contracts.
 
-![Version](https://img.shields.io/badge/version-2.5.0--momentum-blue)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
-![Electron](https://img.shields.io/badge/Electron-37-47848F?logo=electron)
-![Kalshi](https://img.shields.io/badge/exchange-Kalshi-green)
-![Momentum](https://img.shields.io/badge/exit-PYTH%20momentum-orange)
+The site is designed to separate:
+
+- **Raw observations** (total sampled market observations)
+- **Filtered actionable signals** (entries that pass model thresholds)
+- **Directional hit rate** (UP/DOWN prediction correctness)
+- **Live screenshot exhibits** (proof of real contract activity, but not a full ledger export)
 
 ---
 
-## Architecture
+## What this project does
 
-```mermaid
-flowchart TD
-    subgraph feeds["📡 Market Feeds"]
-        A1[Coinbase Exchange]
-        A2[Binance · Kraken]
-        A3[Bybit · KuCoin · MEXC]
-        A4[CoinGecko]
-    end
+The app renders a forensic-style report focused on a narrow question:
 
-    subgraph kalshi["🏛️ Kalshi API"]
-        K1[UP/DOWN 15M markets]
-        K2[floor_strike · yes_pct]
-        K3[liquidity · close_time]
-    end
+> Do filtered predictions clear a realistic contract viability hurdle (modeled as a break-even hit-rate threshold)?
 
-    subgraph engine["⚛️ Orbital Signal Engine"]
-        B[candleCache\nOHLCV ring buffer]
-        C[Technical Indicators\nRSI · EMA · VWAP · OBV · CVD]
-        D[Order Book\nbid/ask imbalance]
-        E[Shell Router\ncross-coin propagation]
-        F[Orbital Router\nper-coin weight profiles]
-        G[buildSignalModel\nscore → modelProbUp]
-    end
+Current report configuration (from `client/src/data/reportData.ts`):
 
-    subgraph momentum["⚡ PYTH Momentum Exit"]
-        ME1[PYTH price samples\n15-sec intervals]
-        ME2[Momentum slope\ncalculation]
-        ME3{Reversal\ndetected?}
-        ME4[Exit position\nbefore expiry]
-    end
+- Break-even hurdle: **54%**
+- Lookback window: **7 days**
+- Candles per coin: **1000**
+- Total observations analyzed: **26,495**
+- Active signals: **5,172**
+- Overall directional hit rate: **33.49%**
 
-    subgraph orchestrator["🎯 Floating Orchestrator"]
-        H[EV Engine\nmodelProbUp vs kalshiYesPrice]
-        I{3-Tier Decision}
-        J["⭐ Tier 1 — Sweet Spot\n3–6 min · payout ≥1.65x"]
-        L["🔄 Tier 2 — Crowd Fade\nlast 90s · crowd ≥80%"]
-        M["🔒 Lock\n45s hold · no flip"]
-        N[Trade Intent\nUP / DOWN / WAIT]
-    end
+---
 
-    feeds -->|OHLCV candles| B
-    B --> C
-    B --> D
-    C --> F
-    D --> F
-    E --> F
-    F --> G
-    kalshi --> G
-    G --> H
-    H --> I
-    I --> J --> N
-    I --> L --> N
-    I --> M --> N
-    N -->|active position| ME1
-    ME1 --> ME2 --> ME3
-    ME3 -- Yes --> ME4
-    ME3 -- No --> ME1
+## Key concepts used in the report
+
+- **Selection ratio**: Percentage of observations that become active signals
+- **Directional hit rate**: Percentage of active predictions that match later direction
+- **Clearance vs 54%**: Hit rate minus the modeled contract hurdle
+- **Confidence/session distributions**: Weighted behavior across confidence buckets and sessions
+
+---
+
+## Evidence model and boundaries
+
+Data is intentionally split into two sources:
+
+1. **Backtest-derived report data** (`client/src/data/reportData.ts`)
+2. **Live screenshot exhibits** (`client/src/data/liveEvidence.ts`)
+
+This keeps interpretation honest:
+
+- Screenshots strengthen the claim that live contracts were taken
+- Screenshots **do not** replace a full audited trade ledger
+- Backtest stats and live exhibits are shown together, but not conflated
+
+---
+
+## Tech stack
+
+- **Frontend**: React 19, TypeScript, Vite 7
+- **UI/Charts**: Tailwind CSS 4, Radix UI, Recharts, Lucide icons
+- **Routing**: Wouter
+- **Server build target**: Express (bundled via esbuild for production)
+- **Package manager**: pnpm
+
+---
+
+## Project structure
+
+```text
+client/
+  src/
+    data/
+      reportData.ts       # Backtest-derived audit dataset shown in UI
+      liveEvidence.ts     # Screenshot-based live evidence claims
+    pages/
+      Home.tsx            # Main audit report page
+scripts/
+  build-report-data.mjs   # Script to transform raw backtest JSON -> reportData.ts
+server/
+  index.ts                # Production server entry
 ```
 
 ---
 
-## Orbital Model
+## Local development
 
-Each coin is assigned an **orbital profile** that weights signal packets before fusion. Based on atomic shell physics — stable nuclei vs reactive outer shells.
-
-| Coin | Profile | Benchmark | Momentum | Timing | Risk Tolerance |
-|------|---------|-----------|----------|--------|----------------|
-| BTC  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
-| ETH  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
-| BNB  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
-| XRP  | `core`      | ×1.10 | ×0.96 | ×0.78 | Conservative |
-| SOL  | `momentum`  | ×0.98 | ×1.08 | ×1.12 | Aggressive   |
-| HYPE | `momentum`  | ×0.98 | ×1.08 | ×1.12 | Aggressive   |
-| DOGE | `highBeta`  | ×0.98 | ×1.10 | ×1.02 | High-Risk    |
-
-**Shell Router** — when one coin's shell ionises (sell threshold crossed), a signal packet propagates to correlated coins after a configured delay. Momentum coins (SOL/HYPE) amplify shell events ×1.12; core coins (BTC/ETH) absorb them quietly at ×0.78.
-
----
-
-## Signal Flow
-
-```mermaid
-flowchart LR
-    subgraph layers["Signal Layers"]
-        L1[Benchmark\nBTC dominance · macro]
-        L2[Trend\nEMA cross · price structure]
-        L3[Momentum\nRSI · rate-of-change]
-        L4[Microstructure\nOBV · CVD · trade flow]
-        L5[Timing\nSession · volatility regime]
-        L6[Derivatives\nfunding · OI]
-        L7[History\nbacktest regime fit]
-    end
-
-    subgraph fusion["Orbital Fusion"]
-        R[Orbital Router\nweight × profile]
-        S[Score  −1 → +1]
-        P[modelProbUp\nclamp 0.02–0.98]
-    end
-
-    subgraph kalshi_ev["EV Calculation"]
-        KP[kalshiYesPrice]
-        EV["EV = modelProbUp − kalshiYesPrice\nedgeCents = EV × 100"]
-        KF[Kelly fraction\ncapped 25%]
-    end
-
-    layers --> R --> S --> P
-    P --> EV
-    KP --> EV
-    EV --> KF
-```
-
----
-
-## 3-Tier Decision Engine
-
-```mermaid
-flowchart TD
-    START([New contract tick]) --> CHK{edgeCents\n≥ 8c?}
-    CHK -- No --> WATCH[WATCH / SKIP]
-    CHK -- Yes --> LOCK{Signal\nlocked 45s?}
-    LOCK -- Yes --> HOLD[🔒 HOLD previous]
-    LOCK -- No --> T1{Tier 1\n3–6 min left\npayout ≥1.65x?}
-    T1 -- Yes --> SWEET[⭐ PRIME ENTRY\nlog sweet-spot alert]
-    T1 -- No --> T2{Tier 2\nlast 90s AND\ncrowd ≥80%?}
-    T2 -- Yes --> FADE[🔄 FADE CROWD\nreverse direction]
-    T2 -- No --> NORMAL[TRADE\nnormal signal]
-    SWEET --> OUT([Trade Intent\nside · direction · confidence · Kelly%])
-    FADE  --> OUT
-    NORMAL --> OUT
-```
-
-| Tier | Trigger | Logic |
-|------|---------|-------|
-| 1 — Sweet Spot | 3–6 min left, payout ≥ 1.65× | Model and Kalshi aligned, good odds, time to fill |
-| 2 — Crowd Fade | Last 90s, crowd ≥ 80% one side | Extreme crowd bias → fade (house pricing is wrong) |
-| Lock | Signal committed | Hold 45s — prevents signal flip in final minutes |
-
----
-
-## Alignment States
-
-| State | Meaning | Action |
-|-------|---------|--------|
-| `ALIGNED` | Model + Kalshi agree direction | Trade if edge ≥ 8¢ |
-| `DIVERGENT` | Model disagrees with Kalshi | Inversion — buy cheap side, house mispriced |
-| `MODEL_LEADS` | Kalshi ~50/50, model has conviction | Trade if edge ≥ 8¢ |
-| `MODEL_ONLY` | No Kalshi data | Trade on model alone |
-| `KALSHI_ONLY` | Model below threshold | Watch only |
-| `SHELL_EVAL` | Shell wall evaluating (3 ticks) | Hold — collecting data |
-
----
-
-## Coins
-
-`BTC · ETH · SOL · XRP · DOGE · BNB · HYPE`
-
-All served by Kalshi 15-minute UP/DOWN binary contracts (`KXBTC15M`, `KXETH15M`, etc.).
-Price feeds: Coinbase Exchange (BTC/ETH/SOL/XRP/DOGE) · CoinGecko (BNB/HYPE).
-
----
-
-## API Routing
-
-```mermaid
-graph LR
-    APP[Electron App]
-
-    subgraph direct["Direct  no proxy"]
-        D1[Kalshi\nelections.kalshi.com]
-        D2[Coinbase Exchange]
-        D3[Binance · Kraken]
-    end
-
-    subgraph proxied["Via local proxy  rate-limited"]
-        P1[CoinGecko]
-        P2[Bybit · OKX]
-        P3[Bitfinex · KuCoin · MEXC]
-    end
-
-    APP -->|Bucket C| direct
-    APP -->|throttledFetch| proxied
-```
-
----
-
-## Backtest Results (Phase 3b — 2026-04-27)
-
-### Latest Calibration (30-day window)
-
-Per-coin signal gate thresholds have been tuned via grid search and aggressive per-coin overrides. Results reflect `--days 30` backtest on Kraken/Binance/Coinbase aggregated feeds.
-
-| Coin | h1m | h5m | h10m | h15m | Signal Count | Status |
-|------|-----|-----|------|------|--------------|--------|
-| **BTC** | 50.0% | 50.4% | 53.6% | **58.7%** | 63 | ✅ Baseline |
-| **ETH** | 36.8% | 40.2% | 48.9% | **60.0%** | 70 | ✅ Strong |
-| **SOL** | 21.0% | 18.2% | 17.6% | **33.3%** | 6 | ⚠️ Recovered |
-| **XRP** | 27.4% | 26.6% | **40.6%** | 52.2% | 46 | ✅ Good |
-| **BNB** | 10.7% | 12.0% | 20.8% | **22.8%** | — | ⚠️ Improving |
-| **DOGE** | 0.0% | 0.0% | 0.0% | 0.0% | 0 | ⏳ Restored* |
-| **HYPE** | 0.0% | 0.0% | 0.0% | 0.0% | 0 | ⏳ Restored* |
-
-**Overall**: **36.2%** accuracy across 640 active signals (640/1766 backtest observations)
-
-*DOGE/HYPE: Signal generation restored in v2.5.0; backtest validation pending (API rate limit blocked 30+ day runs).
-
-### Tuning Details
-
-**Per-coin signal gate overrides** (soft gate thresholds):
-
-```javascript
-const SIGNAL_GATE_OVERRIDES = {
-  BNB: {
-    minAbsScore:   0.50,  // was 0.22 — filter noisy signals
-    minAgreement:  0.65,  // was 0.56 — require strong consensus
-    minConfidence: 55,    // was 42  — higher conviction threshold
-  },
-  SOL: {
-    minAbsScore:   0.30,  // moderate raise — 0.28 killed h15m (0% signals)
-    minAgreement:  0.58,  // slight raise
-    minConfidence: 45,    // slight raise
-  },
-  DOGE: {
-    minAbsScore:   0.28,  // loosened from 0.22 default
-    minAgreement:  0.58,  // same as baseline
-    minConfidence: 42,    // default
-  },
-  HYPE: {
-    minAbsScore:   0.20,  // loosened to restore signals
-    minAgreement:  0.56,  // default
-    minConfidence: 40,    // default
-  },
-};
-```
-
-### Key Findings
-
-1. **Threshold raises improve quality but face diminishing returns**
-   - BNB h15m climbed 18% → 22.8% with aggressive raises
-   - Further raises risk killing all signals (e.g., SOL aggressive raise → 0% h15m)
-   - Suggests structural issue: composite signal fires on disagreement subset, not agreement
-
-2. **Coin-specific calibration essential**
-   - SOL requires moderate thresholds (too tight = no signals; too loose = noisy)
-   - BNB benefits from tighter thresholds (structurally noisier)
-   - XRP/ETH/BTC don't need per-coin overrides (default gate sufficient)
-
-3. **Window sensitivity**
-   - 30-day backtest (3.5 actual days) shows regime-dependent results
-   - 60+ day validation blocked by API rate limiting (Kraken: ~300 candles/call limit)
-   - Need multi-regime confirmation before production deployment
-
-### Deployment Status
-
-**Build**: WECRYPTO-v2.5.0-momentum-portable.exe (86.6 MB)
-- Includes all Phase 3b tuning
-- Unicode encoding fixes for Windows
-- Ready for live trading validation
-
-**Live Validation**: Pending
-- Requires manual trade comparison: backtest signals vs live execution
-- Target: 10–50 live trades to confirm prediction accuracy ≥ 95% parity with backtest
-
----
-
-## Stack
-
-| Layer | Technology |
-|-------|-----------|
-| App shell | Electron 37 — portable `.exe`, no install required |
-| UI renderer | Vanilla JS + Canvas (no framework) |
-| Signal engine | `predictions.js` — RSI, EMA, VWAP, OBV, CVD, order book |
-| Orchestrator | `floating-orchestrator.js` — EV engine, Kelly sizing |
-| Market data | `prediction-markets.js` — Kalshi 15M + 5M feeds |
-| Cross-coin | `shell-router.js` — orbital propagation |
-| **Momentum exit** | **`pyth-momentum-exit.js`** — **PYTH 15-sec slope, reversal detection, auto-exit** |
-| **Kalshi trading** | **`kalshi-ws.js` · `kalshi-worker.js` · `kalshi-rest.js`** — **WS + REST entry/exit** |
-| **Blockchain intel** | **`blockchain-scan.js`** — **live on-chain metrics: BTC/ETH/SOL/XRP/BNB/DOGE/HYPE** |
-| API proxy | `proxy-fetch.js` + `throttled-fetch.js` |
-
----
-
-## Momentum Exit System
-
-PYTH price samples are collected every 15 seconds. A slope is calculated over the last 3 samples. If momentum breaks hard (slope ≤ -1.0) on **2 consecutive samples**, the system exits the open position before the 15-min contract expires — cutting losses on reversals rather than holding to expiry.
-
-**Exit guards:**
-- Skip exit if position is underwater (don't lock in a loss on a noise spike)
-- Require ≥ 0.5% profit minimum before exiting
-- 3-minute timeout if profit never reaches 1%
-- Stop-loss at -3% (severe reversal)
-
----
-
-## Blockchain Wallet Intelligence
-
-Live on-chain metrics polled every 30s for all 7 coins:
-
-| Coin | Source | Metrics |
-|------|--------|---------|
-| BTC | mempool.space | Mempool txs, fee tiers, block height |
-| ETH | Blockscout | Gas, daily txs, total addresses |
-| SOL | Solana RPC | TPS, epoch, slot height |
-| XRP | XRPL Cluster | Ledger index, base fee, server state |
-| BNB | BSC RPC | Gas, block, txs |
-| DOGE | Blockchair | 24h txs, hashrate, difficulty |
-| HYPE | Hyperliquid | Custom metrics |
-
-Signal from wallet intel feeds into the `BEARISH / BULLISH / NEUTRAL` sentiment overlay on each coin card.
-
----
-
-## Build
+### 1) Install dependencies
 
 ```bash
-npm install
-npm run build
-# → dist/WECRYPTO-v2.5.0-momentum-portable.exe   (portable, no install)
-# Previous: dist/WECRYPTO-v2.4.8-portable.exe     (preserved)
+corepack enable
+corepack prepare pnpm@10.4.1 --activate
+pnpm install --frozen-lockfile
 ```
 
-Kill any running instance before rebuilding — the exe locks the output file.
+### 2) Run development server
+
+```bash
+pnpm run dev
+```
+
+### 3) Type-check
+
+```bash
+pnpm run check
+```
+
+### 4) Production build
+
+```bash
+pnpm run build
+```
+
+### 5) Run production bundle
+
+```bash
+pnpm run start
+```
 
 ---
 
-## Deployment
+## Updating the report dataset
 
-### Quick Start
+The transformation script is:
 
-1. **Download** → `dist/WECRYPTO-v2.5.0-momentum-portable.exe` (no installation)
-2. **Run** → Double-click `.exe`
-3. **Configure** → Enter Kalshi API credentials in Settings
-4. **Monitor** → Watch signal feed; trade intent displayed on coin cards
+`scripts/build-report-data.mjs`
 
-### Kalshi API Setup
+It reads a backtest JSON report and writes the processed output to:
 
-1. Create account at [kalshi.com](https://kalshi.com)
-2. Generate API key in Settings → Integrations
-3. Paste into WECRYPTO settings panel
-4. Test connection via `Test Feed` button
+- `client/src/data/reportData.ts`
 
-### Live Trading
+Important notes:
 
-**Signal Flow**:
-- Real-time OHLCV feeds (Coinbase/Binance/Kraken aggregated)
-- Orbital model produces UP/DOWN intent every 5 seconds
-- System compares model probability vs Kalshi crowd odds
-- Trade if EV ≥ 1.65x (Tier 1 Sweet Spot)
-
-**Position Management**:
-- PYTH momentum exit monitors 15-second reversal breakouts
-- Auto-exit on reversal or 3-minute timeout (whichever first)
-- Manual exit available via UI kill switch
-
-**Risk Controls**:
-- Kelly-sized positions (default 1% of account per trade)
-- Daily loss limit configurable in Settings
-- Circuit breaker: pause after 3 losses/hour
-
-### Monitoring
-
-- **Coin Cards**: Real-time signal, sentiment, wallet intel
-- **Trade Log**: Entry, exit, P&L, duration
-- **Metrics**: Win rate, Sharpe, drawdown (updated hourly)
+- The script currently uses hardcoded input/output paths and a fixed break-even rate (`54`)
+- If you run it in a different environment, update those paths first
+- Keep the resulting TypeScript export shape stable so UI components continue to render correctly
 
 ---
 
-## Docs
+## Analytics environment variables
 
-| Doc | Contents |
-|-----|---------|
-| [Architecture](docs/architecture.md) | Full system component map |
-| [Orbital Model](docs/orbital-model.md) | Shell physics, profiles, propagation |
-| [Signal Engine](docs/signal-engine.md) | EV math, Kelly criterion, alignment states |
+`client/index.html` references:
+
+- `VITE_ANALYTICS_ENDPOINT`
+- `VITE_ANALYTICS_WEBSITE_ID`
+
+Set these in your environment for production analytics integration.
 
 ---
 
 ## Disclaimer
 
-Not financial advice. These UP/DOWN calls are algorithmic signals based on market data. Binary contracts carry full risk of loss. Always size positions appropriately and never trade more than you can afford to lose.
+This repository is an audit/reporting interface for prediction-market analysis and evidence presentation. It is **not** financial advice, trading advice, or a guarantee of future performance.
