@@ -3,6 +3,14 @@ const path = require('path');
 const fs   = require('fs');
 const { spawn } = require('child_process');
 
+// Load .env file for environment variables (Bybit proxy, etc.)
+try {
+  const dotenv = require('dotenv');
+  dotenv.config({ path: path.join(__dirname, '..', '.env') });
+} catch (e) {
+  // dotenv not installed, skip silently
+}
+
 // ── Kalshi Worker Bridge ──────────────────────────────────────────────────
 const { startKalshiWorker, stopKalshiWorker } = require('./kalshi-ipc-bridge.js');
 

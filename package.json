@@ -58,5 +58,8 @@
     "@tauri-apps/cli": "^2.10.1",
     "electron": "^37.2.0",
     "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
   }
 }
