@@ -203,9 +203,10 @@
       return { exchange, available: false, reason: 'Not listed' };
     }
     try {
+      const PROXY = 'https://cors-anywhere.herokuapp.com';
       const [tradesRes, fundRes] = await Promise.allSettled([
-        getJson(`https://api.bybit.com/v5/market/recent-trade?category=spot&symbol=${sym}USDT&limit=200`),
-        getJson(`https://api.bybit.com/v5/market/funding/history?category=linear&symbol=${sym}USDT&limit=1`),
+        getJson(`${PROXY}/https://api.bybit.com/v5/market/recent-trade?category=spot&symbol=${sym}USDT&limit=200`),
+        getJson(`${PROXY}/https://api.bybit.com/v5/market/funding/history?category=linear&symbol=${sym}USDT&limit=1`),
       ]);
 
       // Geo-blocked (CloudFront 403) — fall back to Binance global data under Bybit weight slot

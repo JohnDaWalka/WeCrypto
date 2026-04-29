@@ -30,10 +30,10 @@
   const GECKO_ONLY = new Set(['HYPE', 'BNB']);
   const BIN_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
   const MEXC_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
-  const BYBIT_BASE = 'https://api.bybit.com/v5';
-  const BYBIT_USE_PROXY = process.env.BYBIT_USE_PROXY === 'true';
-  const BYBIT_PROXY_URL = process.env.BYBIT_PROXY_URL || 'https://cors-anywhere.herokuapp.com';
-  function getBybitUrl(path) { return BYBIT_USE_PROXY ? `${BYBIT_PROXY_URL}/https://api.bybit.com/v5${path}` : `${BYBIT_BASE}${path}`; }
+  const BYBIT_BASE = 'https://cors-anywhere.herokuapp.com/https://api.bybit.com/v5';
+  const BYBIT_USE_PROXY = true;
+  const BYBIT_PROXY_URL = 'https://cors-anywhere.herokuapp.com';
+  function getBybitUrl(path) { return `${BYBIT_BASE}${path}`; }
   const BYBIT_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
   const KUCOIN_BASE = 'https://api.kucoin.com/api/v1';
   const KUCOIN_SYMS = { BTC: 'BTC-USDT', ETH: 'ETH-USDT', SOL: 'SOL-USDT', XRP: 'XRP-USDT', HYPE: 'HYPE-USDT', DOGE: 'DOGE-USDT', BNB: 'BNB-USDT' };
