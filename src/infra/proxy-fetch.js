@@ -64,6 +64,7 @@
   // hostname → proxy exchange prefix (config.toml keys)
   const HOST_MAP = {
     'api.binance.us':               'binance',
+    'api.binance.com':              'binance',  // Binance spot geoblocked (451)
     'fapi.binance.com':             'binance-f',
     'api.coingecko.com':            'coingecko',
     'api.coinbase.com':             'coinbase',
@@ -186,3 +187,4 @@
   const mode = IS_ELECTRON ? 'Electron (A+B→proxy, C→direct)' : 'browser (all→proxy)';
   console.info(`[WE] proxy-fetch v1.4 — ${mode} — cascade: ${PORT_CASCADE.join(',')}`);
 })();
+

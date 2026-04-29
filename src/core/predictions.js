@@ -30,9 +30,7 @@
   const GECKO_ONLY = new Set(['HYPE', 'BNB']);
   const BIN_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
   const MEXC_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
-  const BYBIT_BASE = 'https://cors-anywhere.herokuapp.com/https://api.bybit.com/v5';
-  const BYBIT_USE_PROXY = true;
-  const BYBIT_PROXY_URL = 'https://cors-anywhere.herokuapp.com';
+  const BYBIT_BASE = 'https://api.bybit.com/v5';
   function getBybitUrl(path) { return `${BYBIT_BASE}${path}`; }
   const BYBIT_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
   const KUCOIN_BASE = 'https://api.kucoin.com/api/v1';
@@ -3041,11 +3039,7 @@
     const isWeakCoin = options.sym && ['HYPE', 'DOGE', 'BNB'].includes(options.sym.toUpperCase());
     if (isWeakCoin && candles && candles.length > 0) {
       const rawClose = candles[candles.length - 1].c;
-      const rtiClose = rtiCandles && rtiCandles[rtiCandles.length - 1]?.rtiClose;
-      const dampingPct = rtiClose && rawClose ? Math.abs(rtiClose - rawClose) / rawClose * 100 : 0;
-      if (dampingPct > 0.1) {  // Log significant dampening
-        console.debug(`[RTI-DIAG] ${options.sym}: raw=${rawClose.toFixed(4)} rti=${rtiClose?.toFixed(4) || 'N/A'} damp=${dampingPct.toFixed(2)}% mom=${mom.toFixed(1)}%`);
-      }
+      // RTI dampening analysis (rtiCandles not currently available in this context)
     }
 
     const atr = calcATR(candles);
