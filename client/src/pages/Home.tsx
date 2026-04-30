@@ -5,6 +5,7 @@
  * make every section reinforce the difference between directional accuracy,
  * selection filtering, live screenshot evidence, and futures-prediction contract viability.
  */
+import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   Camera,
@@ -14,6 +15,8 @@ import {
   Scale,
   ShieldAlert,
   Target,
+  RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Bar,
@@ -29,6 +32,7 @@ import {
 
 import { liveEvidence } from "@/data/liveEvidence";
 import { reportData } from "@/data/reportData";
+import { useLiveMetrics } from "@/hooks/useLiveMetrics";
 
 const pct = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
@@ -204,8 +208,36 @@ function TableSection({
 }
 
 export default function Home() {
+  // Fetch live metrics from Validator15m via IPC
+  const { stats, hitRate, completedCount, loading, error } = useLiveMetrics({
+    pollInterval: 5000, // Query every 5 seconds
+  });
+
+  // Fallback to static report data if live data unavailable
+  const displayHitRate = stats ? stats.hitRate : reportData.summary.overallDirectionalHitRate;
+  const displayCompleted = stats ? stats.total : reportData.summary.totalActiveSignals;
+
   return (
     <main className="audit-page">
+      {/* Live status indicator */}
+      {(stats || loading || error) && (
+        <div className="live-status-banner" style={{
+          background: error ? '#3d2424' : loading ? '#2d3a2d' : '#1a3a2d',
+          padding: '12px 16px',
+          borderBottom: error ? '1px solid #8b4d4d' : loading ? '1px solid #6b8b6b' : '1px solid #4d8b7d',
+          color: error ? '#ff9999' : loading ? '#99ff99' : '#66ffcc',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: '13px',
+        }}>
+          {loading ? <RefreshCw size={16} className="animate-spin" /> : error ? <AlertTriangle size={16} /> : <Orbit size={16} />}
+          <span>
+            {error ? `Live metrics: ${error}` : loading ? 'Connecting to model...' : `Live: ${completedCount} validations, ${pct.format(hitRate)}% hit rate`}
+          </span>
+        </div>
+      )}
+      
       <section className="audit-hero">
         <div className="audit-hero__rail">
           <p className="audit-rail-label">Proof gradient</p>

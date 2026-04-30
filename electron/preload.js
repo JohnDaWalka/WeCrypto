@@ -14,3 +14,11 @@ contextBridge.exposeInMainWorld('dataStore', {
   writeFile:  (filePath, content) => ipcRenderer.invoke('data:writeFile',  filePath, content),
   ensureDir:  (dirPath)           => ipcRenderer.invoke('data:ensureDir',  dirPath),
 });
+
+contextBridge.exposeInMainWorld('auditAPI', {
+  validator: {
+    getStats: ()       => ipcRenderer.invoke('validator:getStats'),
+    getAll: ()         => ipcRenderer.invoke('validator:getAll'),
+    getCoin: (sym)     => ipcRenderer.invoke('validator:getCoin', sym),
+  }
+});

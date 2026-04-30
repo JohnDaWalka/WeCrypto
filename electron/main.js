@@ -279,6 +279,42 @@ ipcMain.handle('storage:getDrives', async () => {
   return found;
 });
 
+// ── IPC: Validator15m (15-min confidence calibration) ────────────────────────
+// Bridge between predictions.js (renderer) and audit-suite
+ipcMain.handle('validator:getStats', async (event) => {
+  try {
+    // Execute in renderer context to access window.Validator15m
+    const stats = await event.sender.executeJavaScript(
+      'window.Validator15m?.getStats() || { total: 0, hitRate: 0, calibration: [] }'
+    );
+    return { success: true, data: stats };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('validator:getAll', async (event) => {
+  try {
+    const validations = await event.sender.executeJavaScript(
+      'window.Validator15m?.getAll() || []'
+    );
+    return { success: true, data: validations };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('validator:getCoin', async (event, sym) => {
+  try {
+    const coinValidations = await event.sender.executeJavaScript(
+      `window.Validator15m?.getAll()?.filter(v => v.sym === '${sym}') || []`
+    );
+    return { success: true, data: coinValidations };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
