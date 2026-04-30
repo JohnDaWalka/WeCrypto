@@ -6,6 +6,7 @@
  * selection filtering, live screenshot evidence, and futures-prediction contract viability.
  */
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import {
   ArrowUpRight,
   Camera,
@@ -17,6 +18,7 @@ import {
   Target,
   RefreshCw,
   AlertTriangle,
+  ChevronRight,
 } from "lucide-react";
 import {
   Bar,
@@ -191,15 +193,25 @@ function TableSection({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.label}>
-                <td>{row.label}</td>
-                <td>{row.selectionRatio}</td>
-                <td>{row.hitRate}</td>
-                <td>{row.clearance}</td>
-                <td>{row.profitFactor}</td>
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const coin = row.label.split(" ")[0];
+              return (
+                <tr key={row.label}>
+                  <td>
+                    <Link href={`/coin/${coin}`} style={{ textDecoration: "none" }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "inherit", cursor: "pointer" }}>
+                        {row.label}
+                        <ChevronRight size={14} style={{ opacity: 0.5 }} />
+                      </span>
+                    </Link>
+                  </td>
+                  <td>{row.selectionRatio}</td>
+                  <td>{row.hitRate}</td>
+                  <td>{row.clearance}</td>
+                  <td>{row.profitFactor}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
