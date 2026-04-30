@@ -1520,6 +1520,50 @@
     return sma;
   }
 
+  // ── RTI (Real-Time Index) Aggregation ────────────────────────────────────────
+  // Aggregates 1m candles into coarser timeframes (5m, 10m, 15m) using weighted averaging.
+  // Recent bars weighted higher to capture intra-candle market direction.
+  // Formula: rtiClose = sum(close[i] * (i+1) / barCount) / sum(1..barCount)
+  function aggregateToRTI(candles1m, barSize = 5) {
+    if (!candles1m || candles1m.length === 0) return [];
+    
+    const rtiCandles = [];
+    for (let i = 0; i < candles1m.length; i += barSize) {
+      const slice = candles1m.slice(i, i + barSize);
+      if (slice.length === 0) continue;
+
+      const barsNeeded = slice.length;
+      const weightSum = (barsNeeded * (barsNeeded + 1)) / 2;
+      
+      // RTI close: weighted average (newer bars = higher weight)
+      const rtiClose = slice.reduce((sum, c, j) => {
+        const weight = (j + 1) / barsNeeded;
+        return sum + c.c * weight;
+      }, 0) / weightSum;
+
+      // OHLCV aggregated normally (except close is RTI-weighted)
+      const rtiBar = {
+        t: slice[0].t,
+        o: slice[0].o,
+        h: Math.max(...slice.map(c => c.h)),
+        l: Math.min(...slice.map(c => c.l)),
+        c: rtiClose,  // RTI-weighted close
+        v: slice.reduce((sum, c) => sum + (c.v || 0), 0),
+      };
+      
+      rtiCandles.push(rtiBar);
+    }
+    
+    return rtiCandles;
+  }
+
+  // Helper: Decide whether to use 1m RTI aggregation or standard 5m candles
+  function shouldUseRTIAggregation(horizonMin, candles1mAvailable) {
+    // Use RTI for short horizons (1-5m) when 1m candles available
+    // Reverts to standard 5m for 10m+ or if 1m data unavailable
+    return horizonMin <= 5 && candles1mAvailable && candles1mAvailable.length >= 30;
+  }
+
   // ── Hull Moving Average ────────────────────────────────────────────────────
   // WMA helper (linearly weighted, most-recent bars get highest weight).
   function calcWMA(data, period) {
@@ -3676,7 +3720,8 @@
     if (!cache || ((!cache.candles || cache.candles.length < 30) && (!cache.candles1m || cache.candles1m.length < 30))) return null;
 
     const walkKey = SHORT_HORIZON_MINUTES.map(horizonMin => {
-      const series = horizonMin <= 10 && cache.candles1m?.length >= 30 ? cache.candles1m : cache.candles;
+      const use1m = shouldUseRTIAggregation(horizonMin, cache.candles1m);
+      const series = use1m ? aggregateToRTI(cache.candles1m, 5) : cache.candles;
       const last = series?.[series.length - 1];
       return `${horizonMin}:${series?.length || 0}:${last?.t || 0}:${Math.round((last?.c || 0) * 10000)}`;
     }).join('|');
@@ -3686,9 +3731,10 @@
     const results = {};
 
     SHORT_HORIZON_MINUTES.forEach(horizonMin => {
-      const candles = horizonMin <= 10 && cache.candles1m?.length >= 30 ? cache.candles1m : cache.candles;
+      const use1m = shouldUseRTIAggregation(horizonMin, cache.candles1m);
+      const candles = use1m ? aggregateToRTI(cache.candles1m, 5) : cache.candles;
       if (!candles || candles.length < 30) return;
-      const barMinutes = inferBarMinutes(candles) || (horizonMin <= 10 ? 1 : 5);
+      const barMinutes = inferBarMinutes(candles) || 5;  // RTI aggregates to 5m
       const horizonBars = Math.max(1, Math.round(horizonMin / barMinutes));
       const startIndex = Math.max(26, horizonBars + 10);
       const observations = [];
