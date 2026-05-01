@@ -141,31 +141,17 @@ const PREDICTION_COINS = [
       'https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/xrp.svg',
     ],
   },
-  {
-    sym: 'HYPE', name: 'Hyperliquid', instrument: 'HYPEUSD', geckoId: 'hyperliquid',
-    color: '#50e3c2', icon: 'H',
-    iconSources: [
-      'https://assets.coingecko.com/coins/images/51116/small/hyperliquid.png',
-      // jsDelivr spothq does not have HYPE — text icon fallback used automatically
-    ],
-  },
-  {
-    sym: 'DOGE', name: 'Dogecoin',    instrument: 'DOGEUSD', geckoId: 'dogecoin',
-    color: '#c2a633', icon: '\u00d0',
-    iconSources: [
-      'https://assets.coingecko.com/coins/images/5/small/dogecoin.png',
-      'https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/doge.svg',
-    ],
-  },
-  {
-    sym: 'BNB',  name: 'BNB',         instrument: 'BNBUSD',  geckoId: 'binancecoin',
-    color: '#f3ba2f', icon: 'B',
-    iconSources: [
-      'https://assets.coingecko.com/coins/images/825/small/bnb-icon2_2x.png',
-      'https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/bnb.svg',
-    ],
-  },
 ];
+
+// ---- AGGRESSIVE 4-COIN FOCUS ────────────────────────────────────────────────
+// Removed HYPE (48% WR, losing money)
+// Removed DOGE (62% WR, but removed for focused model)
+// Removed BNB  (64% WR, but removed for focused model)
+//
+// CORE 4: BTC, ETH, SOL, XRP
+// Rationale: Faster adaptive tuning convergence on fewer strong signals,
+// cleaner weights, higher precision, path to 70%+ win rate.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ---- Market Universe display groups (used by renderUniverse / Periodic Table view) ----
 const UNIVERSE_GROUPS = {
