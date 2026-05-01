@@ -1833,6 +1833,7 @@
         saveKalshiLog();
 
         // ── Record settlement in scorecard aggregator ─────────────────────
+        console.log(`[Settlement] Recording: ${sym} → ${yesResolved ? 'UP' : 'DOWN'} (aggregator=${!!window._aggregator})`);
         if (window._aggregator) {
           try {
             const outcome = yesResolved ? 'UP' : 'DOWN';
@@ -1842,7 +1843,12 @@
               marketCorrect: kEntry.marketCorrect,
               confidence: proxyConfidence,
             });
-          } catch (e) { /* non-critical */ }
+            console.log(`[Settlement] ✓ Recorded ${sym}`);
+          } catch (e) { 
+            console.error(`[Settlement] ✗ Error recording ${sym}:`, e);
+          }
+        } else {
+          console.warn(`[Settlement] Aggregator not available for ${sym}`);
         }
 
         console.log(

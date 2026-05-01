@@ -31,7 +31,67 @@ class ScorecardDataAggregator {
       accuracy: 0,
     };
     
-    console.log('[ScorecardDataAggregator] Initialized');
+    // Load from localStorage on startup
+    this._loadFromCache();
+    
+    console.log(`[ScorecardDataAggregator] Initialized (${this.settlements.length} settlements from cache)`);
+  }
+
+  /**
+   * Load data from localStorage cache
+   */
+  _loadFromCache() {
+    try {
+      const cached = localStorage.getItem('scorecard-data');
+      if (cached) {
+        const data = JSON.parse(cached);
+        this.predictions = data.predictions || [];
+        this.settlements = data.settlements || [];
+        this.errors = data.errors || [];
+        this.correlations = data.correlations || [];
+        this.stats = data.stats || this.stats;
+        console.log(`[Scorecard] Loaded from cache: ${this.settlements.length} settlements, ${this.predictions.length} predictions`);
+      }
+    } catch (e) {
+      console.warn('[Scorecard] Cache load failed:', e.message);
+    }
+  }
+
+  /**
+   * Save data to localStorage cache
+   */
+  _saveToCache() {
+    try {
+      const data = {
+        predictions: this.predictions,
+        settlements: this.settlements,
+        errors: this.errors.slice(-100), // Keep last 100 errors
+        correlations: this.correlations,
+        stats: this.stats,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem('scorecard-data', JSON.stringify(data));
+    } catch (e) {
+      // Silently fail if localStorage is full
+      if (e.name === 'QuotaExceededError') {
+        // Clear oldest 25% of data and retry
+        this.predictions = this.predictions.slice(Math.floor(this.predictions.length * 0.25));
+        this.settlements = this.settlements.slice(Math.floor(this.settlements.length * 0.25));
+        try {
+          const data = {
+            predictions: this.predictions,
+            settlements: this.settlements,
+            errors: this.errors.slice(-50),
+            correlations: this.correlations,
+            stats: this.stats,
+            timestamp: Date.now(),
+          };
+          localStorage.setItem('scorecard-data', JSON.stringify(data));
+        } catch (e2) {
+          console.warn('[Scorecard] Cache save failed even after cleanup:', e2.message);
+        }
+      }
+    }
   }
 
   /**
@@ -60,6 +120,9 @@ class ScorecardDataAggregator {
       this.predictions.shift();
     }
 
+    // Save to cache
+    this._saveToCache();
+    
     return entry.id;
   }
 
@@ -88,6 +151,9 @@ class ScorecardDataAggregator {
 
     // Log to browser console for debugging
     console.warn(`[ScorecardAggregator] ERROR [${coin}] ${errorType}: ${message}`);
+
+    // Save to cache
+    this._saveToCache();
 
     return error.id;
   }
@@ -142,6 +208,11 @@ class ScorecardDataAggregator {
       this.settlements.shift();
     }
 
+    this.stats.settlementsTotal++;
+
+    // Save to cache
+    this._saveToCache();
+
     return settlement.id;
   }
 
@@ -157,6 +228,10 @@ class ScorecardDataAggregator {
     };
 
     this.backtests.push(entry);
+    
+    // Save to cache
+    this._saveToCache();
+    
     return entry.id;
   }
 
