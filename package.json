@@ -1,6 +1,6 @@
 {
   "name": "we-cfm-orchestrator",
-  "version": "2.13.1-scorecard-persistence",
+  "version": "2.13.5-SOL-Tier1+2-onchain",
   "private": true,
   "description": "WalkerEnterprise CFM benchmark orchestration engine",
   "main": "electron/main.js",
