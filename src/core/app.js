@@ -135,6 +135,16 @@
     if (window._kalshiErrors.length > 100) window._kalshiErrors.shift();
     saveKalshiErrors();
     console.error(`[KalshiError] ${type} | ${sym}`, entry);
+
+    // ── Record error in scorecard aggregator ───────────────────────────────────
+    if (window._aggregator) {
+      try {
+        window._aggregator.recordError(sym, type, JSON.stringify(data), {
+          originalData: data,
+          kalshiError: true,
+        });
+      } catch (e) { /* non-critical */ }
+    }
   }
 
   // ── Clock-aligned quarter-hour scheduler ─────────────────────────────────
@@ -1511,7 +1521,27 @@
 
     PREDICTION_COINS.forEach(coin => {
       const p = preds[coin.sym];
-      if (!p || !p.price) return;
+      
+      // ── Record missing or disabled prediction as error ─────────────────────
+      if (!p || !p.price) {
+        if (window._aggregator) {
+          try {
+            const reason = !p ? 'NO_PREDICTION' : 'NO_PRICE_DATA';
+            window._aggregator.recordError(coin.sym, reason, reason, { prediction: p });
+          } catch (e) { /* non-critical */ }
+        }
+        return;
+      }
+
+      if (p.disabled) {
+        if (window._aggregator) {
+          try {
+            window._aggregator.recordError(coin.sym, 'SIGNAL_DISABLED', p.disabledReason || 'Signal disabled', { prediction: p });
+          } catch (e) { /* non-critical */ }
+        }
+        return;
+      }
+
       const rawDir = p.signal === 'strong_bull' || p.signal === 'bullish' ? 'UP'
                    : p.signal === 'strong_bear' || p.signal === 'bearish' ? 'DOWN'
                    : 'FLAT';
@@ -1563,6 +1593,16 @@
         direction: dir, price: p.price, signal: p.signal, ts: nowMs,
         rawDir, flipStreak: lock.flipStreak, bucketTs: currentBucket,
       };
+
+      // ── Record prediction in scorecard aggregator ───────────────────────
+      if (window._aggregator) {
+        try {
+          const confidence = (p.confidence ?? 0) * 100; // Convert to 0-100 scale
+          const signals = p.signal || {};
+          window._aggregator.recordPrediction(coin.sym, dir, confidence, signals);
+        } catch (e) { /* non-critical */ }
+      }
+
       // Snapshot Kalshi alignment state so we can evaluate outcome on bucket close
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
@@ -1834,6 +1874,20 @@
         window._kalshiLog.push(kEntry);
         if (window._kalshiLog.length > 500) window._kalshiLog.shift();
         saveKalshiLog();
+
+        // ── Record settlement in scorecard aggregator ─────────────────────
+        if (window._aggregator) {
+          try {
+            const outcome = yesResolved ? 'UP' : 'DOWN';
+            window._aggregator.recordSettlement(sym, 'kalshi', outcome, Date.now(), {
+              strikeType: strikeDir,
+              modelCorrect: kEntry.modelCorrect,
+              marketCorrect: kEntry.marketCorrect,
+              confidence: proxyConfidence,
+            });
+          } catch (e) { /* non-critical */ }
+        }
+
         console.log(
           `[KalshiTracker] ${sym} strike=${strikeDir} ref=${refPrice} close=${bucket.c.toFixed(4)} ` +
           `→ ${yesResolved ? 'YES ✓' : 'NO'} gap=${refDiffPct.toFixed(4)}% conf=${proxyConfidence} ` +
