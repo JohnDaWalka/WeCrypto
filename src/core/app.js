@@ -1281,6 +1281,102 @@
   // Start polling on app init
   startKalshiPolling();
 
+  // ── Historical Settlement Fetcher & Adaptive Learning (30-second cycle) ────
+  let historicalPollTimer = null;
+  let settledFetcher = null;
+  let learningEngine = null;
+
+  function initHistoricalLearning() {
+    if (!settledFetcher && typeof HistoricalSettlementFetcher !== 'undefined') {
+      settledFetcher = new HistoricalSettlementFetcher();
+      console.log('[App] HistoricalSettlementFetcher initialized');
+    }
+    if (!learningEngine && typeof AdaptiveLearningEngine !== 'undefined') {
+      learningEngine = new AdaptiveLearningEngine();
+      console.log('[App] AdaptiveLearningEngine initialized');
+    }
+  }
+
+  function startHistoricalPolling() {
+    if (historicalPollTimer) return; // already running
+    
+    initHistoricalLearning();
+    
+    historicalPollTimer = setInterval(async () => {
+      try {
+        if (!settledFetcher || !learningEngine) {
+          initHistoricalLearning();
+          return;
+        }
+
+        // Fetch settled contracts from historical market data
+        const { settled, errors } = await settledFetcher.fetchSettledContracts();
+        
+        if (settled && settled.length > 0) {
+          console.log(`[Historical] Fetched ${settled.length} settled contracts`);
+          
+          // Record outcomes for learning engine
+          for (const contract of settled) {
+            if (contract.symbol && contract.result) {
+              // Simulate prediction from model at contract open time
+              const prediction = await getPredictionForCoin(contract.symbol, contract.openTime);
+              
+              if (prediction) {
+                learningEngine.recordSignalContribution(
+                  contract.symbol,
+                  prediction.signals, // { RSI, MACD, CCI, ... }
+                  prediction.weights, // { RSI: 1.2, MACD: 0.9, ... }
+                  contract.result === 'YES' ? 'UP' : 'DOWN'
+                );
+              }
+            }
+          }
+          
+          // Auto-tune weights every 2 minutes if enough samples
+          const shouldTune = Date.now() % 120000 < 30000; // tune every 2 min window
+          if (shouldTune) {
+            const tuned = learningEngine.autoTuneWeights();
+            if (tuned && Object.keys(tuned).length > 0) {
+              console.log('[Learning] Weights auto-tuned:', tuned);
+              // TODO: Apply new weights to PredictionEngine
+            }
+          }
+          
+          // Display scorecard
+          const scorecard = learningEngine.getAccuracyReport();
+          window._accuracyScorecard = scorecard;
+          console.log('[Accuracy]', scorecard);
+        }
+        
+        if (errors && errors.length > 0) {
+          console.warn('[Historical] Fetch errors:', errors);
+        }
+      } catch (err) {
+        console.error('[Historical] Polling error:', err.message);
+      }
+    }, 30000); // poll every 30 seconds
+  }
+
+  function stopHistoricalPolling() {
+    if (historicalPollTimer) {
+      clearInterval(historicalPollTimer);
+      historicalPollTimer = null;
+    }
+  }
+
+  // Helper: get prediction for a coin at a specific time (stub for now)
+  async function getPredictionForCoin(symbol, timestamp) {
+    if (!window.PredictionEngine) return null;
+    try {
+      return window.PredictionEngine.predict(symbol);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  // Start historical learning on app init
+  startHistoricalPolling();
+
   function syncPredictionRefresh() {
     const shouldRun = (['predictions', 'cfm', 'universe'].includes(currentView)) && window.PredictionEngine;
     if (shouldRun && !predictionRefreshHandle) {
