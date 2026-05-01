@@ -7,10 +7,10 @@
   'use strict';
 
   const CACHE_TARGETS = [
-    // Primary: D: drive (local, high speed)
-    { path: 'D:\\WE-CRYPTO-Cache', priority: 1, name: 'D: Local' },
-    // Secondary: F: drive (external, high capacity)
-    { path: 'F:\\WE-CRYPTO-Cache', priority: 2, name: 'F: External' },
+    // Primary: D: drive (dev environment, user preference)
+    { path: 'D:\\WE-CRYPTO-Cache', priority: 1, name: 'D: Dev (PRIMARY)' },
+    // Secondary: F: drive (external, backup)
+    { path: 'F:\\WE-CRYPTO-Cache', priority: 2, name: 'F: Backup' },
     // Tertiary: Z: drive (network share, unlimited)
     { path: 'Z:\\My Drive\\WE-CRYPTO-Cache', priority: 3, name: 'Z: Network' },
   ];
@@ -28,7 +28,8 @@
     }
 
     init() {
-      console.log('[StorageOptimizer] Initializing — targeting D:/, F:/, Z: drives only');
+      console.log('[StorageOptimizer] Initializing — targeting D:/ (PRIMARY DEV), F:/, Z: drives only');
+      console.log('[StorageOptimizer] C:/ excluded (OS only). D:/ is primary per user env config.');
       this.loadFromCache();
       this.startSyncTimer();
     }
@@ -138,12 +139,12 @@
       // This is a placeholder for potential future integration with file system APIs
       // For now, reliance on localStorage + Electron's native file system access
       
-      console.log('[StorageOptimizer] External sync tick (60s) — would write to D:/, F:/, Z:/ if FS API available');
+      console.log('[StorageOptimizer] External sync tick (60s) — would write to D:/ (PRIMARY) if FS API available');
       
       // Future: If Electron/Tauri file system available, write to:
-      // - D:\WE-CRYPTO-Cache\predictions.json
-      // - D:\WE-CRYPTO-Cache\settlements.json
-      // - With fallback to F:\ and Z:\
+      // - D:\WE-CRYPTO-Cache\predictions.json (PRIMARY per env config)
+      // - F:\WE-CRYPTO-Cache\predictions.json (backup)
+      // - Z:\My Drive\WE-CRYPTO-Cache\predictions.json (network fallback)
     }
 
     // Public API
@@ -154,7 +155,7 @@
         errors: this.errors.length,
         localStorageUsage: new Blob([localStorage.getItem('storage_optimizer_cache')]).size,
         targets: CACHE_TARGETS.map(t => t.name),
-        note: 'C: drive excluded — using D:/, F:/, Z: only'
+        note: 'C: drive excluded (OS only). D:/ primary per env config. Fallback: F:/, Z:/'
       };
     }
 
