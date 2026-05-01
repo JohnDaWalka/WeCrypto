@@ -2088,6 +2088,49 @@
     }
   });
 
+  // Load historical Kalshi contracts from window._kalshiLog into contract cache on startup
+  function loadKalshiHistoricalContracts() {
+    if (!window._kalshiLog || !Array.isArray(window._kalshiLog)) return;
+    const seen = new Set();
+    let loaded = 0;
+    
+    window._kalshiLog.forEach(contract => {
+      // Deduplicate by sym + resolved_at
+      const key = `${contract.sym}|${contract.resolved_at}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        // Only add settled contracts (those with outcome)
+        if (contract.outcome && contract._settled) {
+          // Ensure contractCache exists
+          if (!window.contractCache) window.contractCache = [];
+          
+          window.contractCache.push({
+            sym: contract.sym,
+            direction: contract.direction,
+            confidence: contract.confidence,
+            settlement_price: contract.settlement_price,
+            market_status: contract.market_status,
+            resolved_price: contract.resolved_price,
+            created_at: contract.created_at,
+            resolved_at: contract.resolved_at,
+            outcome: contract.outcome,
+            modelCorrect: contract.modelCorrect,
+            marketCorrect: contract.marketCorrect,
+            fadeCorrect: contract.fadeCorrect
+          });
+          loaded++;
+        }
+      }
+    });
+    
+    if (loaded > 0) {
+      console.log(`✅ [KalshiHistoricalLoader] Loaded ${loaded} historical contracts from _kalshiLog`);
+    }
+  }
+
+  // Call on startup after Kalshi log is loaded
+  loadKalshiHistoricalContracts();
+
   function updateAccuracyBadge() {
     const stats = getPredAccuracy(null, 50);
     const el = document.getElementById('pred-accuracy-badge');
@@ -7929,20 +7972,6 @@
       switch (currentView) {
         case 'markets':    renderMarkets(); break;
         case 'markets5m':  renderMarkets5M(); break;
-        case 'hourly-ranges':
-          console.log('[APP] Switching to hourly-ranges view');
-          (async () => {
-            try {
-              console.log('[APP] Loading hourly ranges...');
-              await window.HourlyRangesPanel?.load?.();
-              console.log('[APP] Rendering hourly ranges...');
-              window.HourlyRangesPanel?.render?.();
-              console.log('[APP] Hourly ranges rendered successfully');
-            } catch (e) {
-              console.error('[APP] ERROR rendering hourly-ranges:', e);
-            }
-          })();
-          break;
         case 'debuglog':   renderDebugLog();  break;
         case 'portfolio': renderPortfolio(); break;
         case 'charts':    renderCharts(); break;
@@ -8104,7 +8133,7 @@
           </span>
         </div>
         <div style="background:rgba(100,200,100,0.08);border:1px solid rgba(100,200,100,0.2);border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:11px;color:var(--color-text-muted)">
-          <strong>📂 Storage Locations:</strong> Z:\ (network) | D:\ (local) | F:\ (backup) | C:\Users\user\AppData\Local\WE-CRYPTO-CACHE (local cache) | OneDrive (cloud) | localStorage (browser)
+          <strong>📂 Storage Locations:</strong> Z:\\ (network) | D:\\ (local) | F:\\ (backup) | C:\\Users\\user\\AppData\\Local\\WE-CRYPTO-CACHE (local cache) | OneDrive (cloud) | localStorage (browser)
           <br><strong>Data Sources:</strong> runtime (in-memory), kalshi (Kalshi API), cache (multi-drive), localStorage (browser storage)
         </div>
         ${statBar}
@@ -8525,16 +8554,6 @@
           null,
           { interval: 10000, critical: true }
         );
-
-        // Register hourly ranges panel channel
-        if (window.HourlyRanges) {
-          PanelDataMonitor.register(
-            'hourly-ranges',
-            async () => window.HourlyRanges.getAll?.() || [],
-            null,
-            { interval: 30000, critical: false }
-          );
-        }
 
         // Register hourly kalshi tracker channel
         if (window.HourlyKalshiTracker) {
