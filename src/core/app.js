@@ -8498,19 +8498,43 @@
     scorecard: ()  => {
       const out = {};
       (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).forEach(c => {
-        const e = (window._kalshiLog||[]).filter(x=>x.sym===c.sym&&x._settled);
-        if (!e.length) { out[c.sym] = { n:0 }; return; }
-        const mOk = e.filter(x=>x.modelCorrect===true).length;
-        const fE  = e.filter(x=>x.fadeActive&&x.fadeCorrect!==null);
+        // Check BOTH _kalshiLog AND multi-drive cache
+        const kalshiSettlements = (window._kalshiLog||[]).filter(x=>x.sym===c.sym&&x._settled);
+        const cacheSettlements = window.MultiDriveCache?.data?.settlements?.filter(s => s.coin === c.sym) || [];
+        
+        const allSettlements = [...kalshiSettlements, ...cacheSettlements];
+        
+        if (!allSettlements.length) { 
+          out[c.sym] = { n:0, source: 'none' }; 
+          return; 
+        }
+        
+        // Count correct predictions from both sources
+        const mOk = allSettlements.filter(x => {
+          // Check modelCorrect from Kalshi log or cache settlement
+          return x.modelCorrect === true || (x.modelCorrect !== false && x.modelCorrect !== null);
+        }).length;
+        
+        const fE  = kalshiSettlements.filter(x=>x.fadeActive&&x.fadeCorrect!==null);
         const fOk = fE.filter(x=>x.fadeCorrect===true).length;
+        
         out[c.sym] = {
-          n: e.length,
-          modelPct: Math.round(mOk/e.length*100),
+          n: allSettlements.length,
+          kalshiN: kalshiSettlements.length,
+          cacheN: cacheSettlements.length,
+          modelPct: Math.round(mOk/allSettlements.length*100),
           fadePct:  fE.length ? Math.round(fOk/fE.length*100) : null,
           fadeN:    fE.length,
+          source: 'kalshi+cache'
         };
       });
       return out;
+    },
+    cacheStatus: () => {
+      // Show comprehensive cache status
+      const status = window.MultiDriveCache?.getStatus?.() ?? {};
+      const accuracy = window.MultiDriveCache?.getAccuracyByCoins?.() ?? {};
+      return { status, accuracy };
     },
     missedOpps: () => window.MarketResolver?.getMissedOpps?.() ?? [],
     clearOrch:  () => { window._orchLog = []; saveOrchLog(); console.log('[KalshiDebug] _orchLog cleared'); },
@@ -8519,9 +8543,14 @@
       log:      (window._kalshiLog||[]).filter(e=>e.sym===sym).slice(-5),
       orch:     (window._orchLog||[]).filter(e=>e.sym===sym).slice(-5),
       resolved: (window._15mResolutionLog||[]).filter(e=>e.sym===sym).slice(-3),
+      cache: {
+        predictions: window.MultiDriveCache?.data?.predictions?.filter(p => p.coin === sym).slice(-5) || [],
+        settlements: window.MultiDriveCache?.data?.settlements?.filter(s => s.coin === sym).slice(-5) || [],
+        errors: window.MultiDriveCache?.data?.errors?.filter(e => e.context?.sym === sym).slice(-3) || []
+      }
     }),
   };
-  console.log('[KalshiDebug] API ready — KalshiDebug.audit(sym) .orch(sym) .scorecard() .dump(sym)');
+  console.log('[KalshiDebug] API ready — KalshiDebug.audit(sym) .orch(sym) .scorecard() .cacheStatus() .dump(sym)');
 
   // ── ContractCacheDebug console API (NEW) ─────────────────────────────
   window.ContractCacheDebug = {
