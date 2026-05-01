@@ -119,6 +119,21 @@
     }
   })();
 
+  // ── Initialize 2-Hour Contract Cache (NEW) ──────────────────────────────
+  (function initContractCache() {
+    try {
+      if (typeof ContractCacheManager !== 'undefined') {
+        window._contractCache = new ContractCacheManager({
+          maxAgeMs: 2 * 60 * 60 * 1000,  // 2 hours
+          archiveThresholdMs: 2.5 * 60 * 60 * 1000  // 2.5 hours
+        });
+        console.log('[ContractCache] Initialized with 2-hour sliding window');
+      }
+    } catch (e) {
+      console.warn('[ContractCache] Failed to initialize:', e.message);
+    }
+  })();
+
   function savePredLog()      { try { localStorage.setItem(PRED_LOG_STORE,    JSON.stringify(window._predLog.slice(-200)));       } catch(e) {} }
   function saveKalshiLog()    { try { localStorage.setItem(KALSHI_LOG_STORE,  JSON.stringify(window._kalshiLog.slice(-500)));     } catch(e) {} }
   function saveLastPred()     { try { localStorage.setItem(LAST_PRED_STORE,   JSON.stringify(window._lastPrediction));            } catch(e) {} }
@@ -142,6 +157,16 @@
         window._aggregator.recordError(sym, type, JSON.stringify(data), {
           originalData: data,
           kalshiError: true,
+        });
+      } catch (e) { /* non-critical */ }
+    }
+
+    // ── Record error in 2-hour contract cache (NEW) ─────────────────────────
+    if (window._contractCache) {
+      try {
+        window._contractCache.recordError(type, `${sym}: ${data.message || JSON.stringify(data)}`, {
+          sym,
+          originalData: data
         });
       } catch (e) { /* non-critical */ }
     }
@@ -1603,6 +1628,17 @@
         } catch (e) { /* non-critical */ }
       }
 
+      // ── Record prediction in 2-hour contract cache (NEW) ─────────────────
+      if (window._contractCache) {
+        try {
+          const confidence = (p.confidence ?? 0) * 100;
+          const signals = p.signal || {};
+          window._contractCache.recordPrediction(coin.sym, dir, confidence, signals);
+        } catch (e) {
+          console.warn('[ContractCache] Prediction record error:', e.message);
+        }
+      }
+
       // Snapshot Kalshi alignment state so we can evaluate outcome on bucket close
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
@@ -1892,6 +1928,22 @@
           }
         } else {
           console.warn(`[Settlement] Aggregator not available for ${sym}`);
+        }
+
+        // ── Record settlement in 2-hour contract cache (NEW) ──────────────
+        if (window._contractCache) {
+          try {
+            const outcome = yesResolved ? 'UP' : 'DOWN';
+            window._contractCache.recordSettlement(
+              sym,
+              outcome,
+              kEntry.modelCorrect,
+              kEntry.marketCorrect
+            );
+            console.log(`[ContractCache] ✓ Settlement recorded ${sym}`);
+          } catch (e) {
+            console.error(`[ContractCache] ✗ Settlement error ${sym}:`, e.message);
+          }
         }
 
         console.log(
@@ -8465,6 +8517,34 @@
     }),
   };
   console.log('[KalshiDebug] API ready — KalshiDebug.audit(sym) .orch(sym) .scorecard() .dump(sym)');
+
+  // ── ContractCacheDebug console API (NEW) ─────────────────────────────
+  window.ContractCacheDebug = {
+    status:   ()  => window._contractCache?.getStatus?.() ?? { error: 'Cache not initialized' },
+    accuracy: ()  => window._contractCache?.getAllAccuracy?.() ?? null,
+    byCoins:  ()  => {
+      const coins = new Set((window._contractCache?.predictions || []).map(p => p.coin));
+      const result = {};
+      for (const coin of coins) {
+        result[coin] = window._contractCache?.getCoinAccuracy?.(coin) ?? null;
+      }
+      return result;
+    },
+    recent:   (minutes = 60) => ({
+      predictions: window._contractCache?.getRecentPredictions?.(null, minutes) ?? [],
+      settlements: window._contractCache?.getRecentSettlements?.(null, minutes) ?? [],
+      errors: window._contractCache?.getRecentErrors?.(null, minutes) ?? []
+    }),
+    errors:   (type = null) => window._contractCache?.getRecentErrors?.(type, 120) ?? [],
+    print:    ()  => window._contractCache?.printReport?.() ?? console.log('Cache not initialized'),
+    export:   ()  => window._contractCache?.exportJSON?.() ?? null,
+    exportCSV: () => window._contractCache?.exportCSV?.() ?? null,
+    clear:    ()  => {
+      localStorage.removeItem('contract-cache-2h');
+      console.log('[ContractCacheDebug] Cleared cache from localStorage');
+    }
+  };
+  console.log('[ContractCacheDebug] API ready — ContractCacheDebug.status() .accuracy() .byCoins() .recent(minutes)');
 
 })();
 
