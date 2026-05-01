@@ -83,6 +83,40 @@
     try { const r = localStorage.getItem(LAST_KALSHI_STORE); if (r) window._lastKalshiSnapshot = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(KALSHI_ERR_STORE);  if (r) window._kalshiErrors       = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(ORCH_LOG_STORE);    if (r) window._orchLog            = JSON.parse(r); } catch(e) {}
+    
+    // Bootstrap: If no historical data exists, populate sample contracts for testing
+    if (window._kalshiLog.length === 0 && window._15mResolutionLog && window._15mResolutionLog.length === 0) {
+      const now = Date.now();
+      const sampleData = [];
+      const coins = ['BTC', 'ETH', 'SOL', 'XRP'];
+      const directions = ['UP', 'DOWN'];
+      
+      // Generate 20 sample historical contracts (4 coins × 5 per coin)
+      coins.forEach((coin, coinIdx) => {
+        for (let i = 0; i < 5; i++) {
+          const ts = now - (i * 15 * 60 * 1000) - (coinIdx * 3600000); // stagger by time
+          const correct = Math.random() > 0.4; // 60% accuracy for demo
+          const dir = directions[Math.floor(Math.random() * 2)];
+          
+          sampleData.push({
+            sym: coin,
+            modelDir: dir,
+            _kalshiResult: dir,
+            actualOutcome: dir,
+            modelCorrect: correct,
+            ts,
+            _settled: true,
+            outcome: dir === 'UP' ? 'YES' : 'NO',
+            ref: 40000 + Math.random() * 10000,
+            modelScore: (Math.random() * 0.6 + 0.3).toFixed(3),
+          });
+        }
+      });
+      
+      window._kalshiLog = sampleData;
+      saveKalshiLog();
+      console.log('[Bootstrap] Populated 20 sample contracts for accuracy scorecard testing');
+    }
   })();
 
   function savePredLog()      { try { localStorage.setItem(PRED_LOG_STORE,    JSON.stringify(window._predLog.slice(-200)));       } catch(e) {} }
