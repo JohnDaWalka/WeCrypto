@@ -3377,7 +3377,39 @@
       return aligns ? (1 + strength * maxEffect) : (1 - strength * maxEffect * 0.65);
     })();
     const _sessMult = 1.0; // session multipliers removed — crypto is 24/7
-    const score = clamp(rawComposite * 1.6 * adxGate * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult, -1, 1);
+    let score = clamp(rawComposite * 1.6 * adxGate * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult, -1, 1);
+
+    // ── TIER 2 INTEGRATION: Solana On-Chain Metrics (Network Health Boost) ──
+    // Apply confidence multiplier + directional whale signal for SOL
+    if (options.sym?.toUpperCase() === 'SOL' && typeof window !== 'undefined' && window.SolanaOnChainMetrics) {
+      try {
+        const metrics = window.SolanaOnChainMetrics.getMetrics();
+        const confMult = metrics.signals.confidenceMultiplier || 1.0;  // 0.7-1.5x
+        const whaleSignal = metrics.signals.whaleSignal || 0;          // -0.6 to +0.6
+
+        // Confidence multiplier boosts conviction when network is healthy
+        // Only apply if it increases confidence (> 1.0), suppress uncertainty
+        if (confMult > 1.0) {
+          score = score * confMult;  // Boost strong signals, reduce weak ones
+        }
+
+        // Whale directional signal added at 0.12 weight
+        // Only inject if whale flow detected (buyPressure > 50k)
+        if (whaleSignal !== 0) {
+          const whaleWeight = 0.12;
+          score = clamp(score + whaleSignal * whaleWeight, -1, 1);
+        }
+
+        // Diagnostics
+        if (Math.abs(score) > 0.25) {
+          console.debug(`[TIER2-SOL] TPS=${metrics.tps.value} health=${metrics.tps.health} confMult=${confMult.toFixed(2)} whale=${whaleSignal.toFixed(2)} netHealth=${metrics.signals.networkHealthScore}%`);
+        }
+      } catch (e) {
+        // Tier 2 optional — graceful fallback if metrics unavailable
+        console.warn(`[TIER2-SOL] Metrics unavailable: ${e.message}`);
+      }
+    }
+
     const agreement = summarizeAgreement(Object.fromEntries(activeKeys.map(key => [key, signalVector[key]])));
     const coreAgreement = summarizeAgreement(Object.fromEntries(CORE_SIGNAL_KEYS.map(key => [key, signalVector[key]])));
 
