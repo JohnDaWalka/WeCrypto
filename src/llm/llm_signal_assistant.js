@@ -2,12 +2,13 @@
  * LLM Signal Assistant — Real LLM-Powered Analysis Layer
  * 
  * Connects to OpenAI, Anthropic, or any chat-completions compatible API
- * Classifies regimes, resolves conflicts, performs sanity checks
+ * Uses SPECIALIZED prompt for 9-indicator crypto engine
  * Non-blocking, safe-gated, fully logged
  */
 
 const fs = require("fs");
 const path = require("path");
+const { generateSystemPrompt, generateUserPrompt } = require("./specialized_prompt");
 
 // Configuration from environment
 const LLM_API_URL = process.env.LLM_API_URL || "https://api.openai.com/v1/chat/completions";
@@ -45,10 +46,12 @@ class LLMSignalAssistant {
       };
     }
 
-    const prompt = this.buildPrompt(snapshot);
-
     try {
-      const rawResponse = await this.callAPI(prompt);
+      // Use specialized prompt
+      const systemPrompt = generateSystemPrompt();
+      const userPrompt = generateUserPrompt(snapshot);
+
+      const rawResponse = await this.callAPI(systemPrompt, userPrompt);
       const normalized = this.normalizeResponse(rawResponse);
       this.stats.successes++;
       return normalized;
@@ -65,81 +68,23 @@ class LLMSignalAssistant {
   }
 
   /**
-   * Build the prompt for the LLM
+   * Call the LLM API with specialized prompts
    */
-  buildPrompt(snapshot) {
-    const {
-      coin = "UNKNOWN",
-      volatility = 0,
-      orderbook = {},
-      indicators = {},
-      recentAccuracy = {},
-      weights = {},
-      conflicts = [],
-    } = snapshot;
-
-    const indicatorSummary = Object.entries(indicators)
-      .map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(2) : v}`)
-      .join(", ");
-
-    const weightSummary = Object.entries(weights)
-      .map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(2) : v}x`)
-      .join(", ");
-
-    return `
-Analyze this crypto market snapshot and classify the regime.
-
-COIN: ${coin}
-VOLATILITY: ${volatility.toFixed(3)} (low<0.3, moderate<0.8, high<1.5, extreme>1.5)
-ORDERBOOK IMBALANCE: ${((orderbook.imbalance || 0.5) * 100).toFixed(1)}%
-
-INDICATORS: ${indicatorSummary}
-
-WEIGHTS: ${weightSummary}
-
-RECENT ACCURACY: WR=${((recentAccuracy.winRate || 0.5) * 100).toFixed(1)}%, trend=${recentAccuracy.trend || 0}
-
-CONFLICTS: ${conflicts.length > 0 ? conflicts.join("; ") : "none detected"}
-
-YOUR TASK:
-1. Classify the market regime as ONE of: "trend_continuation", "mean_reversion", "chop_noise", "breakout_volatility"
-2. Rate your confidence 0-1
-3. If confidence >= 0.6, suggest SMALL weight nudges (max ±5%)
-4. Flag any warnings (stale data, impossible values, accuracy collapse, etc.)
-
-RESPOND ONLY WITH VALID JSON:
-{
-  "regime": "trend_continuation|mean_reversion|chop_noise|breakout_volatility",
-  "confidence": 0.5,
-  "suggestions": {
-    "increase_weight": ["RSI", "Fisher"],
-    "decrease_weight": ["MACD"],
-    "notes": "RSI and Fisher aligned bullish; MACD lagging"
-  },
-  "warnings": []
-}
-    `.trim();
-  }
-
-  /**
-   * Call the LLM API
-   */
-  async callAPI(prompt) {
+  async callAPI(systemPrompt, userPrompt) {
     const payload = {
       model: LLM_MODEL,
       messages: [
         {
           role: "system",
-          content:
-            "You are a quantitative trading assistant. You analyze technical indicators to classify market regimes. Always respond with ONLY valid JSON, no markdown or explanations.",
+          content: systemPrompt,
         },
         {
           role: "user",
-          content: prompt,
+          content: userPrompt,
         },
       ],
       temperature: 0.1, // low temp for consistency
-      max_tokens: 400,
+      max_tokens: 600,
     };
 
     const response = await fetch(LLM_API_URL, {
@@ -201,7 +146,8 @@ RESPOND ONLY WITH VALID JSON:
       decrease_weight: Array.isArray(raw.suggestions?.decrease_weight)
         ? raw.suggestions.decrease_weight.filter(s => typeof s === 'string')
         : [],
-      notes: typeof raw.suggestions?.notes === 'string' ? raw.suggestions.notes : "",
+      notes: typeof raw.suggestions?.notes === 'string' ? raw.suggestions.notes : 
+             typeof raw.suggestions?.reasoning === 'string' ? raw.suggestions.reasoning : "",
     };
 
     const warnings = Array.isArray(raw.warnings)
@@ -213,6 +159,7 @@ RESPOND ONLY WITH VALID JSON:
       confidence,
       suggestions,
       warnings,
+      analysis: raw.analysis || {},
     };
   }
 
@@ -335,5 +282,5 @@ if (typeof window !== "undefined") {
   window.LLMSignalAssistant = module.exports;
 }
 
-console.log("[LLMSignalAssistant] Module loaded");
+console.log("[LLMSignalAssistant] Module loaded with SPECIALIZED prompts");
 
