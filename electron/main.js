@@ -80,12 +80,12 @@ async function startProxy() {
   // KEY: When running inside app.asar, __dirname is inside the archive (can't execute).
   // Must ALWAYS look in app.asar.unpacked, not app.asar.
   const candidates = [
-    // Dev path: electron/ is one level down from root, so ../we-crypto-proxy.exe
-    path.join(__dirname, '..', 'we-crypto-proxy.exe'),
-    // Correct packaged path: resources/app.asar.unpacked/we-crypto-proxy.exe
+    // Correct packaged path: resources/app.asar.unpacked/we-crypto-proxy.exe (CHECK FIRST)
     path.join(process.resourcesPath || '', 'app.asar.unpacked', 'we-crypto-proxy.exe'),
     // Alternate: resourcesPath itself
     path.join(process.resourcesPath || '', 'we-crypto-proxy.exe'),
+    // Dev path: electron/ is one level down from root, so ../we-crypto-proxy.exe
+    path.join(__dirname, '..', 'we-crypto-proxy.exe'),
   ];
   
   const exePath = candidates.find(p => fs.existsSync(p));
@@ -96,10 +96,18 @@ async function startProxy() {
   }
   console.log(`[proxy] found executable at: ${exePath}`);
 
-  // Pick a free port then write config.toml beside the exe so the binary uses it
+  // Pick a free port then write config.toml
   const chosenPort = await findFreePort(PROXY_PORT_CASCADE);
   proxyPort = chosenPort;
-  const proxyDir = path.dirname(exePath);
+  
+  // If exe is in asar (read-only), write config to temp dir; otherwise beside exe
+  let proxyDir = path.dirname(exePath);
+  if (proxyDir.includes('app.asar')) {
+    proxyDir = path.join(process.env.TEMP || path.join(app.getPath('appData'), 'WECRYP'), 'proxy-config');
+    fs.mkdirSync(proxyDir, { recursive: true });
+    console.log(`[proxy] writing config to temp: ${proxyDir}`);
+  }
+  
   try {
     fs.writeFileSync(path.join(proxyDir, 'config.toml'), buildProxyConfig(chosenPort));
     console.log(`[proxy] config.toml → port ${chosenPort}`);
