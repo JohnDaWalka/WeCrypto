@@ -1,0 +1,35 @@
+site: We-Crypto
+title: WE-CRYPTO - Self-Teaching Prediction Engine
+description: Real-time UP/DOWN crypto predictions with automatic adaptive learning
+url: https://johndawalka.github.io/WE-CFM-Orchestrator
+
+# GitHub Pages Configuration
+github: JohnDaWalka/WE-CFM-Orchestrator
+show_downloads: true
+show_fork_button: true
+
+# Theme
+remote_theme: pages-themes/slate@v0.2.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# Markdown
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+# Collections
+collections:
+  docs:
+    output: true
+    permalink: /docs/:path/
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: "default"
