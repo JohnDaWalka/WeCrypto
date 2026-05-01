@@ -16,7 +16,7 @@
      */
     scorecard(sym = 'ALL') {
       if (sym === 'ALL') {
-        const coins = ['BTC', 'ETH', 'XRP', 'SOL', 'BNB', 'DOGE', 'HYPE'];
+        const coins = ['BTC', 'ETH', 'SOL', 'XRP']; // 4-coin focused model
         console.log('═══════════════════════════════════════════');
         console.log('📊 ACCURACY SCORECARD FOR ALL COINS');
         console.log('═══════════════════════════════════════════');
@@ -120,7 +120,7 @@
      * Show the most recent prediction vs actual outcome
      */
     recent(coin = null) {
-      const coins = coin ? [coin] : ['BTC', 'ETH', 'XRP', 'SOL', 'BNB', 'DOGE', 'HYPE'];
+      const coins = coin ? [coin] : ['BTC', 'ETH', 'SOL', 'XRP'];  // 4-coin focused
       console.log('\n📋 RECENT PREDICTIONS:');
       console.log('═══════════════════════════════════════════');
 
@@ -200,7 +200,45 @@
       console.log('✅ Scorecard data is being captured properly');
       return true;
     },
+
+    /**
+     * Sync cached contracts from Electron file system (D:/Z: drives) into _15mResolutionLog
+     * This bridges the multi-drive cache with the in-memory resolution log for the debug panel
+     */
+    async syncDriveCacheToMemory() {
+      console.log('[KalshiAccuracyDebug] Syncing drive cache to memory...');
+      
+      // If running in Electron, call IPC to read contract cache files
+      if (typeof window !== 'undefined' && window.electron && window.electron.invoke) {
+        try {
+          const contractData = await window.electron.invoke('storage:readContractCache');
+          if (contractData && Array.isArray(contractData)) {
+            console.log(`[KalshiAccuracyDebug] Loaded ${contractData.length} contracts from drive cache`);
+            
+            // Merge into _15mResolutionLog (avoiding duplicates by timestamp)
+            const existing = new Set((window._15mResolutionLog || []).map(e => e.ts));
+            const newContracts = contractData.filter(c => !existing.has(c.ts));
+            
+            if (newContracts.length > 0) {
+              window._15mResolutionLog = [...(window._15mResolutionLog || []), ...newContracts].slice(-300);
+              console.log(`[KalshiAccuracyDebug] Added ${newContracts.length} new contracts to resolution log`);
+              
+              // Save back to localStorage to persist
+              try {
+                localStorage.setItem('beta1_15m_resolution_log', JSON.stringify(window._15mResolutionLog.slice(-300)));
+              } catch (_) {}
+            } else {
+              console.log('[KalshiAccuracyDebug] No new contracts to sync');
+            }
+          }
+        } catch (err) {
+          console.warn('[KalshiAccuracyDebug] Drive sync failed:', err.message);
+        }
+      } else {
+        console.log('[KalshiAccuracyDebug] Not running in Electron, skipping drive sync');
+      }
+    },
   };
 
-  console.log('[KalshiAccuracyDebug] Ready — use KalshiAccuracyDebug.scorecard(sym) .findInversions() .recent() .exportCSV() .healthCheck()');
+  console.log('[KalshiAccuracyDebug] Ready — use KalshiAccuracyDebug.scorecard(sym) .findInversions() .recent() .exportCSV() .healthCheck() .syncDriveCacheToMemory()');
 })();

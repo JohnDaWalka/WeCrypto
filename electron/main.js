@@ -230,6 +230,28 @@ ipcMain.handle('data:writeFile', async (_, filePath, content) => {
   } catch (e) { return false; }
 });
 
+// ── IPC: Read contract cache from D:/Z: drives ────────────────────────────────
+ipcMain.handle('storage:readContractCache', async () => {
+  const cacheDir = 'D:\\WE-CRYPTO-CACHE';
+  const cacheFile = path.join(cacheDir, 'contract-cache-2h.json');
+  
+  try {
+    if (fs.existsSync(cacheFile)) {
+      const content = fs.readFileSync(cacheFile, 'utf8');
+      const data = JSON.parse(content);
+      
+      // Extract settlements from cache
+      if (data.settlements && Array.isArray(data.settlements)) {
+        return data.settlements;
+      }
+    }
+    return [];
+  } catch (e) {
+    console.warn('[IPC] Contract cache read error:', e.message);
+    return [];
+  }
+});
+
 // ── IPC: Enumerate all available storage roots (local, network, cloud) ──────
 ipcMain.handle('storage:getDrives', async () => {
   const found = [];

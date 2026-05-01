@@ -62,7 +62,7 @@ class HistoricalSettlementFetcher {
           // Only 15M crypto markets
           if (!m.ticker) return false;
           if (!m.ticker.includes('15M')) return false;
-          if (!['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'].some(sym => m.ticker.includes(sym))) return false;
+          if (!['BTC', 'ETH', 'SOL', 'XRP'].some(sym => m.ticker.includes(sym))) return false;  // 4-coin focus
           if (m.status !== 'settled') return false;
           return true;
         })
@@ -130,7 +130,7 @@ class HistoricalSettlementFetcher {
           if (!m.title) return false;
           if (m.closed_time == null) return false;
           if (m.resolved_by_source !== 'AMM' && !m.resolutionSources) return false;
-          return ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB'].some(sym => 
+          return ['BTC', 'ETH', 'SOL', 'XRP'].some(sym =>  // 4-coin focus
             m.title.toUpperCase().includes(sym)
           );
         })

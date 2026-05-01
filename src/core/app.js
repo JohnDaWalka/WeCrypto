@@ -1376,6 +1376,15 @@
 
   // Start historical learning on app init
   startHistoricalPolling();
+  
+  // Sync cached contracts from drive to memory (Kalshi debug panel accuracy scorecard)
+  if (typeof KalshiAccuracyDebug !== 'undefined' && KalshiAccuracyDebug.syncDriveCacheToMemory) {
+    setTimeout(() => {
+      KalshiAccuracyDebug.syncDriveCacheToMemory().catch(err => 
+        console.warn('[App] Drive cache sync failed:', err.message)
+      );
+    }, 2000); // defer slightly to let app settle
+  }
 
   function syncPredictionRefresh() {
     const shouldRun = (['predictions', 'cfm', 'universe'].includes(currentView)) && window.PredictionEngine;
