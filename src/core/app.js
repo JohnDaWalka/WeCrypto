@@ -119,15 +119,20 @@
     }
   })();
 
-  // ── Initialize 2-Hour Contract Cache (NEW) ──────────────────────────────
+  // ── Initialize 2-Hour Contract Cache + Multi-Drive Sync ──────────────────
   (function initContractCache() {
     try {
-      if (typeof ContractCacheManager !== 'undefined') {
+      // Use multi-drive cache if available (instant sync to all drives)
+      if (typeof window.MultiDriveCache !== 'undefined') {
+        window._contractCache = window.MultiDriveCache;
+        console.log('[ContractCache] Using MultiDriveCache (instant sync to all drives)');
+      } else if (typeof ContractCacheManager !== 'undefined') {
+        // Fallback to single-drive cache
         window._contractCache = new ContractCacheManager({
           maxAgeMs: 2 * 60 * 60 * 1000,  // 2 hours
           archiveThresholdMs: 2.5 * 60 * 60 * 1000  // 2.5 hours
         });
-        console.log('[ContractCache] Initialized with 2-hour sliding window');
+        console.log('[ContractCache] Using ContractCacheManager (localStorage fallback)');
       }
     } catch (e) {
       console.warn('[ContractCache] Failed to initialize:', e.message);
