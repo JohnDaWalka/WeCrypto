@@ -230,6 +230,26 @@ ipcMain.handle('data:writeFile', async (_, filePath, content) => {
   } catch (e) { return false; }
 });
 
+// ── IPC: Log network errors to COPILOT_DEBUG ──────────────────────────────────
+ipcMain.handle('network:logError', async (_, errorType, details) => {
+  try {
+    const debugDir = path.join('F:\\WECRYP', 'COPILOT_DEBUG');
+    fs.mkdirSync(debugDir, { recursive: true });
+    
+    const timestamp = new Date().toISOString();
+    const logLine = `[${timestamp}] ${errorType} | ${details}`;
+    
+    const logFile = path.join(debugDir, 'network-errors.log');
+    fs.appendFileSync(logFile, logLine + '\n', 'utf8');
+    
+    console.log(`[IPC] Network error logged: ${errorType}`);
+    return true;
+  } catch (e) {
+    console.error('[IPC] Failed to log network error:', e.message);
+    return false;
+  }
+});
+
 // ── IPC: Read Kalshi CSV and parse trades ──────────────────────────────
 ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
   try {

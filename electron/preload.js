@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('desktopApp', {
   loadBirdeyeApiKey:     () => ipcRenderer.invoke('birdeye:loadApiKey'),
   // Returns all local drives (C-Z), UNC network shares, and cloud sync folders
   getDrives:             () => ipcRenderer.invoke('storage:getDrives'),
+  networkError:          (type, details) => ipcRenderer.invoke('network:logError', type, details),
 });
 
 contextBridge.exposeInMainWorld('electron', {
