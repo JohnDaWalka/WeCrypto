@@ -849,8 +849,7 @@ MIT License — See [LICENSE](./LICENSE) file
 - **💬 Discussions** — [GitHub Discussions](#)
 - **🐛 Issues** — [Report bugs](#)
 - **💡 Requests** — [Feature requests](#)
-- **📧 Email** — support@example.com
-
+- **📧 Email** — jdwalka@pm.me or gitgoin87@gmail.com
 ---
 
 <div align="center">
