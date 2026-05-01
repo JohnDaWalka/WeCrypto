@@ -1,6 +1,6 @@
 {
   "name": "we-cfm-orchestrator",
-  "version": "2.12.0-llm-weaponized",
+  "version": "2.13.0-scorecard-integration",
   "private": true,
   "description": "WalkerEnterprise CFM benchmark orchestration engine",
   "main": "electron/main.js",
