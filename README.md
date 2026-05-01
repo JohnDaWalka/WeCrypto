@@ -10,114 +10,349 @@
 
 [📖 Full Documentation](./docs/INDEX.md) • [🏗️ Architecture](./docs/ARCHITECTURE.md) • [🧬 Signals Guide](./docs/SIGNALS.md) • [🎓 Learning Engine](./docs/LEARNING-ENGINE.md)
 
+### 📱 Best Experience
+
+**Use GitHub Mobile App** for perfect diagram rendering on iPhone/Android  
+→ [Download iOS App](https://apps.apple.com/app/id1477376905) • [Download Android App](https://play.google.com/store/apps/details?id=com.github.android)
+
 </div>
 
 ---
 
 ## 🎯 System Overview: The 30-Second Learning Loop
 
-**📊 Fetch (30s) → 🧮 Calculate Accuracy → 📈 Auto-Tune Weights → 🎲 Generate Predictions → ✅ Display → 🔄 Feedback**
+> 💡 **Best Viewed On:** GitHub Mobile App (better Mermaid rendering) or Desktop Browser  
+> **For iPhone Safari:** Use GitHub Mobile App for native diagram support
 
-- Every 30 seconds: Fetch historical markets from Kalshi, Polymarket, Coinbase
-- Calculate accuracy of all 9 signals per coin
-- Every 2 minutes: Auto-tune weights (boost high performers, reduce underperformers)
-- Generate live predictions using new weights
-- Display real-time accuracy scorecard
-- Feedback loop: Better accuracy → Better weights → Better predictions
+```mermaid
+graph LR
+    A["📊 Fetch Historical<br/>Markets (Every 30s)<br/>Kalshi, Polymarket<br/>Coinbase"] -->|Settlement Data| B["🧮 Calculate<br/>Signal Accuracy<br/>9 Indicators<br/>Per Coin"]
+    B -->|Win Rate %| C["📈 Auto-Tune<br/>Weights<br/>Boost/Reduce<br/>Signal Strength"]
+    C -->|Apply New Weights| D["🎲 Generate<br/>Live Predictions<br/>15-Min Direction<br/>Confidence Score"]
+    D -->|Display| E["✅ User Sees<br/>Real-Time Card<br/>Portfolio WR<br/>Accuracy Trending"]
+    E -->|Feedback Loop| A
+    
+    style A fill:#1e90ff,color:#fff,stroke:#000,stroke-width:2px
+    style B fill:#228b22,color:#fff,stroke:#000,stroke-width:2px
+    style C fill:#ff8c00,color:#fff,stroke:#000,stroke-width:2px
+    style D fill:#9370db,color:#fff,stroke:#000,stroke-width:2px
+    style E fill:#20b2aa,color:#fff,stroke:#000,stroke-width:2px
+```
 
-[📊 View detailed flow diagrams](./docs/diagrams.md)
+<details>
+<summary>📋 Text View (copy-friendly)</summary>
+
+```
+📊 Fetch (30s) → 🧮 Calc → 📈 Tune → 🎲 Predict → ✅ Display
+                                                        ↓
+                                        Every 30s: Loop back ←
+```
+
+</details>
 
 ---
 
 ## 🏗️ Three-Layer Adaptive Learning Stack
 
-**Three concurrent tuning layers working together:**
+```mermaid
+graph TD
+    subgraph rt["🔴 Real-Time Layer (30 seconds)"]
+        RT1["Poll Historical Markets"]
+        RT2["Rapid Accuracy Check"]
+        RT3["Fast Gate Adjustments ±4-8%"]
+    end
+    
+    subgraph ss["🟠 Snapshot Layer (1 hour)"]
+        SS1["Aggregate 60 Minutes"]
+        SS2["Market Regime Detection"]
+        SS3["Weight Tuning ±8%"]
+    end
+    
+    subgraph wf["🟡 Walk-Forward Layer (Daily)"]
+        WF1["14-Day Sliding Window"]
+        WF2["Baseline Optimization"]
+        WF3["Seasonal Adjustment"]
+    end
+    
+    RT1 --> RT2 --> RT3 --> PRED["🎲 Generate<br/>Live Predictions"]
+    SS1 --> SS2 --> SS3 --> PRED
+    WF1 --> WF2 --> WF3 --> PRED
+    
+    PRED --> ACC["📊 Accuracy<br/>Scorecard<br/>Portfolio WR"]
+    ACC --> LEARN["🧠 Learning<br/>Engine<br/>Records Outcomes"]
+    LEARN --> RT1
+    
+    style rt fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+    style ss fill:#ffe6cc,stroke:#ff8800,stroke-width:2px
+    style wf fill:#ffffcc,stroke:#cccc00,stroke-width:2px
+    style PRED fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style ACC fill:#ccffcc,stroke:#00cc00,stroke-width:2px
+    style LEARN fill:#ffccff,stroke:#cc00cc,stroke-width:2px
+```
 
-1. **🔴 Real-Time Layer (30 seconds)**
-   - Poll historical markets immediately
-   - Rapid accuracy check on all signals
-   - Fast gate adjustments (±4-8%)
+<details>
+<summary>📋 Text View (copy-friendly)</summary>
 
-2. **🟠 Snapshot Layer (1 hour)**
-   - Aggregate 60 minutes of data
-   - Detect market regime shifts
-   - Weight tuning (±8%) every 2 minutes
+```
+🔴 Real-Time (30s)     🟠 Snapshot (1h)       🟡 Walk-Forward (daily)
+   ↓                        ↓                        ↓
+Poll Markets        Aggregate 60m         14-day Window
+   ↓                        ↓                        ↓
+Rapid Check          Regime Detect         Baseline Opt
+   ↓                        ↓                        ↓
+Gate Adjust          Weight Tune           Seasonal Adj
+   ↓                        ↓                        ↓
+   └─────────────────┬──────────────────┬─────────────┘
+                      ↓
+              🎲 Generate Predictions
+                      ↓
+              📊 Accuracy Scorecard
+                      ↓
+              🧠 Learning Engine
+                      ↓
+              ← Loop Back (30s)
+```
 
-3. **🟡 Walk-Forward Layer (Daily)**
-   - 14-day sliding window analysis
-   - Baseline optimization
-   - Seasonal adjustment
-
-All layers feed into **Live Predictions** → **Accuracy Scorecard** → **Learning Engine** → Back to **Real-Time Layer**
+</details>
 
 **Performance:**
-- Real-Time Layer detects errors in <60 seconds (15-60x faster than previous)
-- Snapshot Layer adapts to market regime shifts every hour
-- Walk-Forward Layer prevents seasonal overfitting daily
-
-[📊 View detailed architecture](./docs/diagrams.md)
+- **Real-Time Layer** detects errors in <60 seconds (15-60x faster than previous)
+- **Snapshot Layer** adapts to market regime shifts every hour
+- **Walk-Forward Layer** prevents seasonal overfitting daily
 
 ---
 
 ## 🧬 Prediction Signal Flow: 9 Indicators → 1 Score
 
-**How predictions are built in 5 layers:**
+```mermaid
+graph TD
+    subgraph inputs["📥 Input Layer"]
+        C1["Close Price"]
+        H["High/Low"]
+        V["Volume"]
+        BP["Book Pressure"]
+    end
+    
+    subgraph layer1["🔧 Indicator Layer — 9 Signals"]
+        RSI["RSI<br/>(Momentum)"]
+        MACD["MACD<br/>(Trend)"]
+        CCI["CCI<br/>(Cycles)"]
+        FISHER["Fisher<br/>(Reversal)"]
+        ADX["ADX<br/>(Strength)"]
+        ATR["ATR<br/>(Volatility)"]
+        OB["Order Book<br/>(Imbalance)"]
+        KALSHI["Kalshi %<br/>(Market Prob)"]
+        CF["Crowd Fade<br/>(Contrarian)"]
+    end
+    
+    subgraph layer2["⚖️ Weighting Layer — Adaptive"]
+        W1["RSI Weight<br/>×1.2"]
+        W2["MACD Weight<br/>×0.9"]
+        W3["CCI Weight<br/>×1.0"]
+        W4["Others..."]
+    end
+    
+    subgraph layer3["🎯 Aggregation"]
+        AGG["Weighted Sum<br/>+ Regime Filter<br/>+ Gate Check"]
+    end
+    
+    subgraph output["🎲 Output"]
+        SCORE["Confidence<br/>0-100"]
+        DIR["Direction<br/>UP or DOWN"]
+    end
+    
+    C1 --> RSI
+    H --> MACD
+    V --> CCI
+    BP --> FISHER
+    
+    RSI --> W1
+    MACD --> W2
+    CCI --> W3
+    FISHER --> W4
+    ADX --> W4
+    ATR --> W4
+    OB --> W4
+    KALSHI --> W4
+    CF --> W4
+    
+    W1 --> AGG
+    W2 --> AGG
+    W3 --> AGG
+    W4 --> AGG
+    
+    AGG --> SCORE
+    AGG --> DIR
+    
+    SCORE --> output
+    DIR --> output
+    
+    style inputs fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style layer1 fill:#fff0f5,stroke:#cc0066,stroke-width:2px
+    style layer2 fill:#fff8dc,stroke:#cccc00,stroke-width:2px
+    style layer3 fill:#f0fff0,stroke:#00cc00,stroke-width:2px
+    style output fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+```
 
-1. **📥 Input Layer** — Real-time market data (Close, High/Low, Volume, Order Book Pressure)
+<details>
+<summary>📋 Signal Reference & Weights</summary>
 
-2. **🔧 Indicator Layer** — 9 technical signals:
-   - RSI (Momentum) | MACD (Trend) | CCI (Cycles) | Fisher (Reversal)
-   - ADX (Strength) | ATR (Volatility) | Order Book (Imbalance)
-   - Kalshi % (Market Probability) | Crowd Fade (Contrarian)
+### 🔧 9 Technical Indicators
 
-3. **⚖️ Weighting Layer** — Adaptive signal strength multipliers (learns from accuracy)
-   - RSI: ×1.2 (strong performer) | MACD: ×0.9 (weak) | CCI: ×1.0 (neutral)
-   - Others auto-adjusted every 2 minutes based on real performance
+| Indicator | Purpose | Formula | Current Weight |
+|-----------|---------|---------|-----------------|
+| **RSI** | Momentum | 14-period overbought/oversold | ×1.2 ✅ (strong) |
+| **MACD** | Trend Following | 12/26 exponential divergence | ×0.9 ⚠️ (weak) |
+| **CCI** | Cycle Detection | Commodity Channel Index | ×1.0 ➜ (neutral) |
+| **Fisher** | Reversal Signals | Normalized price transform | ×1.1 ✅ (good) |
+| **ADX** | Trend Strength | Average Directional Index | ×0.8 ⚠️ (weak) |
+| **ATR** | Volatility Measure | Average True Range | ×1.05 ✅ (ok) |
+| **Order Book** | Market Imbalance | Bid/ask pressure ratio | ×1.3 ✅ (strong) |
+| **Kalshi %** | Market Probability | Real-time contract odds | ×1.15 ✅ (strong) |
+| **Crowd Fade** | Contrarian Play | Opposite of crowd bias | ×0.95 ➜ (neutral) |
 
-4. **🎯 Aggregation** — Combine all signals with:
-   - Weighted sum formula
-   - Regime-specific filters (low/moderate/high/extreme volatility)
-   - Gate checks (confidence thresholds)
+### ⚖️ Weighting Layer (Adaptive)
 
-5. **🎲 Output** — Final prediction:
-   - **Score** (0-100) = Confidence level
-   - **Direction** = UP or DOWN
+- **Current weights** shown above (updated every 2 minutes)
+- Weights adjusted based on recent accuracy
+- Range: 0.3x (minimum boost) to 2.0x (maximum boost)
+- Trending acceleration: ×1.5 if improving, ×1.3 penalty if degrading
 
-[📊 View signal reference](./docs/SIGNALS.md) | [📊 View architecture diagrams](./docs/diagrams.md)
+### 🎯 Aggregation & Output
+
+**Formula:**
+```
+Score = (RSI×1.2 + MACD×0.9 + CCI×1.0 + ... + Fade×0.95) / 9
+       × RegimeMultiplier × ConfidenceGate
+```
+
+**Output:**
+- **Score** (0-100) — Confidence level in prediction
+- **Direction** (UP/DOWN) — Market direction forecast
+
+→ **[View detailed signal documentation](./docs/SIGNALS.md)**
+
+</details>
 
 ---
 
 ## 📊 Data Flow: Electron → Renderer → Prediction Engine
 
+```mermaid
+graph LR
+    subgraph electron["⚛️ Electron Main"]
+        MAIN["main.js<br/>BrowserWindow"]
+        IPC["Electron IPC<br/>Secure Bridge"]
+    end
+    
+    subgraph renderer["🎨 Renderer Process"]
+        APP["app.js<br/>UI Controller"]
+        BRIDGE["kalshi-renderer-bridge.js<br/>API Handler"]
+    end
+    
+    subgraph engine["🔧 Prediction Engine"]
+        PRED["predictions.js<br/>Signal Calculation"]
+        LEARNER["adaptive-learning-engine.js<br/>Weight Tuning"]
+        FETCHER["historical-settlement-fetcher.js<br/>Market Data"]
+    end
+    
+    subgraph apis["🌐 External APIs"]
+        KALSHI["Kalshi API<br/>Settled Contracts"]
+        POLY["Polymarket API<br/>Resolved Markets"]
+        COIN["Coinbase API<br/>Predictions"]
+        BINANCE["Binance/Kraken<br/>OHLCV Candles"]
+    end
+    
+    MAIN --> IPC
+    IPC --> APP
+    APP --> BRIDGE
+    BRIDGE --> PRED
+    PRED --> LEARNER
+    LEARNER --> FETCHER
+    FETCHER --> KALSHI
+    FETCHER --> POLY
+    FETCHER --> COIN
+    FETCHER --> BINANCE
+    
+    style electron fill:#1e90ff,color:#fff,stroke:#000,stroke-width:2px
+    style renderer fill:#228b22,color:#fff,stroke:#000,stroke-width:2px
+    style engine fill:#ff8c00,color:#fff,stroke:#000,stroke-width:2px
+    style apis fill:#4169e1,color:#fff,stroke:#000,stroke-width:2px
 ```
-⚛️ ELECTRON MAIN PROCESS
-  └─ main.js (BrowserWindow initialization)
-     └─ Electron IPC Bridge (secure communication)
-        
-🎨 RENDERER PROCESS
-  └─ app.js (UI controller)
-     └─ kalshi-renderer-bridge.js (IPC handler)
-        └─ window.KalshiAPI (exposed API)
 
-🔧 PREDICTION ENGINE
-  └─ predictions.js (calculate signals)
-     └─ adaptive-learning-engine.js (tune weights)
-        └─ historical-settlement-fetcher.js (fetch market data)
-           
-🌐 EXTERNAL APIS
-  ├─ Kalshi API (settled contracts)
-  ├─ Polymarket API (resolved markets)
-  ├─ Coinbase API (prediction outcomes)
-  └─ Binance/Kraken (OHLCV candles)
-```
+<details>
+<summary>📋 Component Breakdown</summary>
 
-**Flow:** Electron Main → IPC Bridge → Renderer → Prediction Engine → APIs → Back to UI Display
+**⚛️ Electron Main Process**
+- `main.js` — Creates BrowserWindow and manages app lifecycle
+- Electron IPC — Secure inter-process communication bridge
 
-[📊 View detailed data architecture](./docs/diagrams.md)
+**🎨 Renderer Process (UI)**
+- `app.js` — Main UI controller, all views and logic
+- `kalshi-renderer-bridge.js` — IPC handler, bridges to backend APIs
+- `window.KalshiAPI` — Exposed API for secure renderer access
+
+**🔧 Prediction Engine (Core Logic)**
+- `predictions.js` — Calculates all 9 signals, generates scores
+- `adaptive-learning-engine.js` — Tunes weights every 2 minutes
+- `historical-settlement-fetcher.js` — Fetches settled contracts from 3 exchanges
+
+**🌐 External APIs**
+- Kalshi API — Prediction market contracts
+- Polymarket API — Resolved market data
+- Coinbase API — Prediction outcomes
+- Binance/Kraken — OHLCV candles for technical analysis
+
+**Flow:** Main → IPC → Renderer → Prediction Engine → External APIs → Back to UI Display
+
+→ **[View detailed architecture](./docs/ARCHITECTURE.md)**
+
+</details>
 
 ---
 
 ## 🔄 30-Second Polling Cycle: The Heartbeat
+
+```mermaid
+sequenceDiagram
+    participant Clock as ⏱️ Clock
+    participant Fetcher as 📡 Fetcher
+    participant Learner as 🧠 Learner
+    participant Engine as 🔧 Engine
+    participant UI as 📊 UI
+
+    Clock->>Fetcher: Every 30 seconds
+    Fetcher->>Fetcher: 1️⃣ Fetch Kalshi settled
+    Fetcher->>Fetcher: 2️⃣ Fetch Polymarket resolved
+    Fetcher->>Fetcher: 3️⃣ Calculate per-coin accuracy
+    
+    Fetcher->>Learner: Pass 300+ settled trades
+    Learner->>Learner: 4️⃣ Record signal contributions
+    Learner->>Learner: 5️⃣ Calculate per-indicator WR
+    Learner->>Learner: 6️⃣ Detect outperformers
+    
+    alt Every 2 Minutes
+        Learner->>Learner: 7️⃣ AUTO-TUNE WEIGHTS
+        Learner->>Learner: • Boost >55% WR (+5%)
+        Learner->>Learner: • Reduce <45% WR (-5%)
+        Learner->>Learner: • Trending acceleration ×1.5
+    end
+    
+    Learner->>Engine: Apply updated weights
+    Engine->>Engine: 8️⃣ Generate live predictions
+    Engine->>Engine: • All 9 signals
+    Engine->>Engine: • Apply gates/filters
+    Engine->>Engine: • Score confidence
+    
+    Engine->>UI: New predictions ready
+    UI->>UI: 9️⃣ Update dashboard
+    UI->>UI: • Accuracy card
+    UI->>UI: • Per-coin stats
+    UI->>UI: • Tuning badge
+```
+
+<details>
+<summary>📋 Timeline View (copy-friendly)</summary>
 
 ```
 Time: 0s – 5s      | FETCHER PHASE
@@ -148,76 +383,201 @@ Time: 25s – 30s    | ENGINE & DISPLAY
       • Show tuning badge
 ```
 
-**Every cycle (30s): Better data → Better tuning → Better predictions**
+Every cycle (30s): Better data → Better tuning → Better predictions
 
-[📊 View detailed polling timeline](./docs/diagrams.md)
+</details>
 
 ---
 
 ## 🎓 Adaptive Learning: The Self-Teaching Loop
 
-```
-STEP 1: Fetch Historical Markets (every 30s)
-│   ├─ Kalshi API: /markets?status=settled
-│   ├─ Polymarket API: resolved contracts
-│   └─ Coinbase API: prediction outcomes
-│
-STEP 2: Calculate Accuracy Per Coin
-│   ├─ Compare model prediction to market outcome
-│   ├─ Track: RSI, MACD, CCI... (9 indicators)
-│   └─ Maintain rolling history (last 20 samples)
-│
-STEP 3: Every 2 Minutes — Check Signal Performance
-│   ├─ RSI: 58% WR → OUTPERFORMER ✅
-│   ├─ MACD: 42% WR → UNDERPERFORMER ❌
-│   ├─ CCI: 50% WR → NEUTRAL ⏸️
-│   └─ Fisher: 56% WR, trending DOWN → PENALIZE ❌
-│
-STEP 4: Apply Tuning Rules
-│   ├─ IF WR > 55%: BOOST by 5%
-│   │  └─ IF trend improving +5%: Apply ×1.5 acceleration
-│   ├─ IF WR < 45%: REDUCE by 5%
-│   │  └─ IF trend degrading -5%: Apply ×1.3 penalty
-│   └─ IF 45-55%: HOLD current weight
-│
-STEP 5: Update Weights (caps: 0.3x min, 2.0x max)
-│   ├─ window._adaptiveWeights updated
-│   ├─ Tuning event logged
-│   └─ Next prediction uses new weights IMMEDIATELY
-│
-STEP 6: Next Prediction (30s cycle)
-│   ├─ All 9 signals calculated
-│   ├─ New weights applied
-│   └─ Score updated
-│
-STEP 7: Compare to Market Outcome
-│   ├─ Prediction vs actual market result
-│   ├─ Accuracy recorded
-│   └─ LOOP BACK to STEP 1 (every 30s)
+```mermaid
+graph TD
+    A["📚 Fetch Historical<br/>Markets (30s)"] -->|"Settlement Data<br/>Kalshi, Polymarket"| B["🧮 Calculate<br/>Accuracy"]
+    
+    B -->|"Per-coin<br/>Per-signal WR"| C["📊 Track<br/>Trending"]
+    
+    C -->|"Need 5+<br/>samples?"| D{Signal<br/>Improving?}
+    
+    D -->|"YES ✅<br/>WR > 55%"| E["BOOST<br/>Weight ×1.05"]
+    D -->|"NO ❌<br/>WR < 45%"| F["REDUCE<br/>Weight ÷1.05"]
+    D -->|"MAYBE ⏸️<br/>45-55%"| G["HOLD<br/>Weight"]
+    
+    E -->|"Trending +5%?<br/>Apply Accel"| H["⚡ ×1.5<br/>Multiplier"]
+    F -->|"Trending -5%?<br/>Apply Penalty"| I["⛔ ×1.3<br/>Penalty"]
+    
+    H -->|"Next Prediction"| J["🎲 Generate<br/>New Scores"]
+    I -->|"Next Prediction"| J
+    G -->|"Next Prediction"| J
+    
+    J -->|"Compare vs<br/>Market Outcome"| K["📈 Accuracy<br/>Improved?"]
+    
+    K -->|"Loop back<br/>in 2 minutes"| A
+    
+    style A fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style B fill:#fff0f5,stroke:#cc0066,stroke-width:2px
+    style C fill:#fff8dc,stroke:#cccc00,stroke-width:2px
+    style D fill:#ffe4e1,stroke:#ff0000,stroke-width:2px
+    style E fill:#90ee90,stroke:#00cc00,stroke-width:2px
+    style F fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+    style G fill:#fffacd,stroke:#cccc00,stroke-width:2px
+    style H fill:#98fb98,stroke:#00aa00,stroke-width:2px
+    style I fill:#ffa07a,stroke:#ff8800,stroke-width:2px
+    style J fill:#dda0dd,stroke:#cc00cc,stroke-width:2px
+    style K fill:#87ceeb,stroke:#0099ff,stroke-width:2px
 ```
 
-[📊 View detailed learning process](./docs/diagrams.md)
+<details>
+<summary>📋 Detailed Learning Process (Step-by-Step)</summary>
+
+### The 7-Step Self-Teaching Cycle
+
+**STEP 1: Fetch Historical Markets (every 30s)**
+```
+├─ Kalshi API: /markets?status=settled
+├─ Polymarket API: resolved contracts
+└─ Coinbase API: prediction outcomes
+```
+
+**STEP 2: Calculate Accuracy Per Coin**
+```
+├─ Compare model prediction to market outcome
+├─ Track: RSI, MACD, CCI... (9 indicators)
+└─ Maintain rolling history (last 20 samples)
+```
+
+**STEP 3: Every 2 Minutes — Check Signal Performance**
+```
+├─ RSI: 58% WR → OUTPERFORMER ✅
+├─ MACD: 42% WR → UNDERPERFORMER ❌
+├─ CCI: 50% WR → NEUTRAL ⏸️
+└─ Fisher: 56% WR, trending DOWN → PENALIZE ❌
+```
+
+**STEP 4: Apply Tuning Rules**
+```
+├─ IF WR > 55%: BOOST by 5%
+│  └─ IF trend improving +5%: Apply ×1.5 acceleration
+├─ IF WR < 45%: REDUCE by 5%
+│  └─ IF trend degrading -5%: Apply ×1.3 penalty
+└─ IF 45-55%: HOLD current weight
+```
+
+**STEP 5: Update Weights (caps: 0.3x min, 2.0x max)**
+```
+├─ window._adaptiveWeights updated
+├─ Tuning event logged
+└─ Next prediction uses new weights IMMEDIATELY
+```
+
+**STEP 6: Generate New Predictions (30s cycle)**
+```
+├─ All 9 signals calculated
+├─ New weights applied
+└─ Score updated
+```
+
+**STEP 7: Compare to Market Outcome**
+```
+├─ Prediction vs actual market result
+├─ Accuracy recorded
+└─ LOOP BACK to STEP 1 (every 30s)
+```
+
+### Example: Real-Time Tuning Event
+
+```
+Time: 14:32:00
+- Fetch last 5 hours of settled markets
+- RSI accuracy: 58% (20 contracts) → BOOST by 5%
+- MACD accuracy: 42% (20 contracts) → REDUCE by 5%
+- CCI accuracy: 50% (20 contracts) → HOLD (neutral)
+- Fisher: 56% but trending down → REDUCE by 8% (faster)
+
+Weights updated in real-time:
+  RSI:    1.00 → 1.05 ✅
+  MACD:   1.00 → 0.95 ❌
+  CCI:    1.00 → 1.00 ⏸️
+  Fisher: 1.05 → 0.97 ❌
+
+Time: 14:34:00 (new prediction)
+Uses new weights automatically!
+```
+
+→ **[View detailed architectural diagrams](./docs/diagrams.md)**
+
+</details>
 
 ---
 
 ## 🌍 Market Regime Detection
 
-```
-Calculate Volatility (Std Dev of Price Changes)
-        │
-        ├─ < 0.3%   → 🟢 LOW      (Stable Markets, Tight Gates)
-        ├─ 0.3-0.8% → 🟡 MODERATE (Normal Conditions, Standard Gates)
-        ├─ 0.8-1.5% → 🟠 HIGH     (Choppy Markets, Loose Gates)
-        └─ > 1.5%   → 🔴 EXTREME  (Whipsaw Risk, Conservative)
-                │
-         Adjust Gates & Filters
-                │
-         Generate Regime-Aware Predictions
+```mermaid
+graph TD
+    A["📊 Calculate Volatility<br/>Std Dev of Price Changes"] -->|"Measurement"| B{Volatility<br/>Level?}
+    
+    B -->|"< 0.3%"| C["🟢 LOW<br/>Stable Markets<br/>Tight Gates"]
+    B -->|"0.3-0.8%"| D["🟡 MODERATE<br/>Normal Conditions<br/>Standard Gates"]
+    B -->|"0.8-1.5%"| E["🟠 HIGH<br/>Choppy Markets<br/>Loose Gates"]
+    B -->|"> 1.5%"| F["🔴 EXTREME<br/>Whipsaw Risk<br/>Conservative"]
+    
+    C -->|"Applied"| G["📍 Adjust Gates<br/>& Filters"]
+    D -->|"Applied"| G
+    E -->|"Applied"| G
+    F -->|"Applied"| G
+    
+    G -->|"Regime-Aware"| H["🎲 Generate<br/>Predictions"]
+    
+    style A fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style B fill:#fff0f5,stroke:#cc0066,stroke-width:2px
+    style C fill:#90ee90,stroke:#00cc00,stroke-width:2px
+    style D fill:#fffacd,stroke:#cccc00,stroke-width:2px
+    style E fill:#ffa07a,stroke:#ff8800,stroke-width:2px
+    style F fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+    style G fill:#dda0dd,stroke:#cc00cc,stroke-width:2px
+    style H fill:#87ceeb,stroke:#0099ff,stroke-width:2px
 ```
 
-**Each regime applies different confidence thresholds and signal weights**
+<details>
+<summary>📋 Regime Classification & Response</summary>
 
-[📊 View detailed regime detection](./docs/diagrams.md)
+### How Market Regimes Affect Predictions
+
+**🟢 LOW Volatility (< 0.3%)**
+- Market is stable and predictable
+- Use tight confidence gates (90%+)
+- Trust signal accuracy fully
+- High accuracy expected
+
+**🟡 MODERATE Volatility (0.3-0.8%)**
+- Normal market conditions
+- Use standard confidence gates (75%)
+- Balanced signal weighting
+- Good accuracy baseline
+
+**🟠 HIGH Volatility (0.8-1.5%)**
+- Market is choppy with false signals
+- Use loose confidence gates (60%)
+- Reduce signal weight by 20%
+- Lower accuracy expected
+
+**🔴 EXTREME Volatility (> 1.5%)**
+- Whipsaw risk, strong reversals
+- Use very loose gates (50%)
+- Conservative predictions only
+- Accuracy may drop to 48-50%
+
+### Real-Time Adjustment
+
+Each regime automatically adjusts:
+1. **Confidence thresholds** — How high must score be to predict?
+2. **Signal weights** — How much to trust each indicator
+3. **Gate filters** — What's acceptable for display
+4. **Prediction frequency** — When to hold and wait
+
+→ **[View detailed regime analysis](./docs/LEARNING-ENGINE.md)**
+
+</details>
 
 ---
 
