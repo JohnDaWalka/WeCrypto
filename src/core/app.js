@@ -1389,6 +1389,34 @@
         if (settled && settled.length > 0) {
           console.log(`[Historical] Fetched ${settled.length} settled contracts`);
           
+          // Add historical settlements to _kalshiLog for scorecard display
+          settled.forEach(contract => {
+            // Check if already in log (avoid duplicates)
+            const isDuplicate = window._kalshiLog.some(e => 
+              e.sym === contract.symbol && 
+              e.resolved_at === contract.resolvedAt
+            );
+            
+            if (!isDuplicate) {
+              window._kalshiLog.push({
+                sym: contract.symbol,
+                outcome: contract.result,  // 'YES' or 'NO'
+                modelCorrect: contract.modelCorrect ?? null,
+                marketCorrect: contract.marketCorrect ?? null,
+                resolved_at: contract.resolvedAt,
+                created_at: contract.openTime,
+                _settled: true,
+                _historical: true  // Mark as loaded from historical fetcher
+              });
+            }
+          });
+          
+          // Keep _kalshiLog limited to 500 entries
+          if (window._kalshiLog.length > 500) {
+            window._kalshiLog = window._kalshiLog.slice(-500);
+          }
+          saveKalshiLog();
+          
           // Record outcomes for learning engine
           for (const contract of settled) {
             if (contract.symbol && contract.result) {
@@ -5828,7 +5856,8 @@
       // ── 2. ACCURACY SCORECARD ─────────────────────────────────────────────
       const scorecardRows = PREDICTION_COINS.map((coin, idx) => {
         try {
-          const entries = (window._kalshiLog||[]).filter(e => e.sym===coin.sym && e.modelCorrect !== null);
+          // Count all contracts with outcome (resolved), not just those marked _settled
+          const entries = (window._kalshiLog||[]).filter(e => e.sym===coin.sym && e.outcome);
           const resE    = (window._15mResolutionLog||[]).filter(e => e.sym===coin.sym && e.modelCorrect!==null);
           
           // ADD HISTORICAL DATA FROM CALCULATOR
