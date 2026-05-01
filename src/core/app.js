@@ -7965,10 +7965,72 @@
   // close-time snapshots. Data sourced from window._15mResolutionLog and
   // localStorage cache (wc_contract_log) for prior sessions.
   function renderContractLog() {
-    const log = (window._15mResolutionLog || []).slice().reverse();
+    // Pull from ALL sources: runtime log, Kalshi log, multi-drive cache
+    const runtimeLog = (window._15mResolutionLog || []).slice().reverse();
+    const kalshiLog = (window._kalshiLog || []).filter(e => e._settled).slice().reverse();
+    const cacheSettlements = (window.MultiDriveCache?.data?.settlements || []).slice().reverse();
+    
+    // Load localStorage cache
     let lsLog = [];
     try { lsLog = JSON.parse(localStorage.getItem('wc_contract_log') || '[]'); } catch (_) {}
+    
+    // Merge all sources (dedupe by ID)
+    const seenIds = new Set();
+    const allContracts = [];
+    
+    // Add runtime log first (most recent)
+    runtimeLog.forEach(e => {
+      const id = `${e.sym}-${e.settledTs || e.ts}`;
+      if (!seenIds.has(id)) {
+        allContracts.push({ ...e, _source: 'runtime' });
+        seenIds.add(id);
+      }
+    });
+    
+    // Add Kalshi log (Kalshi API data)
+    kalshiLog.forEach(e => {
+      const id = `${e.sym}-${e.settledTs || e.ts}`;
+      if (!seenIds.has(id)) {
+        allContracts.push({
+          sym: e.sym,
+          settledTs: e.settledTs || e.ts,
+          ts: e.ts,
+          modelDir: e.modelDir || e.direction,
+          actualOutcome: e._kalshiResult || e.kalshiResult,
+          modelCorrect: e.modelCorrect,
+          orchestratorAction: e.orchestratorAction,
+          _source: 'kalshi'
+        });
+        seenIds.add(id);
+      }
+    });
+    
+    // Add cache settlements
+    cacheSettlements.forEach(e => {
+      const id = `${e.coin}-${e.timestamp}`;
+      if (!seenIds.has(id)) {
+        allContracts.push({
+          sym: e.coin,
+          settledTs: e.timestamp,
+          ts: e.timestamp,
+          actualOutcome: e.outcome?.toUpperCase(),
+          modelCorrect: e.modelCorrect,
+          _source: 'cache'
+        });
+        seenIds.add(id);
+      }
+    });
+    
+    // Add localStorage cache
+    lsLog.forEach(e => {
+      const id = `${e.sym}-${e.settledTs || e.ts}`;
+      if (!seenIds.has(id)) {
+        allContracts.push({ ...e, _source: 'localStorage' });
+        seenIds.add(id);
+      }
+    });
 
+    const log = allContracts.slice().reverse();
     const traded    = log.filter(e => e.orchestratorAction === 'trade');
     const correct   = traded.filter(e => e.modelCorrect === true).length;
     const wr        = traded.length ? Math.round(correct / traded.length * 100) : null;
@@ -7982,6 +8044,7 @@
     const statBar = `
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
         ${[
+          ['Total Contracts', log.length, 'var(--color-text)'],
           ['Overall WR',    wr != null ? wr + '%' : '—',         wr >= 55 ? 'var(--color-green)' : wr >= 45 ? '#ffd700' : 'var(--color-red)'],
           ['Sweet Spot WR', sweetWr != null ? sweetWr + '%' : '—', sweetWr >= 55 ? 'var(--color-green)' : '#ffd700'],
           ['Fade WR',       fadeWr != null ? fadeWr + '%' : '—',  fadeWr >= 55 ? 'var(--color-green)' : '#ffd700'],
@@ -7998,7 +8061,7 @@
         </div>
       </div>`;
 
-    const rows = log.slice(0, 80).map(e => {
+    const rows = log.slice(0, 200).map(e => {
       const time        = e.settledTs ? new Date(e.settledTs).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
       const dir         = e.modelDir ?? '—';
       const dirColor    = dir === 'up' ? 'var(--color-green)' : dir === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
@@ -8014,6 +8077,7 @@
       const tradedStr   = e.orchestratorAction === 'trade' ? '<span style="color:var(--color-green)">TRADE</span>' : `<span style="color:var(--color-text-muted)">${e.orchestratorAction ?? 'skip'}</span>`;
       const snap60      = (e.closeSnapshots || []).find(s => s.secsLeft >= 30 && s.secsLeft <= 90);
       const snapStr     = snap60 ? `K@T-${snap60.secsLeft}s: ${Math.round(snap60.kalshiProb * 100)}%` : '';
+      const sourceTag   = `<span style="font-size:9px;color:var(--color-text-faint);background:rgba(255,255,255,0.05);padding:2px 6px;border-radius:3px">${e._source || '?'}</span>`;
       return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">
         <td style="padding:7px 8px;font-weight:700;color:var(--color-text)">${e.sym}</td>
         <td style="padding:7px 8px;color:var(--color-text-muted);font-size:10px">${time}</td>
@@ -8027,29 +8091,35 @@
         <td style="padding:7px 8px;font-size:11px;color:var(--color-text-muted)">${sweet}${fade}</td>
         <td style="padding:7px 8px;font-size:11px">${wick}</td>
         <td style="padding:7px 8px;font-size:10px;color:var(--color-text-faint);font-family:var(--font-mono)">${snapStr}</td>
+        <td style="padding:7px 8px">${sourceTag}</td>
       </tr>`;
     }).join('');
 
     return `
-      <div style="padding:16px;max-width:1400px">
+      <div style="padding:16px;max-width:1600px">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-          <span style="font-size:18px;font-weight:800">📋 Contract Log</span>
-          <span style="font-size:11px;color:var(--color-text-muted)">${log.length} contracts · All local &amp; cloud drives · localStorage cache</span>
+          <span style="font-size:18px;font-weight:800">📋 Contract Log (All Sources)</span>
+          <span style="font-size:11px;color:var(--color-text-muted)">
+            Runtime: ${runtimeLog.length} | Kalshi: ${kalshiLog.length} | Cache: ${cacheSettlements.length} | localStorage: ${lsLog.length}
+          </span>
+        </div>
+        <div style="background:rgba(100,200,100,0.08);border:1px solid rgba(100,200,100,0.2);border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:11px;color:var(--color-text-muted)">
+          <strong>📂 Storage Locations:</strong> Z:\ (network) | D:\ (local) | F:\ (backup) | C:\Users\user\AppData\Local\WE-CRYPTO-CACHE (local cache) | OneDrive (cloud) | localStorage (browser)
+          <br><strong>Data Sources:</strong> runtime (in-memory), kalshi (Kalshi API), cache (multi-drive), localStorage (browser storage)
         </div>
         ${statBar}
         <div style="overflow-x:auto">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead>
               <tr style="border-bottom:2px solid rgba(255,255,255,0.1)">
-                ${['Sym','Time','Model Dir','Outcome','✓','Model%','Kalshi%','Align','Action','Flags','Wick','Snap'].map(h =>
+                ${['Sym','Time','Model Dir','Outcome','✓','Model%','Kalshi%','Align','Action','Flags','Wick','Snap','Source'].map(h =>
                   `<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px">${h}</th>`
                 ).join('')}
               </tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="12" style="padding:20px;color:var(--color-text-muted);text-align:center">No contracts settled yet this session</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="13" style="padding:20px;color:var(--color-text-muted);text-align:center">No contracts found in any source</td></tr>'}</tbody>
           </table>
         </div>
-        ${log.length === 0 && lsLog.length > 0 ? `<div style="margin-top:12px;font-size:11px;color:var(--color-text-muted)">ℹ ${lsLog.length} contracts in localStorage cache from prior sessions</div>` : ''}
       </div>`;
   }
 
