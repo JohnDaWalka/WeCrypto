@@ -1,20 +1,312 @@
-<!-- 🚀 WE-CRYPTO: Self-Teaching Prediction Engine -->
+# 🚀 WE-CRYPTO: Self-Teaching Crypto Prediction Engine
 
 <div align="center">
-
-# 🚀 WE-CRYPTO
-
-## Self-Teaching Crypto Prediction Engine
-
-**Real-time UP/DOWN market direction predictions with automatic adaptive learning**
 
 ![Version](https://img.shields.io/badge/version-v2.11.0-blue?style=for-the-badge)
 ![Status](https://img.shields.io/badge/status-production--ready-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
 
-[🌐 Live Demo](#) • [📖 Documentation](./docs/INDEX.md) • [🐛 Report Bug](#) • [💡 Request Feature](#)
+**Real-time UP/DOWN market predictions with automatic adaptive learning**
+
+[📖 Full Documentation](./docs/INDEX.md) • [🏗️ Architecture](./docs/ARCHITECTURE.md) • [🧬 Signals Guide](./docs/SIGNALS.md) • [🎓 Learning Engine](./docs/LEARNING-ENGINE.md)
 
 </div>
+
+---
+
+## 🎯 System Overview: The 30-Second Learning Loop
+
+```mermaid
+graph LR
+    A["📊 Fetch Historical<br/>Markets (Every 30s)<br/>Kalshi, Polymarket<br/>Coinbase"] -->|Settlement Data| B["🧮 Calculate<br/>Signal Accuracy<br/>9 Indicators<br/>Per Coin"]
+    B -->|Win Rate %| C["📈 Auto-Tune<br/>Weights<br/>Boost/Reduce<br/>Signal Strength"]
+    C -->|Apply New Weights| D["🎲 Generate<br/>Live Predictions<br/>15-Min Direction<br/>Confidence Score"]
+    D -->|Display| E["✅ User Sees<br/>Real-Time Card<br/>Portfolio WR<br/>Accuracy Trending"]
+    E -->|Feedback Loop| A
+    
+    style A fill:#1e90ff,color:#fff,stroke:#000,stroke-width:2px
+    style B fill:#228b22,color:#fff,stroke:#000,stroke-width:2px
+    style C fill:#ff8c00,color:#fff,stroke:#000,stroke-width:2px
+    style D fill:#9370db,color:#fff,stroke:#000,stroke-width:2px
+    style E fill:#20b2aa,color:#fff,stroke:#000,stroke-width:2px
+```
+
+---
+
+## 🏗️ Three-Layer Adaptive Learning Stack
+
+```mermaid
+graph TD
+    subgraph rt["🔴 Real-Time Layer (30 seconds)"]
+        RT1["Poll Historical Markets"]
+        RT2["Rapid Accuracy Check"]
+        RT3["Fast Gate Adjustments ±4-8%"]
+    end
+    
+    subgraph ss["🟠 Snapshot Layer (1 hour)"]
+        SS1["Aggregate 60 Minutes"]
+        SS2["Market Regime Detection"]
+        SS3["Weight Tuning ±8%"]
+    end
+    
+    subgraph wf["🟡 Walk-Forward Layer (Daily)"]
+        WF1["14-Day Sliding Window"]
+        WF2["Baseline Optimization"]
+        WF3["Seasonal Adjustment"]
+    end
+    
+    RT1 --> RT2 --> RT3 --> PRED["🎲 Generate<br/>Live Predictions"]
+    SS1 --> SS2 --> SS3 --> PRED
+    WF1 --> WF2 --> WF3 --> PRED
+    
+    PRED --> ACC["📊 Accuracy<br/>Scorecard<br/>Portfolio WR"]
+    ACC --> LEARN["🧠 Learning<br/>Engine<br/>Records Outcomes"]
+    LEARN --> RT1
+    
+    style rt fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+    style ss fill:#ffe6cc,stroke:#ff8800,stroke-width:2px
+    style wf fill:#ffffcc,stroke:#cccc00,stroke-width:2px
+    style PRED fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style ACC fill:#ccffcc,stroke:#00cc00,stroke-width:2px
+    style LEARN fill:#ffccff,stroke:#cc00cc,stroke-width:2px
+```
+
+**Performance:**
+- **Real-Time Layer** detects errors in <60 seconds (15-60x faster than previous)
+- **Snapshot Layer** adapts to market regime shifts every hour
+- **Walk-Forward Layer** prevents seasonal overfitting daily
+
+---
+
+## 🧬 Prediction Signal Flow: 9 Indicators → 1 Score
+
+```mermaid
+graph TD
+    subgraph inputs["📥 Input Layer"]
+        C1["Close Price"]
+        H["High/Low"]
+        V["Volume"]
+        BP["Book Pressure"]
+    end
+    
+    subgraph layer1["🔧 Indicator Layer — 9 Signals"]
+        RSI["RSI<br/>(Momentum)"]
+        MACD["MACD<br/>(Trend)"]
+        CCI["CCI<br/>(Cycles)"]
+        FISHER["Fisher<br/>(Reversal)"]
+        ADX["ADX<br/>(Strength)"]
+        ATR["ATR<br/>(Volatility)"]
+        OB["Order Book<br/>(Imbalance)"]
+        KALSHI["Kalshi %<br/>(Market Prob)"]
+        CF["Crowd Fade<br/>(Contrarian)"]
+    end
+    
+    subgraph layer2["⚖️ Weighting Layer — Adaptive"]
+        W1["RSI Weight<br/>×1.2"]
+        W2["MACD Weight<br/>×0.9"]
+        W3["CCI Weight<br/>×1.0"]
+        W4["Others..."]
+    end
+    
+    subgraph layer3["🎯 Aggregation"]
+        AGG["Weighted Sum<br/>+ Regime Filter<br/>+ Gate Check"]
+    end
+    
+    subgraph output["🎲 Output"]
+        SCORE["Confidence<br/>0-100"]
+        DIR["Direction<br/>UP or DOWN"]
+    end
+    
+    C1 --> RSI
+    H --> MACD
+    V --> CCI
+    BP --> FISHER
+    
+    RSI --> W1
+    MACD --> W2
+    CCI --> W3
+    FISHER --> W4
+    ADX --> W4
+    ATR --> W4
+    OB --> W4
+    KALSHI --> W4
+    CF --> W4
+    
+    W1 --> AGG
+    W2 --> AGG
+    W3 --> AGG
+    W4 --> AGG
+    
+    AGG --> SCORE
+    AGG --> DIR
+    
+    SCORE --> output
+    DIR --> output
+    
+    style inputs fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style layer1 fill:#fff0f5,stroke:#cc0066,stroke-width:2px
+    style layer2 fill:#fff8dc,stroke:#cccc00,stroke-width:2px
+    style layer3 fill:#f0fff0,stroke:#00cc00,stroke-width:2px
+    style output fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+```
+
+---
+
+## 📊 Data Flow: Electron → Renderer → Prediction Engine
+
+```mermaid
+graph LR
+    subgraph electron["⚛️ Electron Main"]
+        MAIN["main.js<br/>BrowserWindow"]
+        IPC["Electron IPC<br/>Secure Bridge"]
+    end
+    
+    subgraph renderer["🎨 Renderer Process"]
+        APP["app.js<br/>UI Controller"]
+        BRIDGE["kalshi-renderer-bridge.js<br/>API Handler"]
+    end
+    
+    subgraph engine["🔧 Prediction Engine"]
+        PRED["predictions.js<br/>Signal Calculation"]
+        LEARNER["adaptive-learning-engine.js<br/>Weight Tuning"]
+        FETCHER["historical-settlement-fetcher.js<br/>Market Data"]
+    end
+    
+    subgraph apis["🌐 External APIs"]
+        KALSHI["Kalshi API<br/>Settled Contracts"]
+        POLY["Polymarket API<br/>Resolved Markets"]
+        COIN["Coinbase API<br/>Predictions"]
+        BINANCE["Binance/Kraken<br/>OHLCV Candles"]
+    end
+    
+    MAIN --> IPC
+    IPC --> APP
+    APP --> BRIDGE
+    BRIDGE --> PRED
+    PRED --> LEARNER
+    LEARNER --> FETCHER
+    FETCHER --> KALSHI
+    FETCHER --> POLY
+    FETCHER --> COIN
+    FETCHER --> BINANCE
+    
+    style electron fill:#1e90ff,color:#fff,stroke:#000,stroke-width:2px
+    style renderer fill:#228b22,color:#fff,stroke:#000,stroke-width:2px
+    style engine fill:#ff8c00,color:#fff,stroke:#000,stroke-width:2px
+    style apis fill:#4169e1,color:#fff,stroke:#000,stroke-width:2px
+```
+
+---
+
+## 🔄 30-Second Polling Cycle: The Heartbeat
+
+```mermaid
+sequenceDiagram
+    participant Clock as ⏱️ Clock
+    participant Fetcher as 📡 Fetcher
+    participant Learner as 🧠 Learner
+    participant Engine as 🔧 Engine
+    participant UI as 📊 UI
+
+    Clock->>Fetcher: Every 30 seconds
+    Fetcher->>Fetcher: 1️⃣ Fetch Kalshi settled
+    Fetcher->>Fetcher: 2️⃣ Fetch Polymarket resolved
+    Fetcher->>Fetcher: 3️⃣ Calculate per-coin accuracy
+    
+    Fetcher->>Learner: Pass 300+ settled trades
+    Learner->>Learner: 4️⃣ Record signal contributions
+    Learner->>Learner: 5️⃣ Calculate per-indicator WR
+    Learner->>Learner: 6️⃣ Detect outperformers
+    
+    alt Every 2 Minutes
+        Learner->>Learner: 7️⃣ AUTO-TUNE WEIGHTS
+        Learner->>Learner: • Boost >55% WR (+5%)
+        Learner->>Learner: • Reduce <45% WR (-5%)
+        Learner->>Learner: • Trending acceleration ×1.5
+    end
+    
+    Learner->>Engine: Apply updated weights
+    Engine->>Engine: 8️⃣ Generate live predictions
+    Engine->>Engine: • All 9 signals
+    Engine->>Engine: • Apply gates/filters
+    Engine->>Engine: • Score confidence
+    
+    Engine->>UI: New predictions ready
+    UI->>UI: 9️⃣ Update dashboard
+    UI->>UI: • Accuracy card
+    UI->>UI: • Per-coin stats
+    UI->>UI: • Tuning badge
+```
+
+---
+
+## 🎓 Adaptive Learning: The Self-Teaching Loop
+
+```mermaid
+graph TD
+    A["📚 Fetch Historical<br/>Markets (30s)"] -->|"Settlement Data<br/>Kalshi, Polymarket"| B["🧮 Calculate<br/>Accuracy"]
+    
+    B -->|"Per-coin<br/>Per-signal WR"| C["📊 Track<br/>Trending"]
+    
+    C -->|"Need 5+<br/>samples?"| D{Signal<br/>Improving?}
+    
+    D -->|"YES ✅<br/>WR > 55%"| E["BOOST<br/>Weight ×1.05"]
+    D -->|"NO ❌<br/>WR < 45%"| F["REDUCE<br/>Weight ÷1.05"]
+    D -->|"MAYBE ⏸️<br/>45-55%"| G["HOLD<br/>Weight"]
+    
+    E -->|"Trending +5%?<br/>Apply Accel"| H["⚡ ×1.5<br/>Multiplier"]
+    F -->|"Trending -5%?<br/>Apply Penalty"| I["⛔ ×1.3<br/>Penalty"]
+    
+    H -->|"Next Prediction"| J["🎲 Generate<br/>New Scores"]
+    I -->|"Next Prediction"| J
+    G -->|"Next Prediction"| J
+    
+    J -->|"Compare vs<br/>Market Outcome"| K["📈 Accuracy<br/>Improved?"]
+    
+    K -->|"Loop back<br/>in 2 minutes"| A
+    
+    style A fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style B fill:#fff0f5,stroke:#cc0066,stroke-width:2px
+    style C fill:#fff8dc,stroke:#cccc00,stroke-width:2px
+    style D fill:#ffe4e1,stroke:#ff0000,stroke-width:2px
+    style E fill:#90ee90,stroke:#00cc00,stroke-width:2px
+    style F fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+    style G fill:#fffacd,stroke:#cccc00,stroke-width:2px
+    style H fill:#98fb98,stroke:#00aa00,stroke-width:2px
+    style I fill:#ffa07a,stroke:#ff8800,stroke-width:2px
+    style J fill:#dda0dd,stroke:#cc00cc,stroke-width:2px
+    style K fill:#87ceeb,stroke:#0099ff,stroke-width:2px
+```
+
+---
+
+## 🌍 Market Regime Detection
+
+```mermaid
+graph TD
+    A["📊 Calculate Volatility<br/>Std Dev of Price Changes"] -->|"Measurement"| B{Volatility<br/>Level?}
+    
+    B -->|"< 0.3%"| C["🟢 LOW<br/>Stable Markets<br/>Tight Gates"]
+    B -->|"0.3-0.8%"| D["🟡 MODERATE<br/>Normal Conditions<br/>Standard Gates"]
+    B -->|"0.8-1.5%"| E["🟠 HIGH<br/>Choppy Markets<br/>Loose Gates"]
+    B -->|"> 1.5%"| F["🔴 EXTREME<br/>Whipsaw Risk<br/>Conservative"]
+    
+    C -->|"Applied"| G["📍 Adjust Gates<br/>& Filters"]
+    D -->|"Applied"| G
+    E -->|"Applied"| G
+    F -->|"Applied"| G
+    
+    G -->|"Regime-Aware"| H["🎲 Generate<br/>Predictions"]
+    
+    style A fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    style B fill:#fff0f5,stroke:#cc0066,stroke-width:2px
+    style C fill:#90ee90,stroke:#00cc00,stroke-width:2px
+    style D fill:#fffacd,stroke:#cccc00,stroke-width:2px
+    style E fill:#ffa07a,stroke:#ff8800,stroke-width:2px
+    style F fill:#ffcccc,stroke:#cc0000,stroke-width:2px
+    style G fill:#dda0dd,stroke:#cc00cc,stroke-width:2px
+    style H fill:#87ceeb,stroke:#0099ff,stroke-width:2px
+```
 
 ---
 
@@ -60,40 +352,20 @@ Pulls historical settlement data from:
 
 ---
 
-## 📸 Dashboard Preview
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  WE-CRYPTO Real-Time Accuracy Scorecard                 │
-├────────┬────────┬────────┬────────┬────────┬────────────┤
-│ Coin   │ Total  │ MODEL% │ MKT%   │ Trend  │ Status     │
-├────────┼────────┼────────┼────────┼────────┼────────────┤
-│ BTC    │ 42     │ 57% ↑  │ 51%    │ ↑↑ 7/8 │ Learning ✓ │
-│ ETH    │ 38     │ 52% →  │ 49%    │ → 4/8  │ Stable ✓   │
-│ SOL    │ 35     │ 61% ↑  │ 54%    │ ↑↑ 6/8 │ Learning ✓ │
-│ XRP    │ 39     │ 48% ↓  │ 50%    │ ↓↓ 3/8 │ Tuning...  │
-│ DOGE   │ 41     │ 55% →  │ 52%    │ → 5/8  │ Stable ✓   │
-└────────┴────────┴────────┴────────┴────────┴────────────┘
-
-Tuning Status: Last update 2m ago
-Next cycle: in 4m
-Weights updated: 8 times (boost: 5, reduce: 3)
-```
-
----
-
 ## 🔥 Key Features
 
 | Feature | Details |
 |---------|---------|
-| **🎲 Predictions** | 15-minute UP/DOWN with confidence scores |
-| **🧬 Multi-Signal** | RSI, MACD, CCI, Fisher, ADX, ATR + market signals |
-| **📚 Historical Data** | 300+ settled contracts from 3 exchanges |
+| **🎲 Predictions** | 15-minute UP/DOWN with confidence scores (0-100) |
+| **🧬 Multi-Signal** | 9 indicators: RSI, MACD, CCI, Fisher, ADX, ATR, Order Book, Kalshi %, Crowd Fade |
+| **📚 Historical Data** | 300+ settled contracts from Kalshi, Polymarket, Coinbase |
 | **⚡ Real-Time** | 30-second polling, 60-second decision windows |
-| **🎓 Auto-Learning** | Tuning every 2 minutes with trending detection |
-| **🔐 Secure** | Electron IPC bridge, environment-based secrets |
-| **📈 Dashboard** | Real-time accuracy trending + tuning logs |
-| **🔧 Debug** | Console commands for inspection & manual tuning |
+| **🎓 Auto-Learning** | Weight tuning every 2 minutes with trending acceleration |
+| **🔐 Secure** | Electron IPC bridge, environment-based API secrets |
+| **📈 Dashboard** | Real-time accuracy trending, portfolio WR, tuning logs |
+| **🔧 Debug** | Console commands for inspection & manual weight adjustment |
+| **🌍 Multi-Exchange** | Kalshi, Polymarket, Coinbase, Binance, Kraken, CoinGecko |
+| **💾 Caching** | 5-minute price cache, 24-hour accuracy history |
 
 ---
 
@@ -103,8 +375,8 @@ Weights updated: 8 times (boost: 5, reduce: 3)
 
 ```bash
 # Clone & install
-git clone https://github.com/your-org/we-crypto.git
-cd we-crypto
+git clone https://github.com/JohnDaWalka/WE-CFM-Orchestrator.git
+cd WE-CFM-Orchestrator
 pnpm install
 
 # Configure
@@ -236,15 +508,11 @@ window.AdaptiveLearner.reset()
 Full documentation organized by topic:
 
 - **[🏗️ Architecture](./docs/ARCHITECTURE.md)** — System design with Mermaid diagrams
-- **[📚 API Reference](./docs/API.md)** — Console commands and endpoints
-- **[⚙️ Configuration](./docs/CONFIGURATION.md)** — Environment setup and tuning
-- **[🔍 Troubleshooting](./docs/TROUBLESHOOTING.md)** — Common issues and fixes
-- **[📈 Performance](./docs/PERFORMANCE.md)** — Accuracy metrics and benchmarks
-- **[🧬 Signals](./docs/SIGNALS.md)** — How each indicator works
-- **[📊 Learning Engine](./docs/LEARNING-ENGINE.md)** — Adaptive tuning details
-- **[🚀 Deployment](./docs/DEPLOYMENT.md)** — Production setup guide
+- **[📚 Signals Guide](./docs/SIGNALS.md)** — How each of 9 indicators works
+- **[🎓 Learning Engine](./docs/LEARNING-ENGINE.md)** — Adaptive tuning deep dive
+- **[📋 INDEX](./docs/INDEX.md)** — Complete documentation navigation
 
-**→ [See Full Documentation Index](./docs/INDEX.md)**
+**→ [See Full Documentation](./docs/INDEX.md)**
 
 ---
 
