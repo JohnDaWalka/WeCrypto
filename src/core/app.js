@@ -5542,7 +5542,7 @@
       }).join('');
 
       // ── 2. ACCURACY SCORECARD ─────────────────────────────────────────────
-      const scorecardRows = PREDICTION_COINS.map(coin => {
+      const scorecardRows = PREDICTION_COINS.map((coin, idx) => {
         try {
           const entries = (window._kalshiLog||[]).filter(e => e.sym===coin.sym && e._settled);
           const resE    = (window._15mResolutionLog||[]).filter(e => e.sym===coin.sym && e.modelCorrect!==null);
@@ -5562,16 +5562,61 @@
           const tC       = trend==='↑'?'#4caf50':trend==='↓'?'#f44336':'#ffc107';
           const mC       = modelPct>=55?'#4caf50':modelPct>=45?'#ffc107':'#f44336';
           const fC       = fadePct==null?'#555':fadePct>=55?'#4caf50':fadePct>=45?'#ffc107':'#f44336';
-          return `<tr>
-            <td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
+          
+          // Build debug context: split last contracts by UP/DOWN
+          const allContracts = [...entries, ...resE].sort((a,b) => (b.ts||b.settledTs||0) - (a.ts||a.settledTs||0));
+          const ups = allContracts.filter(e => (e.modelDir==='UP' || e.direction==='UP' || e.outcome==='YES' || e._kalshiResult==='YES')).slice(0,3);
+          const downs = allContracts.filter(e => (e.modelDir==='DOWN' || e.direction==='DOWN' || e.outcome==='NO' || e._kalshiResult==='NO')).slice(0,3);
+          
+          const detailsId = `scorecard-${coin.sym}-${idx}`;
+          const debugHtml = `
+            <div style="margin:6px 0;padding:8px;background:#0a0a0a;border-left:3px solid #80cbc4;font-size:10px;border-radius:4px">
+              <div style="color:#80cbc4;font-weight:700;margin-bottom:6px">📊 Up/Down Debug Context for ${coin.sym}</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                <div style="border-right:1px solid #222">
+                  <div style="color:#4caf50;font-weight:600;margin-bottom:3px;font-size:9px">🔼 UP (${ups.length})</div>
+                  ${ups.map(u => {
+                    const correct = u.modelCorrect===true ? '✓' : u.modelCorrect===false ? '✗' : '?';
+                    const dir = u.modelDir || u.direction || '?';
+                    const actual = u._kalshiResult || u.kalshiResult || u.actualOutcome || '?';
+                    const ts = new Date(u.ts || u.settledTs || 0).toISOString().slice(11,19);
+                    return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(76,175,80,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
+                  }).join('')}
+                  ${ups.length === 0 ? '<div style="font-size:9px;color:#555">—</div>' : ''}
+                </div>
+                <div>
+                  <div style="color:#f44336;font-weight:600;margin-bottom:3px;font-size:9px">🔽 DOWN (${downs.length})</div>
+                  ${downs.map(d => {
+                    const correct = d.modelCorrect===true ? '✓' : d.modelCorrect===false ? '✗' : '?';
+                    const dir = d.modelDir || d.direction || '?';
+                    const actual = d._kalshiResult || d.kalshiResult || d.actualOutcome || '?';
+                    const ts = new Date(d.ts || d.settledTs || 0).toISOString().slice(11,19);
+                    return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(244,67,54,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
+                  }).join('')}
+                  ${downs.length === 0 ? '<div style="font-size:9px;color:#555">—</div>' : ''}
+                </div>
+              </div>
+            </div>
+          `;
+          
+          return `<tr style="background:rgba(128,203,196,0.02)">
+            <td style="${tdBase};color:#fff;font-weight:700;cursor:pointer;user-select:none;padding:6px;border-radius:4px 0 0 4px" 
+                onclick="const d=document.getElementById('${detailsId}');d.style.display=d.style.display==='none'?'table-row':'none'">
+              ${coin.sym} <span style="color:#666;font-size:9px">▸</span>
+            </td>
             <td style="${tdBase};color:#888">${total}</td>
             <td style="${tdBase};color:${mC};font-weight:700">${modelPct}%</td>
             <td style="${tdBase};color:#888">${mktPct}%</td>
             <td style="${tdBase};color:${fC}">${fadePct!=null ? fadePct+'% ('+fadeE.length+')' : '–'}</td>
-            <td style="${tdBase};color:${tC};font-weight:700">${trend} ${last8.length}/${8}</td>
+            <td style="${tdBase};color:${tC};font-weight:700;border-radius:0 4px 4px 0">${trend} ${last8.length}/${8}</td>
+          </tr>
+          <tr id="${detailsId}" style="display:none;background:#0a0a0a">
+            <td colspan="6" style="padding:0 6px 6px 6px;border:1px solid #1a1a1a;border-radius:0 0 4px 4px">
+              ${debugHtml}
+            </td>
           </tr>`;
         } catch(e) {
-          return `<tr><td style="${tdBase};color:#fff">${coin.sym}</td><td colspan="5" style="${tdBase};color:#f44336;font-size:10px">err</td></tr>`;
+          return `<tr><td style="${tdBase};color:#fff">${coin.sym}</td><td colspan="5" style="${tdBase};color:#f44336;font-size:10px">err: ${e.message}</td></tr>`;
         }
       }).join('');
 
