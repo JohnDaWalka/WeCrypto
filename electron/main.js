@@ -230,26 +230,231 @@ ipcMain.handle('data:writeFile', async (_, filePath, content) => {
   } catch (e) { return false; }
 });
 
-// ── IPC: Read contract cache from D:/Z: drives ────────────────────────────────
-ipcMain.handle('storage:readContractCache', async () => {
-  const cacheDir = 'D:\\WE-CRYPTO-CACHE';
-  const cacheFile = path.join(cacheDir, 'contract-cache-2h.json');
-  
+// ── IPC: Read Kalshi CSV and parse trades ──────────────────────────────
+ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
   try {
-    if (fs.existsSync(cacheFile)) {
-      const content = fs.readFileSync(cacheFile, 'utf8');
-      const data = JSON.parse(content);
-      
-      // Extract settlements from cache
-      if (data.settlements && Array.isArray(data.settlements)) {
-        return data.settlements;
+    // Try multiple locations in order:
+    // 1. F:\WECRYP\ (home location)
+    // 2. D:\WECRYP\ (backup)
+    // 3. Relative to app.getAppPath()
+    const candidates = [
+      'F:\\WECRYP\\Kalshi-Recent-Activity-All.csv',
+      'D:\\WECRYP\\Kalshi-Recent-Activity-All.csv',
+      path.join(app.getAppPath(), '..', '..', 'Kalshi-Recent-Activity-All.csv'),
+      path.join(app.getAppPath(), 'Kalshi-Recent-Activity-All.csv'),
+    ];
+
+    let csvPath = null;
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        csvPath = candidate;
+        break;
       }
     }
-    return [];
-  } catch (e) {
-    console.warn('[IPC] Contract cache read error:', e.message);
-    return [];
+
+    if (!csvPath) {
+      console.warn(`[IPC] CSV not found in candidates:`, candidates);
+      return { success: false, trades: [], error: 'CSV file not found in any location' };
+    }
+
+    console.log(`[IPC] Loading CSV from: ${csvPath}`);
+
+    const content = fs.readFileSync(csvPath, 'utf-8');
+    
+    // Simple CSV parser
+    const lines = content.split('\n').filter(l => l.trim());
+    if (lines.length < 2) {
+      return { success: false, trades: [], error: 'CSV is empty' };
+    }
+
+    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+    const trades = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+
+      // Parse CSV carefully (handle quoted fields)
+      const values = [];
+      let inQuotes = false;
+      let current = '';
+      for (let j = 0; j < line.length; j++) {
+        const char = line[j];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          values.push(current.trim().replace(/^"|"$/g, ''));
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      values.push(current.trim().replace(/^"|"$/g, ''));
+      
+      const record = {};
+      headers.forEach((h, idx) => {
+        record[h] = values[idx] || '';
+      });
+
+      // Filter: only filled orders (source data for entries)
+      // CSV has: type="Order", Status="Filled", no Result yet (will merge with resolution log)
+      if (record.type === 'Order' && record.Status === 'Filled') {
+        const symMatch = record.Market_Ticker?.match(/KX(\w+)15M/);
+        const coin = symMatch ? symMatch[1].substring(0, 3) : null;
+        
+        if (coin) {
+          trades.push({
+            timestamp: new Date(record.Original_Date).getTime(),
+            originalDate: record.Original_Date,
+            marketTicker: record.Market_Ticker,
+            symbol: coin,
+            direction: record.Direction?.toUpperCase() || '', // BUY = UP, SELL = DOWN
+            yesPrice: parseFloat(record.Yes_Contracts_Average_Price_In_Cents) || 0,
+            noPrice: parseFloat(record.No_Contracts_Average_Price_In_Cents) || 0,
+            profit: parseFloat(record.Profit_In_Dollars) || 0,
+            // Result will come from resolution log merge
+          });
+        }
+      }
+    }
+
+    console.log(`[IPC] Parsed ${trades.length} filled Kalshi orders from CSV`);
+    
+    // Try to parse resolution log from browser state
+    let resolutionLog = [];
+    try {
+      if (browserStateJson) {
+        const state = JSON.parse(browserStateJson);
+        resolutionLog = state.resolutionLog || [];
+        console.log(`[IPC] Received ${resolutionLog.length} resolution records from browser`);
+      }
+    } catch (e) {
+      console.warn(`[IPC] Could not parse browser state:`, e.message);
+    }
+    
+    return { 
+      success: true, 
+      trades, 
+      csvPath, 
+      count: trades.length,
+      resolutionCount: resolutionLog.length,
+      resolution: resolutionLog
+    };
+  } catch (error) {
+    console.error('[IPC] Error loading Kalshi CSV:', error.message);
+    return { success: false, trades: [], error: error.message };
   }
+});
+
+// ── IPC: Fetch historical contracts from Kalshi API ──────────────────────────
+ipcMain.handle('kalshi:fetchHistoricalContracts', async (event, { limit = 100, symbol = null } = {}) => {
+  try {
+    const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+    
+    console.log(`[IPC] Fetching historical contracts from Kalshi (limit: ${limit}, symbol: ${symbol})`);
+    
+    // Fetch portfolio to get user's historical contract IDs
+    const portfolioResp = await fetch(`${KALSHI_BASE}/portfolio`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    
+    if (!portfolioResp.ok) {
+      console.warn('[IPC] Kalshi portfolio fetch failed');
+      return { success: false, contracts: [], error: 'Portfolio fetch failed' };
+    }
+    
+    const portfolio = await portfolioResp.json();
+    const contracts = portfolio.contracts || [];
+    
+    // Filter by symbol if requested
+    let filtered = contracts;
+    if (symbol) {
+      filtered = contracts.filter(c => c.ticker && c.ticker.includes(symbol));
+    }
+    
+    // Return most recent contracts up to limit
+    const result = filtered
+      .sort((a, b) => new Date(b.resolved_at || b.created_at) - new Date(a.resolved_at || a.created_at))
+      .slice(0, limit)
+      .map(c => ({
+        symbol: c.ticker?.match(/KX(\w+)/)?.[1] || null,
+        ticker: c.ticker,
+        direction: c.side?.toUpperCase(), // BUY = YES (UP), SELL = NO (DOWN)
+        result: c.resolved_at ? (c.outcome === 'YES' ? 'UP' : 'DOWN') : null,
+        timestamp: new Date(c.resolved_at || c.created_at).getTime(),
+        resolvedAt: c.resolved_at,
+        profit: c.pnl || 0,
+        quantity: c.quantity,
+        avgPrice: c.avg_price,
+        source: 'kalshi-api',
+      }));
+    
+    console.log(`[IPC] Fetched ${result.length} historical contracts from Kalshi API`);
+    return { success: true, contracts: result, count: result.length };
+  } catch (error) {
+    console.error('[IPC] Error fetching Kalshi historical:', error.message);
+    return { success: false, contracts: [], error: error.message };
+  }
+});
+
+ipcMain.handle('storage:readContractCache', async () => {
+  const home = process.env.USERPROFILE || '';
+  
+  // Multi-drive cascade search order
+  const searchPaths = [
+    // Primary working drives
+    'F:\\WECRYP\\data\\contract-cache.json',
+    'F:\\WECRYP\\contract-cache.json',
+    'D:\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
+    'D:\\WECRYP\\data\\contract-cache.json',
+    
+    // OneDrive locations
+    `${home}\\OneDrive\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\OneDrive - Personal\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\OneDrive\\WECRYP\\contract-cache.json`,
+    
+    // Google Drive
+    `${home}\\Google Drive\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\Google Drive\\WECRYP\\contract-cache.json`,
+    
+    // C: drive (OS/temp)
+    'C:\\WE-CRYPTO-CACHE\\contract-cache.json',
+    'C:\\WECRYP\\contract-cache.json',
+    `${home}\\AppData\\Local\\WECRYP\\contract-cache.json`,
+    
+    // Network drives (Z:, Y:, etc.)
+    'Z:\\WE-CRYPTO-CACHE\\contract-cache.json',
+    'Y:\\WE-CRYPTO-CACHE\\contract-cache.json',
+  ];
+
+  console.log('[IPC] Searching for contract cache across all drives...');
+  
+  for (const cacheFile of searchPaths) {
+    try {
+      if (fs.existsSync(cacheFile)) {
+        console.log(`[IPC] ✓ Found cache: ${cacheFile}`);
+        const content = fs.readFileSync(cacheFile, 'utf8');
+        const data = JSON.parse(content);
+        
+        // Extract settlements from cache
+        if (data.settlements && Array.isArray(data.settlements)) {
+          console.log(`[IPC] Loaded ${data.settlements.length} settlements from cache`);
+          return { 
+            success: true,
+            settlements: data.settlements,
+            source: cacheFile,
+            count: data.settlements.length
+          };
+        }
+      }
+    } catch (e) {
+      // Continue to next path
+    }
+  }
+
+  console.warn('[IPC] Contract cache not found on any drive');
+  return { success: false, settlements: [], source: 'not_found', count: 0 };
 });
 
 // ── IPC: Enumerate all available storage roots (local, network, cloud) ──────

@@ -9,6 +9,14 @@ contextBridge.exposeInMainWorld('desktopApp', {
   getDrives:             () => ipcRenderer.invoke('storage:getDrives'),
 });
 
+contextBridge.exposeInMainWorld('electron', {
+  invoke: ipcRenderer.invoke.bind(ipcRenderer),
+  kalshi: {
+    loadCSVTrades: (browserStateJson) => ipcRenderer.invoke('kalshi:loadCSVTrades', browserStateJson),
+    fetchHistoricalContracts: (opts) => ipcRenderer.invoke('kalshi:fetchHistoricalContracts', opts),
+  },
+});
+
 contextBridge.exposeInMainWorld('dataStore', {
   appendLine: (filePath, line)    => ipcRenderer.invoke('data:appendLine', filePath, line),
   writeFile:  (filePath, content) => ipcRenderer.invoke('data:writeFile',  filePath, content),

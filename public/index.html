@@ -48,6 +48,14 @@
   <script defer src="vendors/chart.umd.min.js"></script>
   <script defer src="vendors/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script defer src="vendors/lightweight-charts.standalone.production.js"></script>
+  
+  <!-- WECRYPTO Startup & Calibration (IMPORTANT: load before app.js) -->
+  <script src="../src/kalshi/adaptive-weight-restorer.js"></script>
+  <script src="../src/kalshi/contract-win-rate-calculator.js"></script>
+  <script src="../src/kalshi/historical-settlement-fetcher.js"></script>
+  <script src="../src/kalshi/accuracy-debug.js"></script>
+  <script src="../src/kalshi/wecrypto-startup-loader.js"></script>
+  
   <!-- Styles -->
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -231,8 +239,10 @@
     }
   </script>
   <div id="ob-hud" class="ob-hud"></div>
+  <script src="../src/kalshi/cloud-data-loader.js" defer></script>
 </body>
 </html>
+
 
 
 

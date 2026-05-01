@@ -5628,19 +5628,6 @@
       const td = `style="${tdBase}"`;
       const tbl = 'width:100%;border-collapse:collapse;margin-bottom:8px';
 
-      // ── CRITICAL FIX: Ensure orchestrator cache is populated before rendering ──
-      // This ensures getIntent() returns data instead of null
-      try {
-        const predAll = window.PredictionEngine?.getAll?.() ?? {};
-        const cfmAll = window.CFMEngine?.getAll?.() ?? {};
-        if (window.KalshiOrchestrator?.update) {
-          window.KalshiOrchestrator.update(predAll);
-          console.log('[DebugLog] Orchestrator cache populated before rendering intents');
-        }
-      } catch (e) {
-        console.warn('[DebugLog] Could not update orchestrator cache:', e.message);
-      }
-
       // ── 1. ORCHESTRATOR LIVE ──────────────────────────────────────────────
       const liveOrchRows = PREDICTION_COINS.map(coin => {
         try {
@@ -5668,7 +5655,7 @@
       // ── 2. ACCURACY SCORECARD ─────────────────────────────────────────────
       const scorecardRows = PREDICTION_COINS.map((coin, idx) => {
         try {
-          const entries = (window._kalshiLog||[]).filter(e => e.sym===coin.sym && e.modelCorrect !== null);
+          const entries = (window._kalshiLog||[]).filter(e => e.sym===coin.sym && e._settled);
           const resE    = (window._15mResolutionLog||[]).filter(e => e.sym===coin.sym && e.modelCorrect!==null);
           
           // ADD HISTORICAL DATA FROM CALCULATOR

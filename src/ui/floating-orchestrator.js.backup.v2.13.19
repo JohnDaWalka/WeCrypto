@@ -231,8 +231,7 @@
     analyseEntry: analyseEntry,
     getIntent:    function(sym) { return _cache[sym] || null; },
     getAllIntents: function()    { return _cache; },
-    update: function(predAll, cfmAll) {
-      // cfmAll reserved for future enhancements (e.g., liquidity-weighted entry pricing)
+    update: function(predAll) {
       _cache = resolveAll(predAll);
       return _cache;
     },
