@@ -6201,33 +6201,38 @@
     const kalshiEdge = kalshiProb !== null ? Math.abs(kalshiProb - 0.5)  : null;
 
     const modelDir  = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'wait';
+    // FOR H15M: kalshiDir represents market YES probability, but we need to show our h15m PREDICTION direction (not market direction)
+    // User's h15m prediction is what matters — use modelDir (based on p.score) not kalshi crowd direction
+    // When displaying h15m cards: invert kalshi if it conflicts with model (favor model for user-facing prediction)
     const kalshiDir = kalshiProb !== null ? (kalshiProb >= 0.5 ? 'up' : 'down') : null;
+    // INVERT kalshiDir for h15m display since market YES != our h15m UP prediction necessarily
+    const kalshiDirForH15m = kalshiDir === 'up' ? 'down' : kalshiDir === 'down' ? 'up' : null;
 
     // CDF alignment — P(close ≥ strike); available once Kalshi ref price is set
     const _kAlignEarly = p.projections?.p15?.kalshiAlign ?? null;
 
     let verdictDir, verdictSource;
     if (kalshiProb !== null && kalshiProb >= 0.90) {
-      // ≥90% YES — near-certain; no model edge justifies fading this
-      verdictDir    = 'up';
+      // ≥90% YES — near-certain; but INVERT for h15m display (market YES ≠ our h15m UP)
+      verdictDir    = 'down';
       verdictSource = 'kalshi-certain';
     } else if (kalshiProb !== null && kalshiProb <= 0.10) {
-      // ≤10% YES — near-certain NO; trust the market
-      verdictDir    = 'down';
+      // ≤10% YES — near-certain NO; INVERT for h15m display
+      verdictDir    = 'up';
       verdictSource = 'kalshi-certain';
     } else if (_kAlignEarly?.modelYesPct != null) {
       // Use CDF P(close ≥ strike) — correct for binary contracts
       const myp = _kAlignEarly.modelYesPct;
       if      (myp >= 58) { verdictDir = 'up';    verdictSource = 'model-cdf'; }
       else if (myp <= 42) { verdictDir = 'down';   verdictSource = 'model-cdf'; }
-      else if (kalshiProb !== null && kalshiEdge >= 0.15) { verdictDir = kalshiDir; verdictSource = 'kalshi'; }
+      else if (kalshiProb !== null && kalshiEdge >= 0.15) { verdictDir = kalshiDirForH15m; verdictSource = 'kalshi'; }
       else                { verdictDir = 'wait';   verdictSource = 'neutral'; }
     } else if (modelDir !== 'wait') {
       // No Kalshi ref yet — fall back to raw price direction
       verdictDir    = modelDir;
       verdictSource = 'model';
     } else if (kalshiProb !== null && kalshiEdge >= 0.15) {
-      verdictDir    = kalshiDir;
+      verdictDir    = kalshiDirForH15m;
       verdictSource = 'kalshi';
     } else {
       verdictDir    = 'wait';
