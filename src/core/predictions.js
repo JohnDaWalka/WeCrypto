@@ -4582,6 +4582,53 @@
             };
           }
         });
+        
+        // ── ALLOCATION ENGINE INTEGRATION ─────────────────────────────────
+        // Compute portfolio weights from final scores + ATR values
+        try {
+          if (window.allocationEngine && typeof window.allocationEngine === 'function') {
+            const scores = {};
+            const atr = {};
+            
+            PREDICTION_COINS.forEach(coin => {
+              const pred = window._predictions[coin.sym];
+              if (pred && pred.score !== undefined) {
+                // Normalize score from [-1, +1] to [-3, +3] for allocation engine
+                scores[coin.sym] = pred.score * 3;
+                // Extract ATR from volatility indicator (atrPct is ATR as % of price)
+                if (pred.volatility && pred.volatility.atrPct) {
+                  atr[coin.sym] = (pred.price || 1) * (pred.volatility.atrPct / 100);
+                } else {
+                  atr[coin.sym] = 1; // fallback
+                }
+              }
+            });
+            
+            // Call allocation engine with current ATR smoothing state
+            const allocResult = window.allocationEngine(scores, atr, {
+              prevAtrSmooth: window._allocationState?.atrSmooth || null,
+              maxWeight: 0.70,
+              minWeight: 0.00,
+            });
+            
+            // Cache ATR smoothing state for next prediction cycle
+            if (!window._allocationState) window._allocationState = {};
+            window._allocationState.atrSmooth = allocResult.atrSmooth;
+            window._allocationWeights = allocResult.final;
+            
+            // Attach allocation weights to each prediction for UI reference
+            PREDICTION_COINS.forEach(coin => {
+              if (window._predictions[coin.sym]) {
+                window._predictions[coin.sym].allocationWeight = allocResult.final[coin.sym] || 0;
+              }
+            });
+            
+            console.log('[allocationEngine] Weights computed:', window._allocationWeights);
+          }
+        } catch (allocErr) {
+          console.error('[allocationEngine] Error:', allocErr);
+        }
+        
         warmAdvancedBacktests().catch(() => {});
         // Phase 2: enrich with slow proxy-routed sources 30 s after initial score.
         // Fires and forgets — each coin re-scores itself, then dispatches predictionsEnriched.
