@@ -2,9 +2,31 @@
 // Model-primary. Kalshi = house odds. Edge = modelProbUp vs kalshiYesPrice.
 // Divergence = OPPORTUNITY. Entry price = context + risk flags, never a gate.
 // Near-close trades: minimum gate is 5 seconds.
+// 
+// RETUNED 2026-05-02: Coin weights adjusted toward high-shell-activation assets (DOGE, ETH, HYPE).
+// Reduces BTC concentration (55%→35%), increases DOGE (1%→10%), ETH steady, adds BNB diversification.
 
 (function () {
   'use strict';
+
+  // Allocation weights (normalized; divide by sum for probability)
+  // Physics-aligned to shell activation rates from ionization model
+  const COIN_WEIGHTS = {
+    BTC:  0.65,   // 55% → 35%  (reduce: 16% shell3 activation)
+    ETH:  1.05,   // 27% → 30%  (steady: 45% shell3 activation)
+    SOL:  0.45,   // 13% → 8%   (reduce: 0% shell3 activation)
+    XRP:  0.70,   // 3% → 2%    (maintain: 0% shell3 activation)
+    HYPE: 7.50,   // 1% → 8%    (increase: 41% shell3 activation)
+    DOGE: 12.0,   // 1% → 10%   (increase: 52% shell3 activation)
+    BNB:  9.99    // 0% → 10%   (new: 18% shell3 activation)
+  };
+  
+  // Compute normalized weights for probability allocation
+  const _weightSum = Object.values(COIN_WEIGHTS).reduce((a, b) => a + b, 0);
+  const COIN_ALLOCATION = {};
+  for (const [coin, weight] of Object.entries(COIN_WEIGHTS)) {
+    COIN_ALLOCATION[coin] = weight / _weightSum;
+  }
 
   const MODEL_THRESHOLD  = 0.12;
   const MIN_SECONDS_LEFT = 5;

@@ -319,49 +319,49 @@
     BTC: {
       minAbsScore:   0.36,  // ★ optimizer h5 et=0.36, h15 et=0.36 → 68.5% avgWR
       minAgreement:  0.56,
-      minConfidence: 44,
+      minConfidence: 70,    // ↑ RETUNED: raise floor to reduce false positives (55% → 35% allocation)
       medAbsScore:   0.54,  // et * 1.5
       medAgreement:  0.62,
     },
     ETH: {
       minAbsScore:   0.40,  // ★ optimizer h5 et=0.42, h15 et=0.38 → 67-70% avgWR
       minAgreement:  0.57,
-      minConfidence: 44,
+      minConfidence: 65,    // ↑ RETUNED: maintain steady at 25-30% allocation
       medAbsScore:   0.60,
       medAgreement:  0.63,
     },
     XRP: {
       minAbsScore:   0.36,  // ★ optimizer h5 et=0.40, h15 et=0.32 → 57-66% avgWR
       minAgreement:  0.56,
-      minConfidence: 50,
+      minConfidence: 75,    // ↑ RETUNED: very high floor for extreme underdogs (2-3% allocation)
       medAbsScore:   0.54,
       medAgreement:  0.62,
     },
     SOL: {
       minAbsScore:   0.44,  // ★ HIGH: only h10/h15 viable; bias rebalanced (regime shift)
       minAgreement:  0.64,
-      minConfidence: 52,
+      minConfidence: 80,    // ↑ RETUNED: ultra-conservative (reduce 13% → 5-8% allocation)
       medAbsScore:   0.64,
       medAgreement:  0.70,
     },
     BNB: {
       minAbsScore:   0.55,  // ★ very tight gate — re-enabled 2026-04-27 with overhauled bias; validate via backtest
       minAgreement:  0.72,
-      minConfidence: 60,
+      minConfidence: 68,    // ↑ RETUNED: moderate floor to add diversification (0% → 5-10% allocation)
       medAbsScore:   0.75,
       medAgreement:  0.78,
     },
     DOGE: {
       minAbsScore:   0.28,
       minAgreement:  0.58,
-      minConfidence: 42,
+      minConfidence: 60,    // ↑ RETUNED: lower floor for scalp opportunities (1% → 8-10% allocation)
       medAbsScore:   0.35,
       medAgreement:  0.62,
     },
     HYPE: {
       minAbsScore:   0.20,
       minAgreement:  0.56,
-      minConfidence: 40,
+      minConfidence: 70,    // ↑ RETUNED: moderate floor for emerging alpha (1% → 5-8% allocation)
       medAbsScore:   0.30,
       medAgreement:  0.60,
     },

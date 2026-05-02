@@ -19,10 +19,23 @@
    * 
    * Edge = |CFM price - Kalshi odds|
    * Larger edge = more mispricing = higher confidence
+   * 
+   * RETUNED 2026-05-02: Per-coin edge minimums to align with shell activation rates
    */
   const EDGE_THRESHOLDS = {
     MIN_EDGE_TO_WATCH: 0.02,      // 2¢ divergence needed to start tracking
-    MIN_EDGE_TO_EXECUTE: 0.05,    // 5¢ divergence needed to trade
+    MIN_EDGE_TO_EXECUTE: 0.05,    // 5¢ baseline (overridden per coin below)
+    
+    // Per-coin minimum edges (physics-aligned to shell activation)
+    PER_COIN_MINIMUMS: {
+      DOGE: 0.01,   // 1¢ — most reactive, catch scalps
+      ETH:  0.02,   // 2¢ — steady performer
+      HYPE: 0.03,   // 3¢ — emerging alpha
+      BTC:  0.05,   // 5¢ — reduce low-edge false positives
+      BNB:  0.04,   // 4¢ — new diversification
+      XRP:  0.10,   // 10¢ — extreme underdogs, need higher edge
+      SOL:  0.15,   // 15¢ — ultra-conservative, rarely triggers
+    },
     
     // Confidence boosts based on edge size
     CONFIDENCE_TIERS: [
@@ -38,13 +51,15 @@
    * 
    * @param {object} cfmData - { price: number (0-100) }
    * @param {object} kalshiData - { odds: number (0-100) }
+   * @param {string} coin - ticker (BTC, ETH, SOL, etc) for per-coin edge thresholds
    * @returns {object} signal
    */
-  function analyzeDivergence(cfmData, kalshiData) {
+  function analyzeDivergence(cfmData, kalshiData, coin = 'BTC') {
     const cfm = cfmData.price;      // 0-100 probability
     const kalshi = kalshiData.odds; // 0-100 probability
     
     const edge = Math.abs(cfm - kalshi) / 100; // Edge in cents (0-1.0)
+    const minEdge = EDGE_THRESHOLDS.PER_COIN_MINIMUMS[coin] || EDGE_THRESHOLDS.MIN_EDGE_TO_EXECUTE;
     
     let direction = null;
     if (cfm > kalshi + 0.02) {
@@ -62,7 +77,9 @@
       direction,
       divergence: cfm - kalshi,
       shouldWatch: edge >= EDGE_THRESHOLDS.MIN_EDGE_TO_WATCH,
-      shouldExecute: edge >= EDGE_THRESHOLDS.MIN_EDGE_TO_EXECUTE && direction !== null
+      shouldExecute: edge >= minEdge && direction !== null,
+      coin: coin,
+      minEdgeRequired: minEdge
     };
   }
 
