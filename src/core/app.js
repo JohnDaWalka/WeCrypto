@@ -6201,38 +6201,35 @@
     const kalshiEdge = kalshiProb !== null ? Math.abs(kalshiProb - 0.5)  : null;
 
     const modelDir  = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'wait';
-    // FOR H15M: kalshiDir represents market YES probability, but we need to show our h15m PREDICTION direction (not market direction)
-    // User's h15m prediction is what matters — use modelDir (based on p.score) not kalshi crowd direction
-    // When displaying h15m cards: invert kalshi if it conflicts with model (favor model for user-facing prediction)
     const kalshiDir = kalshiProb !== null ? (kalshiProb >= 0.5 ? 'up' : 'down') : null;
-    // INVERT kalshiDir for h15m display since market YES != our h15m UP prediction necessarily
-    const kalshiDirForH15m = kalshiDir === 'up' ? 'down' : kalshiDir === 'down' ? 'up' : null;
 
     // CDF alignment — P(close ≥ strike); available once Kalshi ref price is set
     const _kAlignEarly = p.projections?.p15?.kalshiAlign ?? null;
 
     let verdictDir, verdictSource;
     if (kalshiProb !== null && kalshiProb >= 0.90) {
-      // ≥90% YES — near-certain; but INVERT for h15m display (market YES ≠ our h15m UP)
-      verdictDir    = 'down';
-      verdictSource = 'kalshi-certain';
+      // ≥90% YES — near-certain; but USE MODEL if model has clear conviction
+      verdictDir    = modelDir !== 'wait' ? modelDir : 'up';
+      verdictSource = modelDir !== 'wait' ? 'model (vs kalshi-certain)' : 'kalshi-certain';
     } else if (kalshiProb !== null && kalshiProb <= 0.10) {
-      // ≤10% YES — near-certain NO; INVERT for h15m display
-      verdictDir    = 'up';
-      verdictSource = 'kalshi-certain';
+      // ≤10% YES — near-certain NO; but USE MODEL if model has clear conviction
+      verdictDir    = modelDir !== 'wait' ? modelDir : 'down';
+      verdictSource = modelDir !== 'wait' ? 'model (vs kalshi-certain)' : 'kalshi-certain';
     } else if (_kAlignEarly?.modelYesPct != null) {
       // Use CDF P(close ≥ strike) — correct for binary contracts
       const myp = _kAlignEarly.modelYesPct;
       if      (myp >= 58) { verdictDir = 'up';    verdictSource = 'model-cdf'; }
       else if (myp <= 42) { verdictDir = 'down';   verdictSource = 'model-cdf'; }
-      else if (kalshiProb !== null && kalshiEdge >= 0.15) { verdictDir = kalshiDirForH15m; verdictSource = 'kalshi'; }
+      else if (modelDir !== 'wait') { verdictDir = modelDir; verdictSource = 'model'; }
+      else if (kalshiProb !== null && kalshiEdge >= 0.15) { verdictDir = kalshiDir; verdictSource = 'kalshi'; }
       else                { verdictDir = 'wait';   verdictSource = 'neutral'; }
     } else if (modelDir !== 'wait') {
-      // No Kalshi ref yet — fall back to raw price direction
+      // Model has conviction — USE IT (cards show model colors, not market colors)
       verdictDir    = modelDir;
       verdictSource = 'model';
     } else if (kalshiProb !== null && kalshiEdge >= 0.15) {
-      verdictDir    = kalshiDirForH15m;
+      // Model uncertain, but market has strong edge — use market as fallback only
+      verdictDir    = kalshiDir;
       verdictSource = 'kalshi';
     } else {
       verdictDir    = 'wait';
@@ -6481,6 +6478,27 @@
           <div class="pred-verdict-bar-wrap">
             <div class="pred-verdict-bar-fill ${verdictDir}" style="width:${p.confidence}%"></div>
           </div>
+          <!-- Model vs Kalshi Comparison Bar -->
+          ${_liveKPctCard !== null ? `
+            <div class="pred-comparison-bar-wrap" title="Model vs Market: shows where model (top) differs from Kalshi crowd (bottom)">
+              <div style="font-size:9px;color:var(--color-text-muted);margin-bottom:4px;display:flex;justify-content:space-between">
+                <span>Model: ${_modelProbStr}</span>
+                <span>Kalshi: ${_liveKPctCard}% YES</span>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <div style="flex:1;height:12px;background:rgba(0,0,0,0.1);border-radius:3px;position:relative;overflow:hidden">
+                  <div style="height:100%;width:${_modelUpPct}%;background:${verdictDir === 'up' ? 'var(--color-green)' : 'var(--color-red)'};border-radius:3px"></div>
+                </div>
+                <span style="font-size:9px;font-weight:700;min-width:35px;text-align:right;color:var(--color-text)">${_edgePpCard ?? '—'}pp</span>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+                <div style="flex:1;height:12px;background:rgba(0,0,0,0.1);border-radius:3px;position:relative;overflow:hidden">
+                  <div style="height:100%;width:${_liveKPctCard}%;background:${_liveKColorCard};border-radius:3px"></div>
+                </div>
+                <span style="font-size:9px;font-weight:700;min-width:35px;text-align:right;color:var(--color-text-muted)">crowd</span>
+              </div>
+            </div>
+          ` : ''}
           ${kalshi15mRow}
           ${(() => {
             // ── Market Divergence row ─────────────────────────────────────
