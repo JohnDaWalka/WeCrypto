@@ -14,6 +14,9 @@ try {
 // ── Kalshi Worker Bridge ──────────────────────────────────────────────────
 const { startKalshiWorker, stopKalshiWorker } = require('./kalshi-ipc-bridge.js');
 
+// ── Multi-Drive Settlement Logger ──────────────────────────────────────────
+require('./multi-drive-logger-handlers.js');
+
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
 let proxyPort    = 3010;
