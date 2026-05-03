@@ -17,6 +17,9 @@ const { startKalshiWorker, stopKalshiWorker } = require('./kalshi-ipc-bridge.js'
 // ── Multi-Drive Settlement Logger ──────────────────────────────────────────
 require('./multi-drive-logger-handlers.js');
 
+// ── Web Service (HTTPS) ────────────────────────────────────────────────────
+const { startWebService, updateState, broadcastUpdate } = require('./wecrypto-web-service.js');
+
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
 let proxyPort    = 3010;
@@ -573,6 +576,15 @@ ipcMain.handle('validator:getCoin', async (event, sym) => {
   }
 });
 
+// ── Web Service State Sync ────────────────────────────────────────────────
+ipcMain.on('web:update-state', (event, stateUpdate) => {
+  updateState(stateUpdate);
+});
+
+ipcMain.on('web:broadcast-update', (event, { type, data }) => {
+  broadcastUpdate(type, data);
+});
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -615,6 +627,11 @@ app.whenReady().then(async () => {
   await startKalshiWorker();  // Start Kalshi worker
   Menu.setApplicationMenu(null);
   await waitForProxy();   // give proxy ~3s to bind before renderer fires fetchAll
+  
+  // Start web service (HTTPS)
+  startWebService();
+  console.log('[Main] Web service started on https://localhost:3443');
+  
   createWindow();
 
   app.on('activate', () => {
