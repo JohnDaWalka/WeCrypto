@@ -132,7 +132,12 @@ class BacktestAnalyzer {
               source: 'kalshi',
               coin,
               ticker: market.ticker,
-              outcome: market.result === 'YES' ? 'UP' : 'DOWN',
+              outcome: (() => {
+                const strike = String(market.strike_type ?? 'above').toLowerCase();
+                const yesDir = strike === 'below' ? 'DOWN' : 'UP';
+                const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+                return String(market.result).toUpperCase() === 'YES' ? yesDir : noDir;
+              })(),
               strikeType: market.strike_type,
               settleTime,
               settleTimeIso: new Date(settleTime).toISOString(),

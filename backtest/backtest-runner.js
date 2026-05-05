@@ -99,84 +99,93 @@ const PER_COIN_INDICATOR_BIAS = {
   BTC: {
     // h15 best: stochrsi 64%, vwma 62%, volume 60%
     // h15 worst: momentum 32%, obv 36%, hma 37%
-    stochrsi: 3.5,  // ★ 64% best — was 0.3 (criminally underweighted)
-    vwma:     2.5,  // ★ 62% best
-    volume:   2.2,  // ★ 60% best
+    // ──── TUNED 2026-05-04: Reduce short-horizon overweights, boost microstructure ─
+    stochrsi: 1.8,   // ★ REDUCED FROM 3.5 (64% at h15 but ~40% at h1/h5 - oscillators less reliable short-term)
+    vwma:     1.2,   // ★ REDUCED FROM 2.5 (62% at h15 but less reliable at h1/h5)
+    volume:   1.4,   // ★ REDUCED FROM 2.2 (60% at h15 but noisy at h1/h5)
     // Keep proven mean-reversion core
     bands:      2.5, williamsR: 2.0, structure: 1.4, fisher: 1.3, keltner: 1.6, cci: 1.2,
     cmf: 1.0, rsi: 0.8, macd: 0.6, persistence: 0.8, ema: 0.5, ichimoku: 0.3, adx: 0.3,
     vwap: 0.2, sma: 0.2,
     // Kill worst performers
-    momentum: 0.05,  // 32% worst
+    momentum: 0.25,  // restored for regime-aware trending detection
     obv:      0.1,   // 36% worst
-    hma:      0.1,   // 37% worst — confirmed bad for BTC at h15
+    hma:      0.1,   // 37% worst
     mfi:      0.5,
     supertrend: 0.4,
+    // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
+    book:     0.26,  // NEW: Order book imbalance
+    flow:     0.24,  // NEW: Trade flow signal
   },
   ETH: {
     // h15 best: rsi 82%, stochrsi 56%, williamsR 55%
     // h15 worst: mfi 38%, momentum 43%, hma 45%
-    rsi:      5.0,  // ★ 82% best — massive signal
-    stochrsi: 3.5,  // ★ 56% best — was 0.2 (completely ignored!)
-    williamsR: 3.0, // ★ 55% best
-    bands:    2.5,  // proven mean-reversion core
+    // ──── TUNED 2026-05-04: Horizon-specific weights to fix h1/h5 bleeding ─────
+    // CRITICAL: rsi 82% at h15 but only 37% at h1/h5 (MASSIVE OVERFITTING)
+    // Solution: Reduce RSI weight dramatically for short horizons
+    rsi:      0.5,   // ★ REDUCED FROM 5.0 (82% at h15 but 37% at h1 - disable for short horizons)
+    stochrsi: 1.0,   // ★ REDUCED FROM 3.5 (56% at h15 but ~30% at h1/h5 - oscillators less reliable short-term)
+    williamsR: 1.4,  // ★ REDUCED FROM 3.0 (62% at h1 is not justified for 3.0x - mean reversion less reliable)
+    bands:    2.5,   // Keep (proven mean-reversion core works across horizons)
     structure: 1.4, keltner: 1.2, cci: 0.9, fisher: 0.8, cmf: 0.6,
     volume: 0.9, persistence: 0.8, obv: 0.5, macd: 0.4,
     ema: 0.35, sma: 0.1, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.3,
     // Kill worst performers
     mfi:      0.05,  // 38% worst — was 1.8
-    momentum: 0.05,  // 43% worst
+    momentum: 0.20,  // restored for regime-aware trending detection
     hma:      0.05,  // 45% worst
   },
   SOL: {
-    // h15 best (14d v2, 203 signals — RELIABLE): bands 61%, williamsR 58%, fisher 58%
-    // h15 worst (14d v2, 203 signals):          rsi 29%, momentum 38%, hma 41%
-    // h15 prior best: structure 54-65%, cci 58%, keltner 60%
-    // Insight: hma is 41% individual accuracy but acts as useful contrarian filter
-    // Kill list: vwap(37%), mfi(21%), stochrsi(27%), rsi(26-29%), ema(36%), persistence(31-38%)
-    bands:       6.5,   // ★ 61/60/73/61/59% — most reliable, confirmed across all runs
-    fisher:      4.5,   // ★ 58% with 202 samples — very reliable
-    williamsR:   4.0,   // ★ 58% with 202 samples — very reliable
-    structure:   3.5,   // ★ 54-65% — structural bias (not in worst)
-    cci:         3.5,   // ★ 58% in prior 14d run (~50-55% this run, not in worst)
-    keltner:     3.0,   // ATR-based band companion (not in worst)
-    hma:         4.0,   // ⚠ 41% individual acc BUT weight 4.0 acts as quality gate (203 vs 378 signals)
-    obv:         0.8,   // volume direction — mild keep
-    macd:        0.3,
-    ichimoku:    0.2,
-    adx:         0.2,
-    vwma:        0.1,
-    volume:      0.2,   // context-dependent — demote
-    sma:         0.0,
-    // Kill confirmed worst (large reliable 14d sample):
-    vwap:        0.05,  // ✗ 37% with 75 samples
-    rsi:         0.05,  // ✗ 26-29% consistently worst
-    persistence: 0.05,  // ✗ 31-38% — consistently worst
-    ema:         0.05,  // ✗ 36% worst
-    cmf:         0.05,  // ✗ consistently bad
-    supertrend:  0.05,  // ✗ 33-34% worst
-    momentum:    0.05,  // ✗ 38% in 14d run
-    mfi:         0.05,  // ✗ 21% in run 5
-    stochrsi:    0.05,  // ✗ 27% in run 5
+    // ── Tuned 2026-04-30 & RETUNED 2026-05-04 for h1/h5 recovery ──────────────
+    // h15 best: bands 61%, williamsR 58%, fisher 58%, keltner 57%, structure 57%
+    // h15 worst: vwap 37%, mfi 21%, stochrsi 27%, rsi 29%, momentum 38%
+    // ──── 2026-05-04 UPDATE: h1/h5 CRITICAL FAILURES (30.5% WR) ─────
+    // ROOT CAUSE: Mean-reversion weights fail at h1/h5 (momentum dominates)
+    // FIX: Disable contrarian gates (hma 4.0→0.1), reduce mean-reversion bands,
+    //      BOOST microstructure (flow/book) for momentum trading at short horizons
+    bands:     2.0,   // ★ REDUCED FROM 6.5 (mean-reversion fails at h1/h5, noise dominates)
+    fisher:    1.5,   // ★ REDUCED FROM 4.5 (extreme price levels hard to identify on h1)
+    williamsR: 4.0,   // Keep (proven oscillator, works across horizons)
+    hma:       0.1,   // ★ REDUCED FROM 4.0 (CRITICAL: 41% accuracy = BROKEN quality gate at h1/h5)
+    structure: 1.2,   // ★ REDUCED FROM 3.5 (support/resistance needs multiple candles to form)
+    cci:       3.5,   // Keep (solid oscillator)
+    keltner:   0.8,   // ★ REDUCED FROM 3.0 (ATR bands too volatile at h1)
+    obv:       0.8,   // Keep (volume direction mild signal)
+    macd:      0.3, ichimoku: 0.2, adx: 0.2,
+    vwma:      0.1, volume: 0.2, sma: 0.0,
+    // Kill confirmed worst performers (all verified across 14-day run)
+    vwap:      0.05,  // 37% worst
+    rsi:       0.05,  // 29% worst — mean-reversion makes RSI signals backwards
+    persistence: 0.05,  // consistently worst
+    ema:       0.05,  // 36% worst
+    cmf:       0.05,  // consistently bad
+    supertrend: 0.05,  // momentum hypothesis DISPROVEN for SOL h15
+    momentum:  0.50,  // restored for regime-aware trending detection
+    mfi:       0.05,  // 21% worst
+    stochrsi:  0.05,  // 27% worst
+    // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
+    book:      0.30,  // NEW: Order book imbalance (momentum signal at h1/h5)
+    flow:      0.28,  // NEW: Trade flow ratio (key momentum driver for SOL)
   },
   XRP: {
     // h15 best: structure 72%, volume 66%, vwap 65%, fisher 69-70% (h1/h10)
     // h15 worst: momentum 28%, vwma 31%, hma 31%
-    structure: 5.0,  // ★ 72% best — was 1.8
-    volume:    4.5,  // ★ 66% best — confirmed
-    vwap:      4.0,  // ★ 65% best — was 0.15 (outrageously underweighted)
-    fisher:    2.5,  // 70% at h1/h5, strong signal
-    rsi:       2.0,  // 80-100% at h1/h10 — keep high
-    obv:       1.5,  // volume direction confirm
-    williamsR: 1.2,  // moderate keep (was proven in original)
+    // ──── TUNED 2026-05-04: Reduce h15-specific weights, boost h1/h5 performers ──
+    structure: 1.0,   // ★ REDUCED FROM 5.0 (72% at h15 but meaningless at h1/h5 - needs multiple candles)
+    volume:    1.5,   // ★ REDUCED FROM 4.5 (66% at h15 but volume spikes = noise at h1/h5)
+    vwap:      4.0,   // Keep (65% best)
+    fisher:    2.5,   // 70% at h1/h5 — strong signal, keep
+    rsi:       3.5,   // ★ INCREASED FROM 2.0 (80-100% at h1/h10 - massive underweight!)
+    obv:       1.5,   // volume direction confirm
+    williamsR: 1.2,   // moderate keep
     bands:     0.8, supertrend: 0.5, cci: 0.5, cmf: 0.6, keltner: 0.4,
     macd: 0.3, stochrsi: 0.8, persistence: 0.2, ema: 0.2, adx: 0.2, ichimoku: 0.2,
     sma: 0.0,
     mfi: 0.1,
     // Kill confirmed worst performers
-    momentum: 0.05,  // 28% worst — was 1.4
-    vwma:     0.05,  // 31% worst — was 0.15 (already low but still hurting)
-    hma:      0.05,  // 31% worst — was 0.6
+    momentum: 0.01,   // 28% worst (further reduced)
+    vwma:     0.05,   // 31% worst
+    hma:      0.05,   // 31% worst
   },
   HYPE: {
     // h15 best: williamsR 79%, fisher 77%, cci 75%, bands 78% (h1/h5)

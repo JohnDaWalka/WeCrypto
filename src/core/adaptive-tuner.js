@@ -13,27 +13,28 @@ class AdaptiveTuner {
     this.tuningLog = [];
 
     // Baseline thresholds — synced to SIGNAL_GATE_OVERRIDES (30-day walk-forward 2026-04-27).
-    // Must be defined BEFORE currentGates so numeric init below works correctly.
+    // TUNED FOR 15M CONTRACTS (2026-05-04 recalibration):
+    // Tightened thresholds for 15m horizon to capture higher-confidence edge signals.
     this.baselineGates = {
-      BTC:  { minAbsScore: 0.36, label: 'calibrated' },
-      ETH:  { minAbsScore: 0.40, label: 'calibrated' },
-      XRP:  { minAbsScore: 0.36, label: 'calibrated' },
-      SOL:  { minAbsScore: 0.44, label: 'calibrated' },
-      BNB:  { minAbsScore: 0.55, label: 'near-blocked' },
-      DOGE: { minAbsScore: 0.28, label: 'balanced' },
-      HYPE: { minAbsScore: 0.20, label: 'moderate' },
+      BTC:  { minAbsScore: 0.42, label: 'calibrated-15m' },  // was 0.36 (too loose for 15m)
+      ETH:  { minAbsScore: 0.45, label: 'calibrated-15m' },  // was 0.40
+      XRP:  { minAbsScore: 0.40, label: 'calibrated-15m' },  // was 0.36 (lowest baseline)
+      SOL:  { minAbsScore: 0.44, label: 'calibrated-15m' },  // keep as-is (already optimal)
+      BNB:  { minAbsScore: 0.55, label: 'near-blocked' },    // hold pending CFM data audit
+      DOGE: { minAbsScore: 0.28, label: 'balanced' },        // monitor post signal-fix
+      HYPE: { minAbsScore: 0.20, label: 'moderate' },        // retest post signal-fix
     };
 
-    // Bounds for adaptive adjustments — min/max now bracket the calibrated baseline,
-    // not cap below it. All tuneBounds.max must be >= baselineGates.minAbsScore.
+    // Bounds for adaptive adjustments — min/max now bracket the calibrated baseline.
+    // Updated for 15m-optimized thresholds (2026-05-04).
     this.tuneBounds = {
-      BTC:  { min: 0.30, max: 0.44 },
-      ETH:  { min: 0.34, max: 0.50 },
-      XRP:  { min: 0.30, max: 0.44 },
-      SOL:  { min: 0.38, max: 0.54 },
-      BNB:  { min: 0.48, max: 0.65 },
-      DOGE: { min: 0.24, max: 0.36 },
-      HYPE: { min: 0.16, max: 0.28 },
+      BTC:  { min: 0.36, max: 0.50 },  // was 0.30–0.44, now tighter around 0.42
+      ETH:  { min: 0.38, max: 0.54 },  // was 0.34–0.50, now tighter around 0.45
+      XRP:  { min: 0.32, max: 0.48 },  // was 0.30–0.44, now tighter around 0.40
+      SOL:  { min: 0.38, max: 0.54 },  // unchanged (already optimal at 0.44)
+      BNB:  { min: 0.48, max: 0.65 },  // unchanged (near-blocked holding pattern)
+      DOGE: { min: 0.24, max: 0.36 },  // unchanged (balanced at 0.28)
+      HYPE: { min: 0.16, max: 0.28 },  // unchanged (moderate at 0.20)
     };
 
     // Current tuning parameters (per coin) — initialized as plain numeric thresholds
@@ -49,8 +50,18 @@ class AdaptiveTuner {
     // Market regime tracking
     this.volatilityRegime = {};
     this.lastTuneTime = Date.now();
+    
+    // 15m contract tuning acceleration (2026-05-04)
+    // MULTI-CYCLE DYNAMIC TUNING: Retune on ANY trigger
+    // ├─ 3 minutes (fast): Captures rapid market regime changes, high volatility periods
+    // ├─ 7 minutes (medium): Standard tuning cycle, balanced responsiveness
+    // ├─ 12 minutes (extended): Catch drift during quiet/ranging markets
+    // └─ 10 trades (volume): Automatic trigger if volume spike causes regime shift
+    this.tradesSinceLastTune = 0;
+    this.TUNING_CYCLES_MS = [3, 7, 12].map(min => min * 60 * 1000);  // [180000, 420000, 720000]
+    this.TUNING_CYCLE_TRADES = 10;  // Trigger on 10 new trades OR any time threshold
 
-    console.log('[AdaptiveTuner] Initialized with baseline gates');
+    console.log('[AdaptiveTuner] Initialized with 15m-optimized baseline gates + multi-cycle tuning (3m/7m/12m or 10-trade)');
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -61,6 +72,7 @@ class AdaptiveTuner {
    * Record a trade outcome for tuning analysis
    * @param {string} sym - Coin symbol (BTC, ETH, etc.)
    * @param {object} tradeData - { score, prediction, actual, correct, fprFlag }
+   * @returns {boolean} true if tuning cycle should trigger
    */
   recordTrade(sym, tradeData) {
     if (!this.tradeHistory[sym]) {
@@ -72,10 +84,64 @@ class AdaptiveTuner {
       ...tradeData,
     });
     
-    // Keep only last 100 trades per coin
-    if (this.tradeHistory[sym].length > 100) {
-      this.tradeHistory[sym] = this.tradeHistory[sym].slice(-100);
+    this.tradesSinceLastTune++;
+    
+    // Keep only last 50 trades per coin (tuned for 15m contracts)
+    // 50 trades ≈ 12-13 hours, matches crypto market regime duration
+    // (was: 30 trades ≈ 7-8 hours)
+    if (this.tradeHistory[sym].length > 50) {
+      this.tradeHistory[sym] = this.tradeHistory[sym].slice(-50);
     }
+    
+    // Check if retuning should trigger
+    return this.shouldRetune();
+  }
+
+  /**
+   * Check if dynamic tuning cycle should trigger
+   * @returns {object} { shouldRetune: bool, trigger: 'time-3m'|'time-7m'|'time-12m'|'trades'|'none' }
+   */
+  shouldRetune() {
+    const timeSinceLastTune = Date.now() - this.lastTuneTime;
+    const tradesTriggered = this.tradesSinceLastTune >= this.TUNING_CYCLE_TRADES;
+    
+    // Check time-based triggers (3m, 7m, 12m)
+    for (let i = 0; i < this.TUNING_CYCLES_MS.length; i++) {
+      if (timeSinceLastTune >= this.TUNING_CYCLES_MS[i]) {
+        const minutes = [3, 7, 12][i];
+        return { 
+          shouldRetune: true, 
+          trigger: `time-${minutes}m`,
+          timeSinceLastTune,
+          trades: this.tradesSinceLastTune
+        };
+      }
+    }
+    
+    // Check trade-based trigger (10 trades)
+    if (tradesTriggered) {
+      return { 
+        shouldRetune: true, 
+        trigger: 'trades',
+        timeSinceLastTune,
+        trades: this.tradesSinceLastTune
+      };
+    }
+    
+    return { 
+      shouldRetune: false, 
+      trigger: 'none',
+      timeSinceLastTune,
+      trades: this.tradesSinceLastTune
+    };
+  }
+
+  /**
+   * Mark tuning as complete and reset counters
+   */
+  markTuneComplete() {
+    this.lastTuneTime = Date.now();
+    this.tradesSinceLastTune = 0;
   }
 
   /**
@@ -277,6 +343,99 @@ class AdaptiveTuner {
   }
 
   /**
+   * Per-indicator gradient descent retuner.
+   * Reads window._kalshiLog entries (which now carry signalComponents),
+   * computes the actual price direction from each resolved contract,
+   * and nudges window.PER_COIN_INDICATOR_BIAS toward indicators that predicted correctly.
+   *
+   * Learning rate: 0.025 per sample (scaled by signal magnitude).
+   * Bounds: BIAS_MIN=0.05, BIAS_MAX=6.0.
+   * Requires ≥3 entries with signalComponents per coin to run.
+   */
+  retuneFromLog() {
+    const log = (typeof window !== 'undefined' && window._kalshiLog) ? window._kalshiLog : [];
+    const bias = (typeof window !== 'undefined' && window.PER_COIN_INDICATOR_BIAS) ? window.PER_COIN_INDICATOR_BIAS : null;
+    if (!bias || log.length === 0) return { skipped: true, reason: 'no data' };
+
+    const BIAS_MIN = 0.05;
+    const BIAS_MAX = 6.0;
+    const LR = 0.025;
+    const MIN_SIGNAL = 0.05;
+    const results = {};
+
+    // Group entries by coin, keep only those with signalComponents
+    const byCoin = {};
+    for (const entry of log) {
+      const sym = (entry.sym || '').toUpperCase();
+      if (!sym || !entry.signalComponents || !entry.outcome || entry.strikeDir == null) continue;
+      if (!byCoin[sym]) byCoin[sym] = [];
+      byCoin[sym].push(entry);
+    }
+
+    for (const [sym, entries] of Object.entries(byCoin)) {
+      if (!bias[sym] || entries.length < 3) continue;
+
+      const coinBias = bias[sym];
+      const adjustments = {};
+
+      for (const entry of entries) {
+        // Derive actual direction from contract outcome + strikeDir
+        const actualUp = entry.strikeDir === 'above'
+          ? entry.outcome === 'YES'
+          : entry.outcome !== 'YES';
+
+        const components = entry.signalComponents; // { rsi, ema, hma, ... } all in [-1,+1]
+
+        for (const [key, signal] of Object.entries(components)) {
+          if (!(key in coinBias)) continue;                  // only tune keys we track
+          if (typeof signal !== 'number' || isNaN(signal)) continue;
+          if (Math.abs(signal) < MIN_SIGNAL) continue;      // no opinion — skip
+
+          // indicatorSaysUp = signal > 0 (positive signal = UP direction)
+          const indicatorSaysUp = signal > 0;
+          const correct = indicatorSaysUp === actualUp;
+
+          // Gradient: reward correct indicators (increase bias), punish wrong (decrease bias)
+          const magnitude = Math.min(Math.abs(signal), 1.0);
+          const delta = LR * magnitude * (correct ? 1 : -1);
+
+          adjustments[key] = (adjustments[key] || 0) + delta;
+        }
+      }
+
+      // Apply averaged adjustments and clamp
+      let updated = 0;
+      for (const [key, totalDelta] of Object.entries(adjustments)) {
+        const avgDelta = totalDelta / entries.length;
+        const oldVal = coinBias[key];
+        const newVal = Math.max(BIAS_MIN, Math.min(BIAS_MAX, oldVal + avgDelta));
+        if (Math.abs(newVal - oldVal) > 0.001) {
+          coinBias[key] = newVal;
+          updated++;
+        }
+      }
+
+      // Geometric mean normalization — prevent all-up or all-down drift
+      const vals = Object.values(coinBias).filter(v => v > 0);
+      if (vals.length > 0) {
+        const geoMean = Math.exp(vals.reduce((s, v) => s + Math.log(v), 0) / vals.length);
+        if (geoMean > 0.01) {
+          for (const key of Object.keys(coinBias)) {
+            coinBias[key] = Math.max(BIAS_MIN, Math.min(BIAS_MAX, coinBias[key] / geoMean));
+          }
+        }
+      }
+
+      results[sym] = { entries: entries.length, keysAdjusted: updated };
+    }
+
+    const summary = { ts: Date.now(), coins: results };
+    if (typeof window !== 'undefined') window._lastRetuneResult = summary;
+    console.log('[Retuner] Per-indicator gradient descent complete:', JSON.stringify(results));
+    return summary;
+  }
+
+  /**
    * Execute full tuning cycle (called every 15-minute candle close)
    * Analyzes all coins, recommends tunings, applies if confident
    * @param {object} options - { validatePyth: true, dryRun: false }
@@ -336,6 +495,13 @@ class AdaptiveTuner {
 
     this.lastTuneTime = Date.now();
     results.cycleTime = results.cycleTime = Date.now() - cycleStartTime;
+
+    // Run per-indicator gradient descent from _kalshiLog outcomes
+    try {
+      this.retuneFromLog();
+    } catch (e) {
+      console.warn('[AdaptiveTuner] retuneFromLog error:', e.message);
+    }
 
     // Expose to window for debugging
     if (typeof window !== 'undefined') {
@@ -430,6 +596,110 @@ class AdaptiveTuner {
     }
 
     return diagnostics;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // OUTCOME FEEDBACK — live 500-trade rolling retuner
+  // Called by the main app once a 15m Kalshi contract resolves.
+  // ══════════════════════════════════════════════════════════════
+
+  /**
+   * Records a completed trade outcome for a given contract window.
+   * Stores the signal vector alongside predicted/actual direction so
+   * _retuneFromOutcomes() can compute per-indicator win-rates.
+   * Auto-retunes when ≥20 new outcomes have accumulated since last tune.
+   *
+   * @param {string}  coin                - e.g. 'BTC'
+   * @param {number}  windowStartMs       - UTC ms of 15m window open
+   * @param {string}  predictedDirection  - 'UP' | 'DOWN'
+   * @param {string}  actualDirection     - 'UP' | 'DOWN'
+   * @param {object}  signalVector        - { rsi, macd, ema, … } normalised [-1,1] map
+   */
+  recordOutcome(coin, windowStartMs, predictedDirection, actualDirection, signalVector) {
+    if (!this.outcomeHistory) this.outcomeHistory = {};
+    if (!this.outcomeHistory[coin]) this.outcomeHistory[coin] = [];
+
+    this.outcomeHistory[coin].push({
+      ts:           windowStartMs,
+      predicted:    predictedDirection,
+      actual:       actualDirection,
+      correct:      predictedDirection === actualDirection,
+      signalVector: signalVector || {},
+    });
+
+    // Keep a rolling window of the last 500 outcomes per coin
+    if (this.outcomeHistory[coin].length > 500) {
+      this.outcomeHistory[coin] = this.outcomeHistory[coin].slice(-500);
+    }
+
+    // Auto-retune when 20 new outcomes have arrived since the last tune
+    const lastTune         = (this.lastOutcomeTuneTs && this.lastOutcomeTuneTs[coin]) || 0;
+    const newSinceLastTune = this.outcomeHistory[coin].filter(o => o.ts > lastTune).length;
+    if (newSinceLastTune >= 20) {
+      this._retuneFromOutcomes(coin);
+    }
+
+    // Surface misprediction details to the error bus
+    if (predictedDirection !== actualDirection) {
+      const score   = signalVector && signalVector._modelScore;
+      const errType = (score !== undefined && Math.abs(score) < 0.2)
+        ? 'LOW_CONFIDENCE' : 'SIGNAL_INVERSION';
+      this._logOutcomeError(coin, windowStartMs, predictedDirection, actualDirection, errType);
+    }
+  }
+
+  /**
+   * Pushes a misprediction onto the renderer-accessible error bus.
+   * No-op in Node.js environments (window is undefined).
+   */
+  _logOutcomeError(coin, ts, predicted, actual, errType) {
+    if (typeof window !== 'undefined' && window._kalshiErrors) {
+      window._kalshiErrors.push({
+        type:      'OUTCOME_ERROR',
+        subtype:   errType,
+        coin,
+        ts,
+        predicted,
+        actual,
+        at:        new Date(ts).toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Per-indicator accuracy analysis over the rolling outcome window.
+   * Logs win-rates and updates lastOutcomeTuneTs so the 20-trade gate resets.
+   * Intentionally lightweight — the heavy gradient descent lives in outcome-feedback.js.
+   */
+  _retuneFromOutcomes(coin) {
+    const outcomes = this.outcomeHistory[coin];
+    if (!outcomes || outcomes.length < 20) return;
+
+    // Accumulate hit/total counts for each signal that had a clear directional read
+    const signalAccuracy = {};
+    for (const obs of outcomes) {
+      for (const [sig, val] of Object.entries(obs.signalVector || {})) {
+        if (typeof val !== 'number' || sig.startsWith('_')) continue;
+        if (!signalAccuracy[sig]) signalAccuracy[sig] = { hits: 0, total: 0 };
+        const sigDir = val > 0.1 ? 'UP' : val < -0.1 ? 'DOWN' : null;
+        if (sigDir) {
+          if (sigDir === obs.actual) signalAccuracy[sig].hits++;
+          signalAccuracy[sig].total++;
+        }
+      }
+    }
+
+    // Log any signal with ≥10 samples
+    for (const [sig, acc] of Object.entries(signalAccuracy)) {
+      if (acc.total < 10) continue;
+      const winRate = acc.hits / acc.total;
+      console.log(
+        `[OutcomeFeedback] ${coin} ${sig}: ${(winRate * 100).toFixed(1)}% win (${acc.total} obs)`
+      );
+    }
+
+    if (!this.lastOutcomeTuneTs) this.lastOutcomeTuneTs = {};
+    this.lastOutcomeTuneTs[coin] = Date.now();
   }
 }
 

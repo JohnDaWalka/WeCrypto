@@ -1,8 +1,8 @@
 {
   "name": "we-cfm-orchestrator",
-  "version": "2.14.0",
+  "version": "2.15.1",
   "private": true,
-  "description": "WalkerEnterprise CFM benchmark orchestration engine",
+  "description": "WalkerEnterprise CFM Kalshi 15m Deep Dive Optimization — Signal inversion fixed + multi-cycle tuning",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -14,9 +14,9 @@
   },
   "build": {
     "appId": "com.walkerenterprise.wecfmorchestrator",
-    "productName": "WE--CRYPTO--BETA3",
+    "productName": "WE-CRYPTO-Kalshi-15m-v2.15.1",
     "electronVersion": "37.2.0",
-    "artifactName": "WECRYPTO-v${version}-portable.exe",
+    "artifactName": "WE-CRYPTO-Kalshi-15m-v2.15.1-${platform}.exe",
     "files": [
       "public/**",
       "src/**",

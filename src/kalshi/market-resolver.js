@@ -195,7 +195,9 @@
       .filter(s => s.secsLeft >= 30 && s.secsLeft <= 90)
       .sort((a, b) => Math.abs(a.secsLeft - 60) - Math.abs(b.secsLeft - 60))[0];
     if (!snap || snap.kalshiProb == null || !actualOutcome) return false;
-    const kalshiDir = snap.kalshiProb >= 0.5 ? 'UP' : 'DOWN';
+    const yesDir = entry.strikeDir === 'below' ? 'DOWN' : 'UP';
+    const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+    const kalshiDir = snap.kalshiProb >= 0.5 ? yesDir : noDir;
     return kalshiDir !== actualOutcome && Math.abs(snap.kalshiProb - 0.5) >= 0.10;
   }
 

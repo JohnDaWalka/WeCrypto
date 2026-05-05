@@ -1,8 +1,8 @@
 // ================================================================
-// cex-flow.js — CEX Exchange Flow Monitor  v1.0
-// Detects institutional accumulation/distribution across 5 CEXs
-// All endpoints: free, no API key required
-// Polls every 45s  (slower than chain-router to respect rate limits)
+// cex-flow.js — CEX Exchange Flow Monitor  v1.1
+// Detects institutional accumulation/distribution across major CEXs.
+// WS-first (ExchangeWS mux) with REST fallback when a stream is stale.
+// Polls every 15s to refresh aggregate state from live stream snapshots.
 // ================================================================
 // Exposes:  window.CexFlow
 // Events:   cex-flow-update  (detail = { sym → exchangeResults[] })
@@ -15,7 +15,7 @@
   'use strict';
 
   const COINS   = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
-  const POLL_MS = 45000;
+  const POLL_MS = 15000;
   const TIMEOUT = 9000;
   const CACHE   = {};        // sym → { exchanges[], aggregate, ts }
   const VOL_HISTORY = {};    // `${exchange}_${sym}` → [vol24h, ...]  (rolling 8)
@@ -52,6 +52,45 @@
     return currentVol / avg;
   }
 
+  function wsSnapshot(exchange, sym) {
+    const providerMap = {
+      Binance: 'BINANCE',
+      Coinbase: 'COINBASE',
+      Kraken: 'KRAKEN',
+      Bybit: 'BYBIT',
+      OKX: 'OKX',
+      KuCoin: 'KUCOIN',
+      'Gate.io': 'GATE',
+    };
+    const provider = providerMap[exchange];
+    if (!provider || !window.ExchangeWS?.getTicker) return null;
+    const snap = window.ExchangeWS.getTicker(provider, sym, 20000);
+    if (!snap || !Number.isFinite(snap.price) || snap.price <= 0) return null;
+
+    const vol24h = Number.isFinite(snap.vol24h) ? snap.vol24h : null;
+    const volKey = `${exchange}_${sym}`;
+    pushVolHistory(volKey, vol24h);
+    const volMult = vol24h != null ? rollingVolMult(volKey, vol24h) : null;
+    const buyPct = Number.isFinite(snap.buyPct) ? snap.buyPct : 50;
+    const sellPct = Number.isFinite(snap.sellPct) ? snap.sellPct : 50;
+    const { signal, color } = computeSignal(buyPct, sellPct, volMult, null);
+    return {
+      exchange,
+      buyPct,
+      sellPct,
+      volMult,
+      fundingPct: null,
+      signal,
+      color,
+      available: true,
+      via: 'ws',
+      ts: snap.ts,
+      price: snap.price,
+      bid: snap.bid,
+      ask: snap.ask,
+    };
+  }
+
   // ── signal computation ────────────────────────────────────────────
   function computeSignal(buyPct, sellPct, volMult, fundingPct) {
     const fundBear = fundingPct != null && fundingPct >  0.02;
@@ -70,6 +109,8 @@
 
   async function fetchBinance(sym) {
     const exchange = 'Binance';
+    const ws = wsSnapshot(exchange, sym);
+    if (ws) return ws;
     try {
       // HYPE not on Binance futures but we still try spot
       const [tradesRes, tickerRes] = await Promise.allSettled([
@@ -116,6 +157,8 @@
 
   async function fetchCoinbase(sym) {
     const exchange = 'Coinbase';
+    const ws = wsSnapshot(exchange, sym);
+    if (ws) return ws;
     // BNB and HYPE not on Coinbase
     if (sym === 'BNB' || sym === 'HYPE') {
       return { exchange, available: false, reason: 'Not listed' };
@@ -166,6 +209,8 @@
 
   async function fetchKraken(sym) {
     const exchange = 'Kraken';
+    const ws = wsSnapshot(exchange, sym);
+    if (ws) return ws;
     const krakenPair = KRAKEN_PAIRS[sym];
     if (!krakenPair) {
       return { exchange, available: false, reason: 'Not listed' };
@@ -198,6 +243,8 @@
 
   async function fetchBybit(sym) {
     const exchange = 'Bybit';
+    const ws = wsSnapshot(exchange, sym);
+    if (ws) return ws;
     // HYPE not on Bybit
     if (sym === 'HYPE') {
       return { exchange, available: false, reason: 'Not listed' };
@@ -282,6 +329,8 @@
 
   async function fetchOkx(sym) {
     const exchange = 'OKX';
+    const ws = wsSnapshot(exchange, sym);
+    if (ws) return ws;
     // HYPE not on OKX
     if (sym === 'HYPE') {
       return { exchange, available: false, reason: 'Not listed' };
@@ -307,8 +356,22 @@
     }
   }
 
+  async function fetchKuCoin(sym) {
+    const exchange = 'KuCoin';
+    const ws = wsSnapshot(exchange, sym);
+    if (ws) return ws;
+    return { exchange, available: false, reason: 'WS unavailable' };
+  }
+
+  async function fetchGate(sym) {
+    const exchange = 'Gate.io';
+    const ws = wsSnapshot(exchange, sym);
+    if (ws) return ws;
+    return { exchange, available: false, reason: 'WS unavailable' };
+  }
+
   // ── aggregate ─────────────────────────────────────────────────────
-  const WEIGHTS = { Binance: 0.40, Bybit: 0.25, OKX: 0.15, Coinbase: 0.10, Kraken: 0.10 };
+  const WEIGHTS = { Binance: 0.25, Bybit: 0.20, OKX: 0.15, Coinbase: 0.12, Kraken: 0.10, KuCoin: 0.10, 'Gate.io': 0.08 };
 
   function computeAggregate(exchanges) {
     let score       = 0;
@@ -348,6 +411,8 @@
       fetchKraken(sym),
       fetchBybit(sym),
       fetchOkx(sym),
+      fetchKuCoin(sym),
+      fetchGate(sym),
     ]);
 
     const exchanges = results.map(r =>
@@ -381,6 +446,9 @@
     fetchAll,
     start() {
       if (_timer) return;
+      if (window.ExchangeWS?.start) {
+        try { window.ExchangeWS.start(); } catch (_) {}
+      }
       fetchAll();
       _timer = setInterval(fetchAll, POLL_MS);
     },

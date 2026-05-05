@@ -287,9 +287,10 @@ class HistoricalSettlementFetcher {
         // Kalshi: result is 'YES' or 'NO'
         let marketDir = null;
         if (m.source === 'kalshi') {
-          // YES = price goes above floor (UP), NO = price goes below floor (DOWN)
-          const strikeDir = m.strikeType === 'above' ? 'YES_UP' : 'YES_DOWN';
-          marketDir = m.result === 'YES' ? (strikeDir === 'YES_UP' ? 'UP' : 'DOWN') : 'DOWN';
+          const strike = String(m.strikeType ?? m.raw?.strike_type ?? 'above').toLowerCase();
+          const yesDir = strike === 'below' ? 'DOWN' : 'UP';
+          const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+          marketDir = String(m.result).toUpperCase() === 'YES' ? yesDir : noDir;
         } else {
           // Polymarket and Coinbase: outcome is already 'YES' or 'NO' (price up/down)
           marketDir = m.outcome === 'YES' ? 'UP' : 'DOWN';
@@ -350,7 +351,10 @@ class HistoricalSettlementFetcher {
       for (const m of data.settled) {
         let marketDir;
         if (m.source === 'kalshi') {
-          marketDir = m.result === 'YES' ? 'UP' : 'DOWN';
+          const strike = String(m.strikeType ?? m.raw?.strike_type ?? 'above').toLowerCase();
+          const yesDir = strike === 'below' ? 'DOWN' : 'UP';
+          const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+          marketDir = String(m.result).toUpperCase() === 'YES' ? yesDir : noDir;
         } else {
           marketDir = m.outcome === 'YES' ? 'UP' : 'DOWN';
         }

@@ -13,7 +13,7 @@
 //
 // Drive list is built dynamically via storage:getDrives IPC at load time.
 // Categories: predictions · decisions · cfm_snapshots · shell_events ·
-//             resolver_outcomes · errors
+//             resolver_outcomes · logic_debug · errors
 // ══════════════════════════════════════════════════════════════════════════════
 
 (function () {
@@ -60,6 +60,7 @@
     decisions:        {},   // sym → { trade, watch, hold, exit, skip }
     resolverOutcomes: {},   // sym → { correct, wrong, total }
     shellEvents: { photons: 0, vetoFires: 0, vetoReleases: 0, volSpikes: 0 },
+    logicDebug: { total: 0, byType: {} }, // type → count
     errors: [],             // last 30
   };
 
@@ -227,6 +228,19 @@
     flushCat('errors');
   }
 
+  function logLogicDebug(source, type, data = {}) {
+    const entry = {
+      source: String(source || 'unknown').slice(0, 64),
+      type: String(type || 'unspecified').slice(0, 64),
+      ts: Date.now(),
+      ...data,
+    };
+    push('logic_debug', entry);
+    _stats.logicDebug.total++;
+    _stats.logicDebug.byType[entry.type] = (_stats.logicDebug.byType[entry.type] || 0) + 1;
+    flushCat('logic_debug');
+  }
+
   // ── Hourly Kalshi outcome logger ─────────────────────────────────────────────
   function logOutcome(sym, record) {
     push('hourly_kalshi', {
@@ -355,7 +369,8 @@
           Photons: <b>${s.shellEvents.photons}</b> ·
           Veto fires: <b style="color:${s.shellEvents.vetoFires ? 'var(--color-gold)' : 'inherit'}">${s.shellEvents.vetoFires}</b> ·
           Released: <b>${s.shellEvents.vetoReleases}</b> ·
-          Vol spikes: <b style="color:${s.shellEvents.volSpikes ? 'var(--color-gold)' : 'inherit'}">${s.shellEvents.volSpikes}</b>
+          Vol spikes: <b style="color:${s.shellEvents.volSpikes ? 'var(--color-gold)' : 'inherit'}">${s.shellEvents.volSpikes}</b> ·
+          Logic anomalies: <b style="color:${s.logicDebug.total ? 'var(--color-gold)' : 'inherit'}">${s.logicDebug.total}</b>
         </div>
       </div>
 
@@ -376,7 +391,7 @@
           <div>📁 Primary: <code>F:\\WECRYP\\data\\${todayStr()}</code></div>
           ${DRIVE_PATHS.map(p => `<div>💾 Mirror: <code>${p}\\${todayStr()}</code></div>`).join('')}
           ${DRIVE_PATHS.length === 0 ? '<div style="color:var(--color-gold)">⚠ Discovering drives…</div>' : ''}
-          <div style="margin-top:6px">Categories: predictions · decisions · cfm_snapshots · shell_events · resolver_outcomes · errors</div>
+          <div style="margin-top:6px">Categories: predictions · decisions · cfm_snapshots · shell_events · resolver_outcomes · logic_debug · errors</div>
         </div>
 
         <div style="margin-top:10px;font-size:10px;color:var(--color-text-muted)">
@@ -470,6 +485,7 @@
     logShellEvent,
     logResolverOutcome,
     logOutcome,
+    logLogicDebug,
     logError,
     flush:         flushAll,
     getStats:      () => _stats,

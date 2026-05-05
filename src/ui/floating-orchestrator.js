@@ -36,11 +36,21 @@
   const TAIL_RISK_THRESH = 0.80;
   const LAST_CALL_MS     = 60000;
   const MAX_KELLY        = 0.25;
+  const ENABLE_CROWD_FADE_OVERRIDE = true;
 
   // Signal stability — prevents flipping in final minutes
   const LOCK_MS          = 45000;   // hold a trade signal for 45s on same contract
-  const CROWD_FADE_PCT   = 0.80;    // fade crowd when >=80% on one side (last 90s)
-  const CROWD_FADE_SECS  = 90;      // only apply crowd fade in last 90s
+  const CROWD_FADE_NEUTRAL_BAND = 0.03; // treat 47/53 as neutral to avoid noisy fades
+  const CROWD_FADE_MIN_SECS = 180;  // only fade in the 3m–7m window
+  const CROWD_FADE_MAX_SECS = 420;
+  const CROWD_FADE_CONFIRM_MIN_MS = 15000; // dynamic confirm at 3m left
+  const CROWD_FADE_CONFIRM_MAX_MS = 35000; // dynamic confirm at 7m left
+  const CROWD_FADE_MIN_EDGE_CENTS = 14; // stronger edge required than normal trade
+  const CROWD_FADE_MIN_MISPRICE = 0.16; // dynamic floor starts at 16pp
+  const CROWD_FADE_MAX_MISPRICE = 0.22; // and rises to 22pp when earlier
+  const CROWD_FADE_MIN_MODEL_CONF = 0.12; // require model to be at least 62/38
+  const CROWD_FADE_MIN_LIQUIDITY = 1500; // gate out very thin markets
+  const STATE_PRUNE_MS = 120000;
 
   // Sweet spot entry window — best payout + not too close to close
   const SWEET_MIN_SECS   = 180;     // 3 min left
@@ -49,18 +59,61 @@
 
   // _locks[sym+closeTimeMs] = { direction, side, ts, closeTimeMs }
   var _locks = {};
+  // _fadeCandidates[sym+closeTimeMs] = { direction, side, firstTs, lastTs }
+  var _fadeCandidates = {};
 
-  function crowdFadeDir(kalshiYesPrice, secsLeft) {
-    if (secsLeft == null || secsLeft > CROWD_FADE_SECS) return null;
-    if (kalshiYesPrice >= CROWD_FADE_PCT)        return 'DOWN'; // fade heavy YES
-    if (kalshiYesPrice <= (1 - CROWD_FADE_PCT))  return 'UP';  // fade heavy NO
-    return null;
+  function crowdFadeDir(kalshiYesPrice, secsLeft, dirs, modelDir) {
+    if (!Number.isFinite(kalshiYesPrice)) return null;
+    if (!Number.isFinite(secsLeft) || secsLeft <= 0) return null;
+    if (secsLeft < CROWD_FADE_MIN_SECS || secsLeft > CROWD_FADE_MAX_SECS) return null;
+    if (!dirs || !modelDir) return null;
+
+    // Crowd-fade is blockchain-led: follow model direction only when crowd pricing disagrees.
+    var kalshiDir = null;
+    if (kalshiYesPrice >= (0.5 + CROWD_FADE_NEUTRAL_BAND)) kalshiDir = dirs.yesDir;
+    else if (kalshiYesPrice <= (0.5 - CROWD_FADE_NEUTRAL_BAND)) kalshiDir = dirs.noDir;
+    if (!kalshiDir || kalshiDir === modelDir) return null;
+    return modelDir;
   }
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+  function crowdFadeConfirmMs(secsLeft) {
+    if (!Number.isFinite(secsLeft)) return CROWD_FADE_CONFIRM_MAX_MS;
+    var span = Math.max(1, CROWD_FADE_MAX_SECS - CROWD_FADE_MIN_SECS);
+    var t = clamp((secsLeft - CROWD_FADE_MIN_SECS) / span, 0, 1);
+    return Math.round(CROWD_FADE_CONFIRM_MIN_MS + t * (CROWD_FADE_CONFIRM_MAX_MS - CROWD_FADE_CONFIRM_MIN_MS));
+  }
+
+  function crowdFadeMinMisprice(secsLeft) {
+    if (!Number.isFinite(secsLeft)) return CROWD_FADE_MAX_MISPRICE;
+    var span = Math.max(1, CROWD_FADE_MAX_SECS - CROWD_FADE_MIN_SECS);
+    var t = clamp((secsLeft - CROWD_FADE_MIN_SECS) / span, 0, 1);
+    return CROWD_FADE_MIN_MISPRICE + t * (CROWD_FADE_MAX_MISPRICE - CROWD_FADE_MIN_MISPRICE);
+  }
+
+  function pruneContractState(nowMs) {
+    Object.keys(_locks).forEach(function(key) {
+      var v = _locks[key];
+      if (!v) { delete _locks[key]; return; }
+      var expiredByClose = Number.isFinite(v.closeTimeMs) && nowMs > (v.closeTimeMs + 60000);
+      var expiredByAge = Number.isFinite(v.ts) ? (nowMs - v.ts > LOCK_MS * 4) : true;
+      if (expiredByClose || expiredByAge) delete _locks[key];
+    });
+    Object.keys(_fadeCandidates).forEach(function(key) {
+      var v = _fadeCandidates[key];
+      if (!v) { delete _fadeCandidates[key]; return; }
+      if (!Number.isFinite(v.lastTs) || (nowMs - v.lastTs) > STATE_PRUNE_MS) delete _fadeCandidates[key];
+    });
+  }
+
   function scoreToProbUp(score) {
     return clamp(0.5 + score * 0.40, 0.02, 0.98);
+  }
+
+  function yesNoFromStrikeDir(strikeDir) {
+    var yesDir = strikeDir === 'below' ? 'DOWN' : 'UP';
+    return { yesDir: yesDir, noDir: yesDir === 'UP' ? 'DOWN' : 'UP' };
   }
 
   function computeEV(side, modelProbUp, kalshiYesPrice) {
@@ -92,22 +145,115 @@
     };
   }
 
+  function evaluateCrowdFade(params) {
+    var sym            = params.sym;
+    var closeTimeMs    = params.closeTimeMs;
+    var kalshiYesPrice = params.kalshiYesPrice;
+    var secsLeft       = params.secsLeft;
+    var dirs           = params.dirs;
+    var modelDir       = params.modelDir;
+    var modelYesProb   = params.modelYesProb;
+    var modelActive    = params.modelActive;
+    var entryYes       = params.entryYes;
+    var entryNo        = params.entryNo;
+    var liquidity      = params.liquidity;
+
+    var key = sym + '_' + (closeTimeMs || 'none');
+    function clearCandidate() { delete _fadeCandidates[key]; }
+
+    var fadeDir = crowdFadeDir(kalshiYesPrice, secsLeft, dirs, modelDir);
+    if (!fadeDir || !modelActive || !Number.isFinite(modelYesProb)) {
+      clearCandidate();
+      return null;
+    }
+
+    var fadeSide = fadeDir === dirs.yesDir ? 'YES' : 'NO';
+    var fadeEntry = fadeSide === 'YES' ? entryYes : entryNo;
+    if (!fadeEntry) {
+      clearCandidate();
+      return null;
+    }
+
+    var mispricing = Math.abs(modelYesProb - kalshiYesPrice);
+    var minMispricing = crowdFadeMinMisprice(secsLeft);
+    var confirmMs = crowdFadeConfirmMs(secsLeft);
+    var modelConfidence = Math.abs(modelYesProb - 0.5);
+    var edgeOk = Number.isFinite(fadeEntry.edgeCents) && fadeEntry.edgeCents >= CROWD_FADE_MIN_EDGE_CENTS;
+    var modelConfOk = modelConfidence >= CROWD_FADE_MIN_MODEL_CONF;
+    var liquidityOk = !Number.isFinite(liquidity) || liquidity <= 0 || liquidity >= CROWD_FADE_MIN_LIQUIDITY;
+    var qualified = modelConfOk && edgeOk && liquidityOk && mispricing >= minMispricing;
+    if (!qualified) {
+      clearCandidate();
+      return null;
+    }
+
+    var now = Date.now();
+    var prev = _fadeCandidates[key];
+    if (prev && prev.direction === fadeDir && prev.side === fadeSide) {
+      prev.lastTs = now;
+      var ageMs = now - prev.firstTs;
+      return {
+        suggested: true,
+        confirmed: ageMs >= confirmMs,
+        direction: fadeDir,
+        side: fadeSide,
+        entry: fadeEntry,
+        ageMs: ageMs,
+        confirmMs: confirmMs,
+        mispricing: mispricing,
+        minMispricing: minMispricing,
+      };
+    }
+
+    _fadeCandidates[key] = { direction: fadeDir, side: fadeSide, firstTs: now, lastTs: now };
+    return {
+      suggested: true,
+      confirmed: false,
+      direction: fadeDir,
+      side: fadeSide,
+      entry: fadeEntry,
+      ageMs: 0,
+      confirmMs: confirmMs,
+      mispricing: mispricing,
+      minMispricing: minMispricing,
+    };
+  }
+
   function translate(sym, pred) {
     var pm  = window.PredictionMarkets && window.PredictionMarkets.getCoin && window.PredictionMarkets.getCoin(sym);
     var k15 = (pm && pm.kalshi15m) || null;
+    var kAlign = pred && pred.projections && pred.projections.p15 && pred.projections.p15.kalshiAlign ? pred.projections.p15.kalshiAlign : null;
+    var strikeDirRaw = (kAlign && kAlign.strikeDir) || (k15 && k15.strikeDir) || 'above';
+    var strikeDir = strikeDirRaw === 'below' ? 'below' : 'above';
+    var dirs = yesNoFromStrikeDir(strikeDir);
     var modelScore   = (pred && pred.score) || 0;
-    var modelActive  = Math.abs(modelScore) >= MODEL_THRESHOLD;
-    var modelProbUp  = scoreToProbUp(modelScore);
-    var modelBullish = modelScore > 0;
+    var modelProbUpRaw = scoreToProbUp(modelScore);
+    var modelYesProb = null;
+    if (kAlign && Number.isFinite(kAlign.modelYesPct)) {
+      modelYesProb = clamp(kAlign.modelYesPct / 100, 0.02, 0.98);
+    } else {
+      modelYesProb = strikeDir === 'below' ? (1 - modelProbUpRaw) : modelProbUpRaw;
+    }
+    var modelProbUp = strikeDir === 'below' ? (1 - modelYesProb) : modelYesProb;
+    var modelActive = Number.isFinite(kAlign && kAlign.modelYesPct)
+      ? Math.abs((kAlign.modelYesPct / 100) - 0.5) >= 0.08
+      : Math.abs(modelScore) >= MODEL_THRESHOLD;
+    var modelDir = modelYesProb >= 0.5 ? dirs.yesDir : dirs.noDir;
+    var modelBullish = modelDir === 'UP';
     var kalshiYesPrice = k15 ? k15.probability : null;
     var kalshiActive   = kalshiYesPrice !== null && kalshiYesPrice !== undefined;
-    var kalshiBullish  = kalshiActive && kalshiYesPrice >= 0.55;
-    var kalshiBearish  = kalshiActive && kalshiYesPrice <= 0.45;
-    var kalshiNeutral  = kalshiActive && !kalshiBullish && !kalshiBearish;
+    var kalshiDirHint  = !kalshiActive ? null
+                      : kalshiYesPrice >= 0.55 ? dirs.yesDir
+                      : kalshiYesPrice <= 0.45 ? dirs.noDir
+                      : null;
+    var kalshiBullish  = kalshiDirHint === 'UP';
+    var kalshiBearish  = kalshiDirHint === 'DOWN';
+    var kalshiNeutral  = kalshiDirHint === null;
     var closeTimeMs = k15 && k15.closeTime ? new Date(k15.closeTime).getTime() : null;
     var msLeft      = closeTimeMs != null ? Math.max(0, closeTimeMs - Date.now()) : null;
     var secsLeft    = msLeft != null ? msLeft / 1000 : null;
     var minsLeft    = msLeft != null ? msLeft / 60000 : null;
+    pruneContractState(Date.now());
     var tooLate     = msLeft != null && msLeft < MIN_SECONDS_LEFT * 1000;
     var tooEarly    = minsLeft != null && minsLeft > 14.5;
     var lastCall    = msLeft != null && msLeft <= LAST_CALL_MS;
@@ -131,18 +277,21 @@
     var direction, alignment;
     if (kalshiActive && modelActive) {
       var sameDir = (modelBullish && kalshiBullish) || (!modelBullish && kalshiBearish);
-      if (sameDir)        { direction = modelBullish ? 'UP' : 'DOWN'; alignment = 'ALIGNED';     }
-      else if (kalshiNeutral) { direction = modelBullish ? 'UP' : 'DOWN'; alignment = 'MODEL_LEADS'; }
-      else                { direction = modelBullish ? 'UP' : 'DOWN'; alignment = 'DIVERGENT';   }
+      if (sameDir)        { direction = modelDir; alignment = 'ALIGNED';     }
+      else if (kalshiNeutral) { direction = modelDir; alignment = 'MODEL_LEADS'; }
+      else                { direction = modelDir; alignment = 'DIVERGENT';   }
     } else if (modelActive) {
-      direction = modelBullish ? 'UP' : 'DOWN'; alignment = 'MODEL_ONLY';
+      direction = modelDir; alignment = 'MODEL_ONLY';
     } else {
       if (kalshiNeutral)
         return _skip(sym, 'Kalshi ~50/50, model below threshold (' + modelScore.toFixed(3) + ')');
-      direction = kalshiBullish ? 'UP' : 'DOWN'; alignment = 'KALSHI_ONLY';
+      direction = kalshiYesPrice >= 0.5 ? dirs.yesDir : dirs.noDir;
+      alignment = 'KALSHI_ONLY';
     }
-    var side  = direction === 'UP' ? 'YES' : 'NO';
-    var entry = kalshiYesPrice !== null ? analyseEntry(side, modelProbUp, kalshiYesPrice) : null;
+    var entryYes = kalshiYesPrice !== null ? analyseEntry('YES', modelYesProb, kalshiYesPrice) : null;
+    var entryNo  = kalshiYesPrice !== null ? analyseEntry('NO', modelYesProb, kalshiYesPrice) : null;
+    var side  = direction === dirs.yesDir ? 'YES' : 'NO';
+    var entry = side === 'YES' ? entryYes : side === 'NO' ? entryNo : null;
     var mStr  = clamp(Math.abs(modelScore), 0, 1);
     var eBoost = entry ? clamp(Math.abs(entry.edgeCents) / 60, 0, 0.25) : 0;
     var confidence = Math.round(clamp((mStr + eBoost) * 75, 0, 99));
@@ -159,7 +308,7 @@
                     && payout != null && payout >= SWEET_PAYOUT_MIN
                     && action === 'trade';
     var kPct    = kalshiYesPrice != null ? 'Kalshi ' + Math.round(kalshiYesPrice * 100) + '% YES' : '';
-    var mPct    = 'model ' + Math.round(modelProbUp * 100) + '% UP';
+    var mPct    = 'model ' + Math.round(modelYesProb * 100) + '% YES';
     var edgeStr = entry ? ((entry.edgeCents >= 0 ? '+' : '') + entry.edgeCents + 'c/contract') : '';
     var reasonMap = {
       ALIGNED:     sym + ' ' + direction + ': ' + kPct + ' + ' + mPct + ' -> ' + edgeStr,
@@ -177,6 +326,7 @@
       sym: sym, contractTicker: k15 ? k15.ticker : null, strikeStr: strikeStr,
       side: side, direction: direction, alignment: alignment, action: action, confidence: confidence,
       modelScore: modelScore, modelProbUp: parseFloat(modelProbUp.toFixed(4)),
+      modelProbYes: parseFloat(modelYesProb.toFixed(4)),
       kalshiYesPrice: kalshiYesPrice, kalshiActive: kalshiActive,
       closeTimeMs: closeTimeMs,
       msLeft:   msLeft != null ? Math.round(msLeft) : null,
@@ -194,27 +344,60 @@
     // --- Signal lock + crowd fade ---
     var lockKey  = sym + '_' + (closeTimeMs || 'none');
     var lock     = _locks[lockKey];
-    var fadeDir  = crowdFadeDir(kalshiYesPrice, secsLeft);
+    var nowTs    = Date.now();
+    var fadeEval = evaluateCrowdFade({
+      sym: sym,
+      closeTimeMs: closeTimeMs,
+      kalshiYesPrice: kalshiYesPrice,
+      secsLeft: secsLeft,
+      dirs: dirs,
+      modelDir: modelDir,
+      modelYesProb: modelYesProb,
+      modelActive: modelActive,
+      entryYes: entryYes,
+      entryNo: entryNo,
+      liquidity: k15 ? k15.liquidity : null,
+    });
 
-    if (fadeDir) {
-      // Last 90s + extreme crowd → fade, override everything
-      result.direction  = fadeDir;
-      result.side       = fadeDir === 'UP' ? 'YES' : 'NO';
+    if (fadeEval && fadeEval.confirmed && ENABLE_CROWD_FADE_OVERRIDE) {
+      // Persistent, model-confirmed mispricing fade.
+      result.direction  = fadeEval.direction;
+      result.side       = fadeEval.side;
       result.action     = 'trade';
       result.alignment  = 'CROWD_FADE';
       result.crowdFade  = true;
-      result.humanReason = sym + ' CROWD FADE → ' + fadeDir + ': Kalshi ' + Math.round(kalshiYesPrice * 100) + '% YES extreme — fading crowd in final ' + Math.round(secsLeft) + 's';
-      _locks[lockKey]   = { direction: fadeDir, side: result.side, ts: Date.now(), closeTimeMs: closeTimeMs };
+      result.crowdFadeAgeMs = fadeEval.ageMs;
+      result.crowdFadeConfirmLeftSec = 0;
+      result.crowdFadeMispricingPp = Math.round((fadeEval.mispricing || 0) * 100);
+      if (fadeEval.entry) Object.assign(result, fadeEval.entry);
+      result.humanReason = sym + ' CROWD FADE (mispricing hunter) → ' + fadeEval.direction +
+        ': model-vs-market gap ' + result.crowdFadeMispricingPp + 'pp, edge ' + (result.edgeCents || 0) + 'c';
+      _locks[lockKey]   = { direction: fadeEval.direction, side: result.side, ts: nowTs, closeTimeMs: closeTimeMs };
+    } else if (fadeEval && fadeEval.suggested) {
+      // Candidate mispricing is building but not persistent enough yet.
+      result.crowdFadeSuggested = true;
+      result.crowdFade = false;
+      result.crowdFadeAgeMs = fadeEval.ageMs;
+      var confirmLeft = Math.max(0, Math.ceil(((fadeEval.confirmMs || CROWD_FADE_CONFIRM_MAX_MS) - fadeEval.ageMs) / 1000));
+      result.crowdFadeConfirmLeftSec = confirmLeft;
+      result.crowdFadeMispricingPp = Math.round((fadeEval.mispricing || 0) * 100);
+      result.humanReason += ' · crowd-fade setup ' + Math.round((fadeEval.mispricing || 0) * 100) +
+        'pp/' + Math.round((fadeEval.minMispricing || CROWD_FADE_MIN_MISPRICE) * 100) + 'pp (confirm ' + confirmLeft + 's)';
     } else if (result.action === 'trade') {
       // New trade signal — lock it
-      _locks[lockKey] = { direction: result.direction, side: result.side, ts: Date.now(), closeTimeMs: closeTimeMs };
-    } else if (lock && lock.closeTimeMs === closeTimeMs && (Date.now() - lock.ts) < LOCK_MS) {
+      _locks[lockKey] = { direction: result.direction, side: result.side, ts: nowTs, closeTimeMs: closeTimeMs };
+    } else if (lock && lock.closeTimeMs === closeTimeMs && (nowTs - lock.ts) < LOCK_MS) {
       // Signal drifted off trade but lock is still fresh — hold it
-      result.direction   = lock.direction;
-      result.side        = lock.side;
-      result.action      = 'trade';
-      result.signalLocked = true;
-      result.humanReason  = sym + ' [LOCKED ' + Math.round((Date.now() - lock.ts) / 1000) + 's ago] ' + lock.direction;
+      var lockConflict = modelActive && modelDir && lock.direction && modelDir !== lock.direction;
+      if (lockConflict) {
+        delete _locks[lockKey];
+      } else {
+        result.direction   = lock.direction;
+        result.side        = lock.side;
+        result.action      = 'trade';
+        result.signalLocked = true;
+        result.humanReason  = sym + ' [LOCKED ' + Math.round((nowTs - lock.ts) / 1000) + 's ago] ' + lock.direction;
+      }
     }
 
     return result;

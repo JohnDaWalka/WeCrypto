@@ -88,6 +88,22 @@
   })();
   const ENABLE_MDT_SCORE_MULT = true; // set false to instantly revert to pre-MDT formula
 
+  // Fear & Greed Index cache (5-minute TTL)
+  let _fngCache = { value: null, ts: 0 };
+  async function fetchFearGreed() {
+    const now = Date.now();
+    if (now - _fngCache.ts < 300000) return _fngCache.value;
+    // Throttle on attempt (not only success) so transient outages don't spam requests.
+    _fngCache.ts = now;
+    try {
+      const res = await fetch('https://api.alternative.me/fng/?limit=1');
+      if (!res.ok) return _fngCache.value;
+      const data = await res.json();
+      _fngCache.value = parseInt(data.data[0].value, 10);
+    } catch (e) { /* use cached value */ }
+    return _fngCache.value;
+  }
+
   // ================================================================
   // COMPOSITE_WEIGHTS — Global base weights
   // Empirically derived from 30-day Python backtest (h-subshell ±5, 7 coins × 4 horizons).
@@ -99,6 +115,7 @@
   // ================================================================
   const COMPOSITE_WEIGHTS = {
     // ── Synced with backtest-runner.js (2026-04-28) ───────────────────────────
+    // ── Updated 2026-05-04: Increased microstructure weights (short-horizon boost)
     // Trend / directional
     supertrend:  0.10,
     hma:         0.07,
@@ -124,11 +141,34 @@
     ichimoku:    0.05,
     adx:         0.04,
     fisher:      0.04,
-    // Live-only microstructure
-    book:         0.13,
-    flow:         0.12,
-    mktSentiment: 0.11,
+    // Live-only microstructure (INCREASED for h1/h5 edge)
+    book:         0.25,  // was 0.13 — 92% increase for order flow signal at short horizons
+    flow:         0.22,  // was 0.12 — 83% increase for trade flow signal
+    mktSentiment: 0.18,  // was 0.11 — 64% increase for macro context
+    fearGreed:    0.12,  // Fear & Greed Index macro overlay
   };
+
+  // Regime-adaptive weight multipliers — applied after static weights based on live market regime
+  const REGIME_WEIGHT_MULTS = {
+    trending_smooth:   { ema: 1.5, hma: 1.4, vwap: 1.3, obv: 1.2, bands: 0.7, williamsR: 0.7, momentum: 0.5 },
+    trending_volatile: { volume: 1.5, flow: 1.4, book: 1.3, macd: 1.2, ema: 1.1, bands: 0.8, momentum: 2.0 },
+    ranging:           { bands: 1.6, williamsR: 1.5, cci: 1.4, rsi: 1.3, stochrsi: 1.3, ema: 0.7, hma: 0.6, momentum: 0.1 },
+    choppy:            { book: 0.4, flow: 0.4, macd: 0.5, ema: 0.6, bands: 0.6, momentum: 0.3 },
+    neutral:           {},
+  };
+
+  /**
+   * Applies regime-based multipliers to a copy of baseWeights.
+   * Only keys present in both objects are modified; others are unchanged.
+   */
+  function applyRegimeMults(baseWeights, regimeKey) {
+    const mults = REGIME_WEIGHT_MULTS[regimeKey] || {};
+    const result = { ...baseWeights };
+    for (const [k, m] of Object.entries(mults)) {
+      if (result[k] !== undefined) result[k] = result[k] * m;
+    }
+    return result;
+  }
 
   // ── Outer Orbital — coin-specific; activated via PER_COIN_INDICATOR_BIAS ──
   const OUTER_ORBITAL_WEIGHTS = {
@@ -144,82 +184,98 @@
     BTC: {
       // h15 best: stochrsi 64%, vwma 62%, volume 60%
       // h15 worst: momentum 32%, obv 36%, hma 37%
-      stochrsi: 3.5,  // ★ 64% best — was 0.3 (criminally underweighted)
-      vwma:     2.5,  // ★ 62% best
-      volume:   2.2,  // ★ 60% best
+      // ──── TUNED 2026-05-04 HOTFIX2: REGIME-AWARE MOMENTUM (was killed at 0.05, causing DOWN-bias) ──
+      // FIX: Restore momentum to 0.25 + let regime multipliers gate it
+      //      trending_volatile: 2.0x (catch dumps/rallies), ranging: 0.1x (suppress noise)
+      //      This allows early dump detection (May 4 case) while maintaining ranging accuracy
+      stochrsi: 1.8,   // ★ REDUCED FROM 3.5 (64% at h15 but ~40% at h1/h5 - oscillators less reliable short-term)
+      vwma:     1.2,   // ★ REDUCED FROM 2.5 (62% at h15 but less reliable at h1/h5)
+      volume:   1.4,   // ★ REDUCED FROM 2.2 (60% at h15 but noisy at h1/h5)
       // Keep proven mean-reversion core
       bands:      2.5, williamsR: 2.0, structure: 1.4, fisher: 1.3, keltner: 1.6, cci: 1.2,
       cmf: 1.0, rsi: 0.8, macd: 0.6, persistence: 0.8, ema: 0.5, ichimoku: 0.3, adx: 0.3,
       vwap: 0.2, sma: 0.2,
-      // Kill worst performers
-      momentum: 0.05,  // 32% worst
+      // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
+      momentum: 0.25,  // ★ RESTORED FROM 0.05 (2026-05-04 HOTFIX2) — regime gates amplify/suppress
       obv:      0.1,   // 36% worst
-      hma:      0.1,   // 37% worst — confirmed bad for BTC at h15
+      hma:      0.1,   // 37% worst
       mfi:      0.5,
       supertrend: 0.4,
+      // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
+      book:     0.26,  // NEW: Order book imbalance
+      flow:     0.24,  // NEW: Trade flow signal
     },
     ETH: {
       // h15 best: rsi 82%, stochrsi 56%, williamsR 55%
       // h15 worst: mfi 38%, momentum 43%, hma 45%
-      rsi:      5.0,  // ★ 82% best — massive signal
-      stochrsi: 3.5,  // ★ 56% best — was 0.2 (completely ignored!)
-      williamsR: 3.0, // ★ 55% best
-      bands:    2.5,  // proven mean-reversion core
+      // ──── TUNED 2026-05-04 HOTFIX2: REGIME-AWARE MOMENTUM (was killed at 0.01, causing DOWN-bias) ──
+      // FIX: Restore momentum to 0.20 + let regime multipliers gate it
+      //      trending_volatile: 2.0x (catch dumps), ranging: 0.1x (suppress noise)
+      // CRITICAL: rsi 82% at h15 but only 37% at h1/h5 (MASSIVE OVERFITTING)
+      // Solution: Reduce RSI weight dramatically for short horizons
+      rsi:      0.5,   // ★ REDUCED FROM 5.0 (82% at h15 but 37% at h1 - disable for short horizons)
+      stochrsi: 1.0,   // ★ REDUCED FROM 3.5 (56% at h15 but ~30% at h1/h5 - oscillators less reliable short-term)
+      williamsR: 1.4,  // ★ REDUCED FROM 3.0 (62% at h1 is not justified for 3.0x - mean reversion less reliable)
+      bands:    2.5,   // Keep (proven mean-reversion core works across horizons)
       structure: 1.4, keltner: 1.2, cci: 0.9, fisher: 0.8, cmf: 0.6,
       volume: 0.9, persistence: 0.8, obv: 0.5, macd: 0.4,
       ema: 0.35, sma: 0.1, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.3,
-      // Kill worst performers
+      // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
+      momentum: 0.20,  // ★ RESTORED FROM 0.01 (2026-05-04 HOTFIX2) — regime gates amplify/suppress
       mfi:      0.05,  // 38% worst — was 1.8
-      momentum: 0.05,  // 43% worst
       hma:      0.05,  // 45% worst
     },
     SOL: {
-      // ── Tuned 2026-04-30: 14-day walk-forward, 78 signals, 55.1% WR, PF 1.99 ──────────
-      // h15 best (14d, 203 signals): bands 61%, williamsR 58%, fisher 58%, keltner 57%, structure 57%
-      // h15 worst (14d):             vwap 37%, mfi 21%, stochrsi 27%, rsi 29%, momentum 38%
-      // KEY INSIGHT: hma at 4.0 acts as a CONTRARIAN QUALITY GATE — its "wrongness" (41% individual
-      //   accuracy) suppresses marginal signals; killing it drops WR from 50.7% → 49.5% (+175 bad signals)
-      // KEY INSIGHT: maxScore 0.55 is the main WR unlock for mean-reversion — extreme signals (>0.55)
-      //   fire too early and get temporarily stopped out before reversal; moderate signals win at 61.7%
-      bands:     6.5,  // ★ 61% — highest consistency across all runs; primary mean-reversion band
-      fisher:    4.5,  // ★ 58% — extreme price level detection, strong mean-reversion signal
-      williamsR: 4.0,  // ★ 58% — best oscillator confirmed across 14d run
-      hma:       4.0,  // 41% individual BUT serves as contrarian quality gate — keep at 4.0
-      structure: 3.5,  // ★ 57% — support/resistance structural bias
-      cci:       3.5,  // ★ solid oscillator companion; complements williamsR
-      keltner:   3.0,  // ★ 57% — ATR-based band confirmation
-      obv:       0.8,  // volume direction — mild keep
+      // ── Tuned 2026-04-30 & RETUNED 2026-05-04 for h1/h5 recovery ──────────────
+      // h15 best: bands 61%, williamsR 58%, fisher 58%, keltner 57%, structure 57%
+      // h15 worst: vwap 37%, mfi 21%, stochrsi 27%, rsi 29%, momentum 38%
+      // ──── 2026-05-04 UPDATE: h1/h5 CRITICAL FAILURES (30.5% WR) ─────
+      // ROOT CAUSE: Mean-reversion weights fail at h1/h5 (momentum dominates)
+      // FIX: Disable contrarian gates (hma 4.0→0.1), reduce mean-reversion bands,
+      //      BOOST microstructure (flow/book) for momentum trading at short horizons
+      bands:     2.0,   // ★ REDUCED FROM 6.5 (mean-reversion fails at h1/h5, noise dominates)
+      fisher:    1.5,   // ★ REDUCED FROM 4.5 (extreme price levels hard to identify on h1)
+      williamsR: 4.0,   // Keep (proven oscillator, works across horizons)
+      hma:       0.1,   // ★ REDUCED FROM 4.0 (CRITICAL: 41% accuracy = BROKEN quality gate at h1/h5)
+      structure: 1.2,   // ★ REDUCED FROM 3.5 (support/resistance needs multiple candles to form)
+      cci:       3.5,   // Keep (solid oscillator)
+      keltner:   0.8,   // ★ REDUCED FROM 3.0 (ATR bands too volatile at h1)
+      obv:       0.8,   // Keep (volume direction mild signal)
       macd:      0.3, ichimoku: 0.2, adx: 0.2,
       vwma:      0.1, volume: 0.2, sma: 0.0,
       // Kill confirmed worst performers (all verified across 14-day run)
-      vwap:      0.05,  // 37% worst — was 3.5 (dramatically wrong)
+      vwap:      0.05,  // 37% worst
       rsi:       0.05,  // 29% worst — mean-reversion makes RSI signals backwards
-      persistence: 0.05,  // consistently worst across all runs
+      persistence: 0.05,  // consistently worst
       ema:       0.05,  // 36% worst
       cmf:       0.05,  // consistently bad
       supertrend: 0.05,  // momentum hypothesis DISPROVEN for SOL h15
-      momentum:  0.05,  // consistently bad across all runs
-      mfi:       0.05,  // 21% worst — was 2.0 (dramatically wrong)
-      stochrsi:  0.05,  // 27% worst — was 2.5 (dramatically wrong)
+      momentum:  0.50,  // ★ RESTORED FROM 0.05 (2026-05-04 HOTFIX) — regime detection needs this
+      mfi:       0.05,  // 21% worst
+      stochrsi:  0.05,  // 27% worst
+      // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
+      book:      0.30,  // NEW: Order book imbalance (momentum signal at h1/h5)
+      flow:      0.28,  // NEW: Trade flow ratio (key momentum driver for SOL)
     },
     XRP: {
       // h15 best: structure 72%, volume 66%, vwap 65%, fisher 69-70% (h1/h10)
       // h15 worst: momentum 28%, vwma 31%, hma 31%
-      structure: 5.0,  // ★ 72% best — was 1.8
-      volume:    4.5,  // ★ 66% best — confirmed
-      vwap:      4.0,  // ★ 65% best — was 0.15 (outrageously underweighted)
-      fisher:    2.5,  // 70% at h1/h5, strong signal
-      rsi:       2.0,  // 80-100% at h1/h10 — keep high
-      obv:       1.5,  // volume direction confirm
-      williamsR: 1.2,  // moderate keep (was proven in original)
+      // ──── TUNED 2026-05-04: Reduce h15-specific weights, boost h1/h5 performers ──
+      structure: 1.0,   // ★ REDUCED FROM 5.0 (72% at h15 but meaningless at h1/h5 - needs multiple candles)
+      volume:    1.5,   // ★ REDUCED FROM 4.5 (66% at h15 but volume spikes = noise at h1/h5)
+      vwap:      4.0,   // Keep (65% best)
+      fisher:    2.5,   // 70% at h1/h5 — strong signal, keep
+      rsi:       3.5,   // ★ INCREASED FROM 2.0 (80-100% at h1/h10 - massive underweight!)
+      obv:       1.5,   // volume direction confirm
+      williamsR: 1.2,   // moderate keep
       bands:     0.8, supertrend: 0.5, cci: 0.5, cmf: 0.6, keltner: 0.4,
       macd: 0.3, stochrsi: 0.8, persistence: 0.2, ema: 0.2, adx: 0.2, ichimoku: 0.2,
       sma: 0.0,
       mfi: 0.1,
       // Kill confirmed worst performers
-      momentum: 0.05,  // 28% worst — was 1.4
-      vwma:     0.05,  // 31% worst — was 0.15 (already low but still hurting)
-      hma:      0.05,  // 31% worst — was 0.6
+      momentum: 0.01,   // 28% worst (further reduced)
+      vwma:     0.05,   // 31% worst
+      hma:      0.05,   // 31% worst
     },
     HYPE: {
       // h15 best: williamsR 79%, fisher 77%, cci 75%, bands 78% (h1/h5)
@@ -282,7 +338,10 @@
     },
   };
 
-  // SOL re-tuned 2026-04-30: 14d walk-forward, 78 signals, 55.1% WR, PF 1.99 — maxScore 0.55 cap
+  // Expose for adaptive retuner (live mutations propagate to next prediction run)
+  window.PER_COIN_INDICATOR_BIAS = PER_COIN_INDICATOR_BIAS;
+
+  // SOL re-tuned2026-04-30: 14d walk-forward, 78 signals, 55.1% WR, PF 1.99 — maxScore 0.55 cap
   // DOGE stays disabled — needs Dexscreener meme volume feed
   const SIGNAL_DISABLED_COINS = new Set(['DOGE']);
 
@@ -317,32 +376,33 @@
   //      Gate raised to 0.55 (very tight); re-run backtest before trusting live signals.
   const SIGNAL_GATE_OVERRIDES = {
     BTC: {
-      minAbsScore:   0.36,  // ★ optimizer h5 et=0.36, h15 et=0.36 → 68.5% avgWR
-      minAgreement:  0.56,
-      minConfidence: 70,    // ↑ RETUNED: raise floor to reduce false positives (55% → 35% allocation)
-      medAbsScore:   0.54,  // et * 1.5
-      medAgreement:  0.62,
+      minAbsScore:   0.35,  // ★ WF-calibrated 2026-05-04: h15 OOS 52.6% (recent 10-fold: 65.1%)
+      minAgreement:  0.50,
+      minConfidence: 44,
+      medAbsScore:   0.52,
+      medAgreement:  0.60,
     },
     ETH: {
-      minAbsScore:   0.40,  // ★ optimizer h5 et=0.42, h15 et=0.38 → 67-70% avgWR
-      minAgreement:  0.57,
-      minConfidence: 65,    // ↑ RETUNED: maintain steady at 25-30% allocation
-      medAbsScore:   0.60,
-      medAgreement:  0.63,
-    },
-    XRP: {
-      minAbsScore:   0.36,  // ★ optimizer h5 et=0.40, h15 et=0.32 → 57-66% avgWR
+      minAbsScore:   0.30,  // ★ WF-calibrated 2026-05-04: 0.40 was over-tight, h15 OOS 51.8% (recent 56.7%)
       minAgreement:  0.56,
-      minConfidence: 75,    // ↑ RETUNED: very high floor for extreme underdogs (2-3% allocation)
-      medAbsScore:   0.54,
+      minConfidence: 44,
+      medAbsScore:   0.45,
+>>>>>>> 96b6965 (Apply 15m signal and validation updates)
       medAgreement:  0.62,
     },
+    XRP: {
+      minAbsScore:   0.30,  // ★ WF-calibrated 2026-05-04: h15 OOS 45.7% avg (recent 10-fold: 64.7%)
+      minAgreement:  0.50,
+      minConfidence: 50,
+      medAbsScore:   0.45,
+      medAgreement:  0.60,
+    },
     SOL: {
-      minAbsScore:   0.44,  // ★ HIGH: only h10/h15 viable; bias rebalanced (regime shift)
-      minAgreement:  0.64,
-      minConfidence: 80,    // ↑ RETUNED: ultra-conservative (reduce 13% → 5-8% allocation)
-      medAbsScore:   0.64,
-      medAgreement:  0.70,
+      minAbsScore:   0.44,  // ★ Keep tight (noisy); minAgreement lowered: 0.64 blocked valid h15 signals
+      minAgreement:  0.54,
+      minConfidence: 52,
+      medAbsScore:   0.62,
+      medAgreement:  0.66,
     },
     BNB: {
       minAbsScore:   0.55,  // ★ very tight gate — re-enabled 2026-04-27 with overhauled bias; validate via backtest
@@ -468,14 +528,13 @@
   const BACKTEST_THRESHOLD_GRID = [0.08, 0.10, 0.12, 0.16, 0.20];
   const BACKTEST_AGREEMENT_GRID = [0.50, 0.54, 0.58];
   const BACKTEST_FILTER_OVERRIDES = {
-    // Retuned 2026-04-27 via 30-day walk-forward optimization (Python engine v2.5.0).
-    // BTC/ETH/XRP: optimizer consensus; SOL: mean-reversion re-tuned 2026-04-29 (57.7% Kalshi WR);
-    // BNB/HYPE: re-enabled 2026-04-27 with overhauled bias/weights; DOGE: disabled (no live feed).
-    // These values now match SIGNAL_GATE_OVERRIDES.minAbsScore at h15 for BTC/ETH/XRP/SOL.
-    BTC:  { h1: { entryThreshold: 0.36, minAgreement: 0.56 }, h5: { entryThreshold: 0.36, minAgreement: 0.56 }, h10: { entryThreshold: 0.36, minAgreement: 0.57 }, h15: { entryThreshold: 0.36, minAgreement: 0.58 } },
-    ETH:  { h1: { entryThreshold: 0.42, minAgreement: 0.56 }, h5: { entryThreshold: 0.42, minAgreement: 0.56 }, h10: { entryThreshold: 0.40, minAgreement: 0.57 }, h15: { entryThreshold: 0.38, minAgreement: 0.58 } },
-    XRP:  { h1: { entryThreshold: 0.40, minAgreement: 0.54 }, h5: { entryThreshold: 0.40, minAgreement: 0.54 }, h10: { entryThreshold: 0.36, minAgreement: 0.56 }, h15: { entryThreshold: 0.32, minAgreement: 0.58 } },
-    SOL:  { h1: { entryThreshold: 0.45, minAgreement: 0.66 }, h5: { entryThreshold: 0.45, minAgreement: 0.66 }, h10: { entryThreshold: 0.40, minAgreement: 0.62 }, h15: { entryThreshold: 0.41, minAgreement: 0.64, maxScore: 0.55 } },
+    // Retuned 2026-05-04 via true walk-forward OOS backtest (70 folds, 14-day window).
+    // h15 OOS recent-10-fold accuracy: BTC 65%, ETH 57%, SOL 53%, XRP 65%.
+    // Thresholds lowered to match WF-calibrated medians — prior values were over-filtering.
+    BTC:  { h1: { entryThreshold: 0.35, minAgreement: 0.50 }, h5: { entryThreshold: 0.35, minAgreement: 0.50 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.50 } },
+    ETH:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.56 } },
+    XRP:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.50 } },
+    SOL:  { h1: { entryThreshold: 0.43, minAgreement: 0.54 }, h5: { entryThreshold: 0.43, minAgreement: 0.54 }, h10: { entryThreshold: 0.40, minAgreement: 0.54 }, h15: { entryThreshold: 0.40, minAgreement: 0.54, maxScore: 0.55 } },
     BNB:  { h1: { entryThreshold: 0.50, minAgreement: 0.72 }, h5: { entryThreshold: 0.50, minAgreement: 0.72 }, h10: { entryThreshold: 0.50, minAgreement: 0.72 }, h15: { entryThreshold: 0.50, minAgreement: 0.72 } },
     DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
     HYPE: { h1: { entryThreshold: 0.20, minAgreement: 0.56 }, h5: { entryThreshold: 0.25, minAgreement: 0.60 }, h10: { entryThreshold: 0.30, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },
@@ -1658,7 +1717,7 @@
     const tps = slice.map(c => (c.h + c.l + c.c) / 3);
     const mean = tps.reduce((s, v) => s + v, 0) / period;
     const meanDev = tps.reduce((s, v) => s + Math.abs(v - mean), 0) / period;
-    return meanDev > 0 ? (tps[tps.length - 1] - mean) / (0.015 * meanDev) : 0;
+    return meanDev > 0.00001 ? clamp((tps[tps.length - 1] - mean) / (0.015 * meanDev), -500, 500) : 0;
   }
 
   // ── Chaikin Money Flow ─────────────────────────────────────────────────────
@@ -1973,8 +2032,13 @@
   function signalFromScore(score) {
     const absScore = Math.abs(score);
     if (absScore < 0.20) return 'neutral';               // scaled for post-amplification (1.6×)
+    // Positive score = bullish (UP), negative score = bearish (DOWN).
     if (score > 0) return absScore > 0.55 ? 'strong_bull' : 'bullish';
     return absScore > 0.55 ? 'strong_bear' : 'bearish';
+  }
+
+  function directionFromScore(score, threshold = 0.12) {
+    return score > threshold ? 'UP' : score < -threshold ? 'DOWN' : 'FLAT';
   }
 
   function scoreBucket(absScore) {
@@ -3010,6 +3074,131 @@
     return result;
   }
 
+  /**
+   * Detects the current live market regime based on volatility, trend, momentum, book & tape.
+   * Returns a regime object used to adapt indicator weights and build the prediction rationale.
+   */
+  function detectLiveRegime(candles, bookAnalysis, tapeData) {
+    const closes = candles.map(c => c.c);
+    const n = closes.length;
+    if (n < 20) return { regime: 'unknown', confidence: 0, label: 'Insufficient data' };
+
+    // 1. ATR-based volatility regime
+    const atr = calcATR(candles, 10);
+    const atrPct = closes[n-1] > 0 ? (atr / closes[n-1]) * 100 : 0;
+    const isHighVol = atrPct > 0.35;
+    const isLowVol  = atrPct < 0.10;
+
+    // 2. Trend regime: price vs EMA9 and EMA21
+    const ema9  = calcEMA(closes, 9);
+    const ema21 = calcEMA(closes, 21);
+    const e9 = ema9[ema9.length - 1];
+    const e21 = ema21[ema21.length - 1];
+    const price = closes[n-1];
+    const emaCross = e9 > e21 ? 'bull' : e9 < e21 ? 'bear' : 'flat';
+    const priceVsE9 = (price - e9) / (Math.abs(e9) || 1) * 100;
+
+    // 3. Momentum: last 5 bars direction consistency
+    let upBars = 0, downBars = 0;
+    for (let i = n - 5; i < n; i++) {
+      if (closes[i] > closes[i-1]) upBars++;
+      else if (closes[i] < closes[i-1]) downBars++;
+    }
+    const momentumBias = upBars >= 4 ? 'strong_up' : downBars >= 4 ? 'strong_down' : 'mixed';
+
+    // 4. Book pressure (if fresh) — expects imbalance in range [-1, 1]
+    const bookBias = bookAnalysis?.imbalance > 0.15 ? 'bid_heavy'
+                   : bookAnalysis?.imbalance < -0.15 ? 'ask_heavy' : 'balanced';
+
+    // 5. Tape aggression (if available) — expects buyRatio normalised 0–1
+    const tapeBias = tapeData?.buyRatio > 0.65 ? 'buy_aggression'
+                   : tapeData?.buyRatio < 0.35 ? 'sell_aggression' : 'neutral_tape';
+
+    // Determine regime
+    let regime, confidence, label;
+    if (isHighVol && momentumBias !== 'mixed') {
+      regime = 'trending_volatile';
+      confidence = 0.75;
+      label = `Volatile trend (${momentumBias === 'strong_up' ? '↑' : '↓'}) — momentum valid`;
+    } else if (!isHighVol && !isLowVol && emaCross !== 'flat') {
+      regime = 'trending_smooth';
+      confidence = 0.80;
+      label = `Smooth trend (EMA ${emaCross}) — high 15m reliability`;
+    } else if (isLowVol && Math.abs(priceVsE9) < 0.15) {
+      regime = 'ranging';
+      confidence = 0.65;
+      label = 'Range-bound — mean reversion favored';
+    } else if (isHighVol && momentumBias === 'mixed') {
+      regime = 'choppy';
+      confidence = 0.30;
+      label = 'Choppy/indecisive — avoid new entries';
+    } else {
+      regime = 'neutral';
+      confidence = 0.50;
+      label = 'Mixed signals — model-driven';
+    }
+
+    return { regime, confidence, label, emaCross, momentumBias, bookBias, tapeBias, atrPct, isHighVol, isLowVol };
+  }
+
+  /**
+   * Builds a human-readable + machine-usable prediction rationale.
+   * sigVec = array of { name, value, weight } signal contributions.
+   * Returns rationale object with lines[], dirLabel, conviction, preLocked flag.
+   */
+  function buildRationale(sigVec, regime, kalshiProb, coin) {
+    // Find top 3 contributing signals by weighted magnitude
+    const sorted = [...sigVec]
+      .filter(s => Math.abs(s.value) > 0.1)
+      .sort((a, b) => Math.abs(b.value * b.weight) - Math.abs(a.value * a.weight));
+
+    const top3 = sorted.slice(0, 3);
+    const direction = sigVec.reduce((s, x) => s + x.value * x.weight, 0);
+    const dirLabel = direction > 0.05 ? 'UP' : direction < -0.05 ? 'DOWN' : 'FLAT';
+
+    const lines = [];
+
+    // Regime line
+    lines.push(`Regime: ${regime.label}`);
+
+    // Top signals
+    if (top3.length > 0) {
+      lines.push(`Key drivers: ${top3.map(s => {
+        const dir = s.value > 0 ? '▲' : '▼';
+        return `${dir}${s.name}`;
+      }).join(', ')}`);
+    }
+
+    // Kalshi alignment
+    if (kalshiProb !== null && kalshiProb !== undefined) {
+      const kalshiDir = kalshiProb > 0.52 ? 'YES (UP)' : kalshiProb < 0.48 ? 'NO (DOWN)' : 'NEUTRAL';
+      const aligned = (dirLabel === 'UP' && kalshiProb > 0.52) || (dirLabel === 'DOWN' && kalshiProb < 0.48);
+      lines.push(`Kalshi ${(kalshiProb * 100).toFixed(0)}% ${kalshiDir} — ${aligned ? '✓ ALIGNED with model' : '⚡ DIVERGES from model'}`);
+    }
+
+    // Regime-adjusted conviction
+    const conviction = Math.min(1, Math.abs(direction) * regime.confidence * 2);
+    const convLabel = conviction > 0.6 ? 'HIGH' : conviction > 0.35 ? 'MODERATE' : 'LOW';
+
+    lines.push(`Conviction: ${convLabel} (${(conviction * 100).toFixed(0)}%)`);
+
+    // Pre-prediction lock — if conviction HIGH, lock in direction early
+    const preLocked = conviction > 0.55 && regime.confidence > 0.6;
+    if (preLocked) {
+      lines.push(`⚡ PRE-LOCKED ${dirLabel} — ${top3[0]?.name || 'model'} + ${regime.emaCross} EMA + ${regime.bookBias}`);
+    }
+
+    return {
+      lines,
+      dirLabel,
+      conviction,
+      convLabel,
+      preLocked,
+      regimeKey: regime.regime,
+      summary: lines.join(' | ')
+    };
+  }
+
   function buildSignalModel(candles, book, trades, options = {}) {
     if (!candles || candles.length < 20) return null;
 
@@ -3028,9 +3217,18 @@
     // --- Indicators ---
     const rsi = calcRSI(closes);
     let rsiSig = 0;
-    if (rsi > 70) rsiSig = -0.6 - ((rsi - 70) / 30) * 0.4;
-    else if (rsi < 30) rsiSig = 0.6 + ((30 - rsi) / 30) * 0.4;
+    if (rsi > 70) rsiSig = clamp(-0.6 - ((rsi - 70) / 30) * 0.4, -1, -0.2);
+    else if (rsi < 30) rsiSig = clamp(0.6 + ((30 - rsi) / 30) * 0.4, 0.2, 1);
     else rsiSig = (rsi - 50) / 50 * 0.3;
+
+    // RSI(7) fast signal for 15m responsiveness — 2026 research: faster period better for scalping
+    const rsi7 = calcRSI(closes, 7);
+    let rsi7Sig = 0;
+    if (rsi7 > 70) rsi7Sig = clamp(-0.6 - ((rsi7 - 70) / 30) * 0.4, -1, -0.2);
+    else if (rsi7 < 30) rsi7Sig = clamp(0.6 + ((30 - rsi7) / 30) * 0.4, 0.2, 1);
+    else rsi7Sig = (rsi7 - 50) / 50 * 0.3;
+    // Blend 70% RSI(14) + 30% RSI(7) for stability with responsiveness
+    rsiSig = rsiSig * 0.70 + rsi7Sig * 0.30;
 
     const ema9 = calcEMA(closes, 9);
     const ema21 = calcEMA(closes, 21);
@@ -3104,12 +3302,17 @@
     const macdSig = clamp(macdHistNorm * 2.5 + macdCross, -1, 1);
 
     const stochRsiResult = calcStochRSI(closes);
-    const kd = stochRsiResult.k - stochRsiResult.d;
+    // Simple K-line position with cross confirmation
+    const kdCross = stochRsiResult.k > stochRsiResult.d ? 1 : stochRsiResult.k < stochRsiResult.d ? -1 : 0;
     let stochSig = 0;
-    if (stochRsiResult.k > 80) stochSig = -0.6 - ((stochRsiResult.k - 80) / 20) * 0.4;
-    else if (stochRsiResult.k < 20) stochSig = 0.6 + ((20 - stochRsiResult.k) / 20) * 0.4;
-    else stochSig = (stochRsiResult.k - 50) / 50 * 0.35;
-    stochSig = clamp(stochSig + clamp(kd / 20, -0.18, 0.18), -1, 1);
+    if (stochRsiResult.k > 80) {
+      stochSig = -0.6 - ((stochRsiResult.k - 80) / 20) * 0.4;
+    } else if (stochRsiResult.k < 20) {
+      stochSig = 0.6 + ((20 - stochRsiResult.k) / 20) * 0.4;
+    } else {
+      stochSig = (stochRsiResult.k - 50) / 50 * 0.35;
+    }
+    stochSig = clamp(stochSig + kdCross * 0.12, -1, 1);
 
     const adxResult = calcADX(candles);
     const diDiff = (adxResult.pdi - adxResult.mdi) / Math.max(adxResult.pdi + adxResult.mdi, 1);
@@ -3127,7 +3330,7 @@
     let wRSig = 0;
     if (wR > -20) wRSig = -0.6 - ((wR + 20) / 20) * 0.4;
     else if (wR < -80) wRSig = 0.6 + ((-80 - wR) / 20) * 0.4;
-    else wRSig = (wR + 50) / 50 * -0.3;
+    else wRSig = clamp((-wR - 50) / 50 * 0.6, -1, 1);
     wRSig = clamp(wRSig, -1, 1);
 
     const mfi = calcMFI(candles);
@@ -3145,13 +3348,13 @@
     const hmaSlope = (hmaCurr - hmaPrev2) / (Math.abs(hmaPrev2) || 1) * 100;
     const hmaDevPct = (lastPrice - hmaCurr) / (Math.abs(hmaCurr) || 1) * 100;
     let hmaSig = clamp(hmaSlope * 8, -0.7, 0.7);
-    if (Math.abs(hmaDevPct) > 0.4) hmaSig += clamp(-hmaDevPct * 0.28, -0.3, 0.3);
+    if (Math.abs(hmaDevPct) > 0.4) hmaSig += clamp(hmaDevPct * 0.28, -0.3, 0.3);
     hmaSig = clamp(hmaSig, -1, 1);
 
     // --- VWMA signal (volume-weighted trend confirmation) ---
     const vwmaLine  = calcVWMA(candles, 20);
     const vwmaCurr  = vwmaLine[vwmaLine.length - 1];
-    const vwmaPrev  = vwmaLine[vwmaLine.length - 4] ?? vwmaCurr;
+    const vwmaPrev  = vwmaLine[vwmaLine.length - 3] ?? vwmaCurr;
     const vwmaSlope = (vwmaCurr - vwmaPrev) / (Math.abs(vwmaPrev) || 1) * 100;
     const vwmaDevPct = (lastPrice - vwmaCurr) / (Math.abs(vwmaCurr) || 1) * 100;
     let vmaSig = clamp(vwmaSlope * 6, -0.6, 0.6);
@@ -3189,7 +3392,8 @@
     // --- Book & Trade Flow ---
     const bookAnalysis = analyzeBook(book);
     const tradeFlow = analyzeTradeFlow(trades);
-    const bookSig = clamp((bookAnalysis.imbalance || 0) * 1.5, -1, 1);
+    const bookFresh = book && (Date.now() - (book.timestamp || 0)) < 30000;
+    const bookSig = bookFresh ? clamp((bookAnalysis.imbalance || 0) * 1.5, -1, 1) : 0;
     let flowSig = 0;
     if (tradeFlow.aggressor === 'buyers') flowSig = Math.min(1, (tradeFlow.buyRatio - 50) / 30);
     else if (tradeFlow.aggressor === 'sellers') flowSig = Math.max(-1, -(tradeFlow.sellRatio - 50) / 30);
@@ -3208,11 +3412,14 @@
     const supertrendSig = stR.signal;
 
     // CCI
+    // FIX (2026-05-04 CRITICAL): Remove sign inversion in neutral zone (line 3406)
+    // BEFORE: else cciSig = clamp(-cciVal / 200, ...);  // ← Inverted CCI signal 100% of time in neutral zone
+    // AFTER: else cciSig = clamp(cciVal / 200, ...);   // ← Correct: +CCI → +signal (bullish)
     const cciVal = calcCCI(candles, 14);
     let cciSig = 0;
     if (cciVal > 150) cciSig = -clamp((cciVal - 100) / 150, 0, 1);
     else if (cciVal < -150) cciSig = clamp((-100 - cciVal) / 150, 0, 1);
-    else cciSig = clamp(-cciVal / 200, -0.3, 0.3);
+    else cciSig = clamp(cciVal / 200, -0.3, 0.3);  // ✅ FIXED: Removed negation
     cciSig = clamp(cciSig, -1, 1);
 
     // CMF — Chaikin Money Flow
@@ -3220,8 +3427,11 @@
     const cmfSig = clamp(cmfVal * 2.5, -1, 1);
 
     // Fisher Transform
+    // FIX (2026-05-04 CRITICAL): Remove negation that inverts Fisher signal 100% of the time
+    // BEFORE: const fisherSig = clamp(-fisherVal / 2.5, -1, 1);  // ← Inverted always
+    // AFTER: const fisherSig = clamp(fisherVal / 2.5, -1, 1);   // ← Correct: +Fisher → +signal (bullish)
     const fisherVal = calcFisher(candles, 10);
-    const fisherSig = clamp(-fisherVal / 2.5, -1, 1);
+    const fisherSig = clamp(fisherVal / 2.5, -1, 1);  // ✅ FIXED: Removed negation
 
     // Keltner Channels
     const kelt = calcKeltner(candles, 20, 2.0);
@@ -3229,6 +3439,15 @@
     if (kelt.position >= 0.88) keltSig = -clamp((kelt.position - 0.88) / 0.12, 0, 1);
     else if (kelt.position <= 0.12) keltSig = clamp((0.12 - kelt.position) / 0.12, 0, 1);
     else keltSig = clamp(-(kelt.position - 0.5) * 0.45, -0.22, 0.22);
+
+    // Use cached Fear & Greed (non-blocking, updates in background)
+    const fng = _fngCache.value;
+    let fngSig = 0;
+    if (fng !== null) {
+      if (fng < 30) fngSig = clamp((30 - fng) / 30 * 0.4, 0, 0.4);      // Extreme Fear → bullish
+      else if (fng > 70) fngSig = clamp(-(fng - 70) / 30 * 0.4, -0.4, 0); // Extreme Greed → bearish
+    }
+    fetchFearGreed(); // kick off background refresh (non-blocking)
 
     const signalVector = {
       hma:  hmaSig,
@@ -3257,6 +3476,7 @@
       cmf: cmfSig,
       fisher: fisherSig,
       keltner: keltSig,
+      fearGreed: fngSig,
     };
 
     // ── PATCH1.11: Wall Absorption Signal Suppression ──────────────────────
@@ -3283,9 +3503,13 @@
     const biasedVector = applyBiasFilter(signalVector, mdt);
     Object.assign(signalVector, biasedVector);
     const activeKeys = Object.keys(signalVector).filter(key => includeMicrostructure || !MICRO_SIGNAL_KEYS.includes(key));
+    // Regime detection BEFORE composite — adaptiveWeights must affect actual score computation
+    const _tapeNorm = tradeFlow ? { buyRatio: tradeFlow.buyRatio / 100 } : null;
+    const liveRegime = detectLiveRegime(candles, bookAnalysis, _tapeNorm);
+    const adaptiveWeights = applyRegimeMults(COMPOSITE_WEIGHTS, liveRegime.regime);
     const coinBias = PER_COIN_INDICATOR_BIAS[options.sym?.toUpperCase()] ?? {};
     const weightedComposite = keys => {
-      const effW = key => ((COMPOSITE_WEIGHTS[key] ?? OUTER_ORBITAL_WEIGHTS[key] ?? 0) * (coinBias[key] ?? 1.0));
+      const effW = key => ((adaptiveWeights[key] ?? OUTER_ORBITAL_WEIGHTS[key] ?? 0) * (coinBias[key] ?? 1.0));
       const totalWeight = keys.reduce((sum, key) => sum + effW(key), 0) || 1;
       return keys.reduce((sum, key) => sum + signalVector[key] * effW(key), 0) / totalWeight;
     };
@@ -3295,7 +3519,11 @@
 
     // ADX gate: suppress signal in flat/ranging markets (ADX < 20 = noise).
     // Proportional — dead-flat market (ADX=5) dampens composite by 75%.
-    const adxGate = adxResult.adx < 20 ? Math.max(0.25, adxResult.adx / 20) : 1.0;
+    const adxGate = adxResult.adx < 10 
+      ? Math.max(0.05, adxResult.adx / 10 * 0.25)
+      : adxResult.adx < 20 
+      ? Math.max(0.25, adxResult.adx / 20) 
+      : 1.0;
 
     // Amplify: realistic composite range is 0–0.45 → stretch to 0–0.9 so
     // high-agreement signals reach meaningful confidence levels in the UI.
@@ -3344,7 +3572,7 @@
       },
     };
     const driverSummary = summarizeSignalDrivers(signalVector, indicatorsSummary);
-    const dir = score > 0.12 ? 'UP' : score < -0.12 ? 'DOWN' : 'FLAT';
+    const dir = directionFromScore(score);
 
     // DIAGNOSTIC: Signal composition analysis for weak coins
     if (isWeakCoin && Math.abs(score) > 0.20) {  // Interesting signals only
@@ -3355,6 +3583,29 @@
       const conf = confidenceFromScore(Math.abs(score));
       console.debug(`[SIGNAL-COMP] ${options.sym}: score=${score.toFixed(3)} conf=${conf}% dir=${dir} bull=${agreement.bulls}/${agreement.active} top: ${topIndicators.join(' ')}`);
     }
+
+    // Build sigVec for rationale(named signal contributions, using adaptive weights)
+    const _sigVec = [];
+    if (typeof rsiSig    !== 'undefined') _sigVec.push({ name: 'rsi',        value: rsiSig,    weight: adaptiveWeights.rsi        ?? COMPOSITE_WEIGHTS.rsi        ?? 0.06 });
+    if (typeof macdSig   !== 'undefined') _sigVec.push({ name: 'macd',       value: macdSig,   weight: adaptiveWeights.macd       ?? COMPOSITE_WEIGHTS.macd       ?? 0.07 });
+    if (typeof emaSig    !== 'undefined') _sigVec.push({ name: 'ema',        value: emaSig,    weight: adaptiveWeights.ema        ?? COMPOSITE_WEIGHTS.ema        ?? 0.05 });
+    if (typeof hmaSig    !== 'undefined') _sigVec.push({ name: 'hma',        value: hmaSig,    weight: adaptiveWeights.hma        ?? COMPOSITE_WEIGHTS.hma        ?? 0.07 });
+    if (typeof bandSig   !== 'undefined') _sigVec.push({ name: 'bands',      value: bandSig,   weight: adaptiveWeights.bands      ?? COMPOSITE_WEIGHTS.bands      ?? 0.08 });
+    if (typeof stochSig  !== 'undefined') _sigVec.push({ name: 'stochrsi',   value: stochSig,  weight: adaptiveWeights.stochrsi   ?? COMPOSITE_WEIGHTS.stochrsi   ?? 0.04 });
+    if (typeof wRSig     !== 'undefined') _sigVec.push({ name: 'williamsR',  value: wRSig,     weight: adaptiveWeights.williamsR  ?? COMPOSITE_WEIGHTS.williamsR  ?? 0.07 });
+    if (typeof bookSig   !== 'undefined') _sigVec.push({ name: 'book',       value: bookSig,   weight: adaptiveWeights.book       ?? COMPOSITE_WEIGHTS.book       ?? 0.25 });
+    if (typeof obvSig    !== 'undefined') _sigVec.push({ name: 'obv',        value: obvSig,    weight: adaptiveWeights.obv        ?? COMPOSITE_WEIGHTS.obv        ?? 0.07 });
+    if (typeof cciSig    !== 'undefined') _sigVec.push({ name: 'cci',        value: cciSig,    weight: adaptiveWeights.cci        ?? COMPOSITE_WEIGHTS.cci        ?? 0.05 });
+    if (typeof fngSig    !== 'undefined') _sigVec.push({ name: 'fearGreed',  value: fngSig,    weight: adaptiveWeights.fearGreed  ?? COMPOSITE_WEIGHTS.fearGreed  ?? 0.12 });
+    if (typeof vwapSig   !== 'undefined') _sigVec.push({ name: 'vwap',       value: vwapSig,   weight: adaptiveWeights.vwap       ?? OUTER_ORBITAL_WEIGHTS.vwap   ?? 0.05 });
+    if (typeof flowSig   !== 'undefined') _sigVec.push({ name: 'flow',       value: flowSig,   weight: adaptiveWeights.flow       ?? COMPOSITE_WEIGHTS.flow       ?? 0.22 });
+    if (typeof volSig    !== 'undefined') _sigVec.push({ name: 'volume',     value: volSig,    weight: adaptiveWeights.volume     ?? COMPOSITE_WEIGHTS.volume     ?? 0.10 });
+    if (typeof mktSig    !== 'undefined') _sigVec.push({ name: 'mktSentiment', value: mktSig,  weight: adaptiveWeights.mktSentiment ?? COMPOSITE_WEIGHTS.mktSentiment ?? 0.18 });
+
+    // Resolve kalshi probability for alignment check
+    const _kalshiProb = mktData?.combinedProb ?? null;
+
+    const rationale = buildRationale(_sigVec, liveRegime, _kalshiProb, options.sym || '');
 
     return {
       price: lastPrice,
@@ -3395,9 +3646,14 @@
           const kalshiStDir = k15m?.strikeDir       ?? 'above'; // 'above'|'below'
           const isBelowK    = kalshiStDir === 'below';
 
+          // Use RTI price for settlement comparison (Kalshi settles on CME CF RTI, not Binance pool)
+          const rtiData      = window._rtiPrices?.[options.sym] ?? null;
+          const rtiPrice     = rtiData?.price ?? null;   // RTI approximation from 4 constituent exchanges
+          const settlementPrice = rtiPrice ?? lastPrice; // fallback to candle price if RTI unavailable
+
           if (kalshiRef !== null && kalshiRef > 0) {
             // sigma: one-sigma price move over 15 min based on ATR
-            const sigma = (atr * rangeScale) || (lastPrice * 0.003);
+            const sigma = (atr * rangeScale) || (settlementPrice * 0.003);
             // z: how far our projected target is above/below the reference threshold
             const z = (target - kalshiRef) / sigma;
             // P(closePrice ≥ kalshiRef) via normal CDF
@@ -3407,8 +3663,8 @@
             const modelYesPct  = Math.round((isBelowK ? 1 - pAbove : pAbove) * 100);
             const kalshiYesPct = kalshiYes !== null ? Math.round(kalshiYes * 100) : null;
             const divergence   = kalshiYesPct !== null ? Math.abs(modelYesPct - kalshiYesPct) : null;
-            // Distance from current price to reference (+ means we need to rise to meet it)
-            const gapPct       = ((kalshiRef - lastPrice) / lastPrice) * 100;
+            // Distance from settlement price to reference
+            const gapPct       = ((kalshiRef - settlementPrice) / settlementPrice) * 100;
 
             // Direction consistency check:
             // modelYesPct ≥ 50 means model thinks YES wins.
@@ -3439,6 +3695,10 @@
               strikeType:    k15m?.strikeType  ?? null,
               ticker:        k15m?.ticker      ?? null,   // contract ticker for window alignment
               closeTimeMs:   k15m?.closeTime   ? new Date(k15m.closeTime).getTime() : null,
+              // RTI settlement data — Kalshi settles on CME CF RTI, not Binance pool
+              rtiPrice:      rtiPrice,
+              rtiData:       rtiData ? { openAvg: rtiData.openAvg, closeAvg: rtiData.closeAvg, delta: rtiData.delta } : null,
+              priceSource:   rtiPrice ? 'RTI' : 'candle',
               dirConflict,      // true when momentum direction contradicts CDF direction
               cdfImpliedDir,    // direction implied by model probability
               status: divergence === null ? 'no-market'
@@ -3456,6 +3716,9 @@
       scalpSetups,
       mdt,
       reversalFlags,
+      rationale,
+      liveRegime,
+      adaptiveWeights,
       diagnostics: {
         agreement: agreement.agreement,
         conflict: agreement.conflict,

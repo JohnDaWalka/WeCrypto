@@ -75,7 +75,11 @@ class ComprehensiveAccuracyScorecard {
             symbol,
             status: m.status,
             result: m.result, // 'YES' or 'NO'
-            outcome: m.result === 'YES' ? 'UP' : 'DOWN',
+            outcome: (() => {
+              const strike = String(m.strike_type ?? 'above').toLowerCase();
+              const yesDir = strike === 'below' ? 'DOWN' : 'UP';
+              return String(m.result).toUpperCase() === 'YES' ? yesDir : (yesDir === 'UP' ? 'DOWN' : 'UP');
+            })(),
             strikeType: m.strike_type,
             settleTime: m.close_time ? new Date(m.close_time).getTime() : null,
             createdAt: m.created_at ? new Date(m.created_at).getTime() : null,

@@ -69,13 +69,34 @@
     }
   }
 
+  async function safeJsonAny(urls, opts) {
+    let lastErr = null;
+    for (const url of urls) {
+      try {
+        return await safeJson(url, opts);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('all endpoints failed');
+  }
+
   // ── BTC — mempool.space ────────────────────────────────────────────────────
   async function fetchBTC() {
     try {
       const [mR, fR, hR] = await Promise.allSettled([
-        safeJson('https://mempool.space/api/v1/mempool'),
-        safeJson('https://mempool.space/api/v1/fees/recommended'),
-        safeJson('https://mempool.space/api/v1/blocks/tip/height'),
+        safeJsonAny([
+          'https://mempool.space/api/mempool',
+          'https://mempool.space/api/v1/mempool',
+        ]),
+        safeJsonAny([
+          'https://mempool.space/api/v1/fees/recommended',
+          'https://mempool.space/api/fees/recommended',
+        ]),
+        safeJsonAny([
+          'https://mempool.space/api/v1/blocks/tip/height',
+          'https://mempool.space/api/blocks/tip/height',
+        ]),
       ]);
       const m = mR.status === 'fulfilled' ? mR.value : {};
       const f = fR.status === 'fulfilled' ? fR.value : {};
@@ -103,40 +124,31 @@
     }
   }
 
-  // ── ETH — Blockscout mainnet + fallback to Etherscan ────────────────────────
+  // ── ETH — Etherscan free endpoints (stable) ─────────────────────────────────
   async function fetchETH() {
     try {
-      const [sR, gR] = await Promise.allSettled([
-        safeJson('https://eth.blockscout.com/api/v2/stats'),
-        safeJson('https://eth.blockscout.com/api/v2/gas-price-oracle'),
+      const [blockR, gasR] = await Promise.allSettled([
+        safeJson('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber'),
+        safeJson('https://api.etherscan.io/api?module=gastracker&action=gasoracle'),
       ]);
-      const s = sR.status === 'fulfilled' ? sR.value : {};
-      const g = gR.status === 'fulfilled' ? gR.value : {};
-      
-      // Fallback: try GasTracker if Blockscout fails
-      if (!g.average && !g.medium) {
-        try {
-          const gt = await safeJson('https://api.etherscan.io/api?module=gastracker&action=gasoracle&apikey=YourApiKeyToken');
-          if (gt?.result?.SafeGasPrice) {
-            g.slow = gt.result.SafeGasPrice;
-            g.standard = gt.result.StandardGasPrice;
-            g.fast = gt.result.FastGasPrice;
-          }
-        } catch (e) { /* fallback failed */ }
-      }
-      
-      const gasAvg = parseFloat(g.average || g.standard || g.medium || 0);
+      const block = blockR.status === 'fulfilled' ? parseInt(blockR.value?.result, 16) || 0 : 0;
+      const gas = gasR.status === 'fulfilled' ? gasR.value?.result || {} : {};
+      const gasAvg = parseFloat(gas.ProposeGasPrice || gas.StandardGasPrice || gas.SafeGasPrice || 0);
+      const gasFast = parseFloat(gas.FastGasPrice || gasAvg || 0);
+      const gasSlow = parseFloat(gas.SafeGasPrice || gasAvg || 0);
+      if (!block && !gasAvg) throw new Error('Etherscan ETH empty');
       const score = gasAvg > 60 ? 0.5 : gasAvg > 25 ? 0.2 : gasAvg < 5 ? -0.15 : 0;
       return {
         sym: 'ETH', label: 'Ethereum', chain: 'Ethereum Mainnet',
-        source: 'Blockscout', explorerUrl: 'https://eth.blockscout.com',
+        source: 'Etherscan', explorerUrl: 'https://etherscan.io',
         metrics: [
           { k: 'Gas Avg',      v: gasAvg ? `${gasAvg.toFixed(1)} Gwei` : '—' },
-          { k: 'Gas Fast',     v: (g.fast || g.high) ? `${parseFloat(g.fast || g.high).toFixed(1)} Gwei` : '—' },
-          { k: 'Gas Slow',     v: (g.slow || g.low)  ? `${parseFloat(g.slow || g.low).toFixed(1)} Gwei`  : '—' },
-          { k: 'Txs Today',    v: s.transactions_today    ? parseInt(s.transactions_today).toLocaleString()    : '—' },
-          { k: 'Total Addrs',  v: s.total_addresses       ? parseInt(s.total_addresses).toLocaleString()       : '—' },
-          { k: 'Total Txs',    v: s.total_transactions    ? parseInt(s.total_transactions).toLocaleString()    : '—' },
+          { k: 'Gas Fast',     v: gasFast ? `${gasFast.toFixed(1)} Gwei` : '—' },
+          { k: 'Gas Slow',     v: gasSlow ? `${gasSlow.toFixed(1)} Gwei` : '—' },
+          { k: 'Block Height', v: block ? block.toLocaleString() : '—' },
+          { k: 'Txs Today',    v: '—' },
+          { k: 'Total Addrs',  v: '—' },
+          { k: 'Total Txs',    v: '—' },
         ],
         congestion: gasAvg > 50 ? 'HIGH' : gasAvg > 20 ? 'MED' : 'LOW',
         score, signal: scoreLabel(score), ts: Date.now(),
@@ -279,31 +291,7 @@
 
   async function fetchBNB() {
     try {
-      // Try Blockscout first for richer stats
-      const [sR, gR] = await Promise.allSettled([
-        safeJson('https://bsc.blockscout.com/api/v2/stats'),
-        safeJson('https://bsc.blockscout.com/api/v2/gas-price-oracle'),
-      ]);
-      const s = sR.status === 'fulfilled' ? sR.value : {};
-      const g = gR.status === 'fulfilled' ? gR.value : {};
-      const gasAvg = parseFloat(g.average || g.medium || 0);
-      // If Blockscout returned nothing useful, fall back to direct RPC
-      if (!gasAvg && !s.transactions_today) return fetchBNBviaRPC();
-      const score = gasAvg > 8 ? 0.4 : gasAvg > 3 ? 0.1 : 0;
-      return {
-        sym: 'BNB', label: 'BNB Chain', chain: 'BSC Mainnet',
-        source: 'BSC Blockscout', explorerUrl: 'https://bscscan.com',
-        metrics: [
-          { k: 'Gas Avg',      v: gasAvg ? `${gasAvg.toFixed(2)} Gwei` : '—' },
-          { k: 'Gas Fast',     v: (g.fast || g.high) ? `${parseFloat(g.fast || g.high).toFixed(2)} Gwei` : '—' },
-          { k: 'Gas Slow',     v: (g.slow || g.low)  ? `${parseFloat(g.slow || g.low).toFixed(2)} Gwei`  : '—' },
-          { k: 'Txs Today',    v: s.transactions_today ? parseInt(s.transactions_today).toLocaleString() : '—' },
-          { k: 'Total Addrs',  v: s.total_addresses    ? parseInt(s.total_addresses).toLocaleString()    : '—' },
-          { k: 'Total Txs',    v: s.total_transactions ? parseInt(s.total_transactions).toLocaleString() : '—' },
-        ],
-        congestion: gasAvg > 5 ? 'HIGH' : gasAvg > 2 ? 'MED' : 'LOW',
-        score, signal: scoreLabel(score), ts: Date.now(),
-      };
+      return await fetchBNBviaRPC();
     } catch (e) {
       console.debug('[BlockchainScan] BNB fetch error:', e.message);
       return { sym: 'BNB', label: 'BNB Chain', chain: 'BSC Mainnet', error: e.message, metrics: [], score: 0 };

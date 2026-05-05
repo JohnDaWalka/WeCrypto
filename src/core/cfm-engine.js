@@ -27,6 +27,13 @@
       .catch(e => { clearTimeout(tid); throw e; });
   }
 
+  function getWsQuote(provider, sym, maxAgeMs = 20000) {
+    if (!window.ExchangeWS?.getTicker) return null;
+    const q = window.ExchangeWS.getTicker(provider, sym, maxAgeMs);
+    if (!q || !Number.isFinite(q.price) || q.price <= 0) return null;
+    return q;
+  }
+
   const POLL_MS = 15000;
   const WINDOW_MIN = 15;    // 15-minute rolling window — full quarter-hour of CFM data
   const PARTITIONS = 5;     // 5 × 3-minute VWM buckets per window
@@ -145,6 +152,13 @@
   // hit() is now staged: 1 credit for spot first, 2 more only after spot succeeds.
   // This prevents wasting 3 credits on coins that return 404 (e.g. symbols not listed on CB).
   async function fetchCB(sym) {
+    const ws = getWsQuote('COINBASE', sym, 20000);
+    if (ws) {
+      const buy = Number.isFinite(ws.ask) && ws.ask > 0 ? ws.ask : ws.price;
+      const sell = Number.isFinite(ws.bid) && ws.bid > 0 ? ws.bid : ws.price;
+      const spread = ws.price > 0 ? (Math.abs(buy - sell) / ws.price) * 100 : 0;
+      return { price: ws.price, buy, sell, spread, ws: true };
+    }
     if (!can('CB')) return null;
     try {
       const handleResp = async (r) => {
@@ -183,7 +197,18 @@
 
   async function fetchBIN(sym) {
     const binSym = BIN_SYMS[sym];
-    if (!binSym || !can('BIN')) return null;
+    if (!binSym) return null;
+    const ws = getWsQuote('BINANCE', sym, 20000);
+    if (ws) {
+      return {
+        price: ws.price,
+        vol: Number.isFinite(ws.vol24h) ? ws.vol24h : 0,
+        bid: Number.isFinite(ws.bid) ? ws.bid : 0,
+        ask: Number.isFinite(ws.ask) ? ws.ask : 0,
+        ws: true,
+      };
+    }
+    if (!can('BIN')) return null;
     try {
       hit('BIN'); hit('BIN');
       const [ticker, book] = await Promise.all([
@@ -203,7 +228,18 @@
 
   async function fetchOKX(sym) {
     const okxSym = OKX_SYMS[sym];
-    if (!okxSym || !can('OKX')) return null;
+    if (!okxSym) return null;
+    const ws = getWsQuote('OKX', sym, 20000);
+    if (ws) {
+      return {
+        price: ws.price,
+        vol: Number.isFinite(ws.vol24h) ? ws.vol24h : 0,
+        bid: Number.isFinite(ws.bid) ? ws.bid : 0,
+        ask: Number.isFinite(ws.ask) ? ws.ask : 0,
+        ws: true,
+      };
+    }
+    if (!can('OKX')) return null;
     try {
       hit('OKX');
       const r = await fetchWithTimeout(`${OKX_BASE}/ticker?instId=${okxSym}`);
@@ -223,7 +259,18 @@
 
   async function fetchKRK(sym) {
     const krkSym = KRK_SYMS[sym];
-    if (!krkSym || !can('KRK')) return null;
+    if (!krkSym) return null;
+    const ws = getWsQuote('KRAKEN', sym, 20000);
+    if (ws) {
+      return {
+        price: ws.price,
+        vol: Number.isFinite(ws.vol24h) ? ws.vol24h : 0,
+        bid: Number.isFinite(ws.bid) ? ws.bid : 0,
+        ask: Number.isFinite(ws.ask) ? ws.ask : 0,
+        ws: true,
+      };
+    }
+    if (!can('KRK')) return null;
     try {
       hit('KRK');
       const r = await fetchWithTimeout(`${KRK_BASE}/Ticker?pair=${krkSym}`);
@@ -378,11 +425,12 @@
   async function fetchFNG() {
     const now = Date.now();
     if (now - _fngLastFetch < 5 * 60 * 1000) return; // respect 5-min minimum interval
+    // Throttle on attempt to avoid hammering Alternative.me when it is down.
+    _fngLastFetch = now;
     try {
       const res = await fetchWithTimeout('https://api.alternative.me/fng/?limit=1', 8000);
       if (!res.ok) return;
       const data = await res.json();
-      _fngLastFetch = now;
       const entry = data?.data?.[0];
       if (!entry) return;
       window._cfm._fng = {
@@ -705,7 +753,13 @@
 
   // ---- Public API ----
   window.CFMEngine = {
-    async start() { await runCycle(); timer = setInterval(runCycle, POLL_MS); },
+    async start() {
+      if (window.ExchangeWS?.start) {
+        try { window.ExchangeWS.start(); } catch (_) {}
+      }
+      await runCycle();
+      timer = setInterval(runCycle, POLL_MS);
+    },
     stop() { if (timer) { clearInterval(timer); timer = null; } },
     get(sym) { return window._cfm[sym] || null; },
     getAll() { return window._cfm; },

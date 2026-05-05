@@ -37,6 +37,17 @@
 
   async function getJson(url, opts) { return (await timedFetch(url, opts)).json(); }
   async function getText(url, opts) { return (await timedFetch(url, opts)).text();  }
+  async function getJsonAny(urls, opts) {
+    let lastErr = null;
+    for (const url of urls) {
+      try {
+        return await getJson(url, opts);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('all endpoints failed');
+  }
 
   function fmtCompact(n) {
     n = parseFloat(n);
@@ -75,9 +86,18 @@
 
   async function btcMempool() {
     const [mR, fR, hR] = await Promise.allSettled([
-      getJson('https://mempool.space/api/mempool'),
-      getJson('https://mempool.space/api/fees/recommended'),
-      getJson('https://mempool.space/api/blocks/tip/height'),
+      getJsonAny([
+        'https://mempool.space/api/mempool',
+        'https://mempool.space/api/v1/mempool',
+      ]),
+      getJsonAny([
+        'https://mempool.space/api/v1/fees/recommended',
+        'https://mempool.space/api/fees/recommended',
+      ]),
+      getJsonAny([
+        'https://mempool.space/api/v1/blocks/tip/height',
+        'https://mempool.space/api/blocks/tip/height',
+      ]),
     ]);
     const m = mR.status === 'fulfilled' ? mR.value : {};
     const f = fR.status === 'fulfilled' ? fR.value : {};
@@ -500,7 +520,7 @@
 
   const ROUTES = [
     { sym: 'BTC',  handlers: [btcMempool, btcBlockchain] },
-    { sym: 'ETH',  handlers: [ethBlockscout, ethEtherscan] },
+    { sym: 'ETH',  handlers: [ethEtherscan, ethBlockscout] },
     { sym: 'SOL',  handlers: [
         () => solRpc('https://api.mainnet-beta.solana.com'),
         () => solRpc('https://rpc.ankr.com/solana'),
@@ -511,7 +531,7 @@
         () => xrpLedger('https://s2.ripple.com:51234/'),
       ]
     },
-    { sym: 'BNB',  handlers: [bnbBlockscout, bnbBscscan, bnbAnkrRpc] },
+    { sym: 'BNB',  handlers: [bnbAnkrRpc, bnbBscscan, bnbBlockscout] },
     { sym: 'DOGE', handlers: [dogeBlockcypher, dogeChainSo, dogeBlockchair] },
     { sym: 'HYPE', handlers: [hypeHyperliquid] },
   ];

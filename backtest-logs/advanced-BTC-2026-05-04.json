@@ -1,0 +1,999 @@
+{
+  "coin": "BTC",
+  "generatedAt": "2026-05-04T23:31:41.832Z",
+  "daysBack": 1,
+  "results": {
+    "h1": {
+      "horizonMin": 1,
+      "filter": {
+        "entryThreshold": 0.36,
+        "minAgreement": 0.56
+      },
+      "observations": 235,
+      "activeSignals": 25,
+      "coverage": 10.638297872340425,
+      "winRate": 56.00000000000001,
+      "wins": 14,
+      "losses": 9,
+      "avgWin": 0.0951133150816154,
+      "avgLoss": 0.08540228113003366,
+      "avgSignedReturn": 0.022518635238892512,
+      "profitFactor": 1.7324366951889465,
+      "equity": {
+        "final": 100.56291059692919,
+        "returnPct": 0.5629105969291857,
+        "maxDrawdownPct": 0.22204134927509034
+      },
+      "sharpe": 62.95963188297982,
+      "sortino": 94.55547481267675,
+      "calmar": 1402.7403538524513,
+      "buckets": {
+        "strong": {
+          "count": 22,
+          "winRate": 54.54545454545454
+        },
+        "moderate": {
+          "count": 3,
+          "winRate": 66.66666666666666
+        },
+        "light": {
+          "count": 0,
+          "winRate": null
+        }
+      },
+      "sessions": [
+        {
+          "session": "Off-Hours",
+          "total": 6,
+          "winRate": 66.66666666666666
+        },
+        {
+          "session": "London",
+          "total": 9,
+          "winRate": 44.44444444444444
+        },
+        {
+          "session": "NY Open",
+          "total": 10,
+          "winRate": 60
+        }
+      ],
+      "indicatorAccuracy": [
+        {
+          "indicator": "ema",
+          "accuracy": 73.68421052631578,
+          "samples": 19,
+          "bias": "bear",
+          "currentBias": 0.5,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "volume",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "ichimoku",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.3,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "supertrend",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 0.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "persistence",
+          "accuracy": 65.21739130434783,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.8,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "adx",
+          "accuracy": 65.21739130434783,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "sma",
+          "accuracy": 65,
+          "samples": 20,
+          "bias": "bear",
+          "currentBias": 0.2,
+          "baseWeight": 0.03
+        },
+        {
+          "indicator": "williamsR",
+          "accuracy": 64.70588235294117,
+          "samples": 17,
+          "bias": "bear",
+          "currentBias": 2,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "vwap",
+          "accuracy": 62.5,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "vwma",
+          "accuracy": 62.5,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1.2,
+          "baseWeight": 0.06
+        },
+        {
+          "indicator": "cmf",
+          "accuracy": 62.5,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "mfi",
+          "accuracy": 60,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.5,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "obv",
+          "accuracy": 59.09090909090909,
+          "samples": 22,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "cci",
+          "accuracy": 59.09090909090909,
+          "samples": 22,
+          "bias": "bear",
+          "currentBias": 1.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "structure",
+          "accuracy": 58.333333333333336,
+          "samples": 12,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "fisher",
+          "accuracy": 56.52173913043478,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 1.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "bands",
+          "accuracy": 55.55555555555556,
+          "samples": 9,
+          "bias": "bear",
+          "currentBias": 2.5,
+          "baseWeight": 0.08
+        },
+        {
+          "indicator": "stochrsi",
+          "accuracy": 54.166666666666664,
+          "samples": 24,
+          "bias": "bear",
+          "currentBias": 1.8,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "momentum",
+          "accuracy": 50,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.25,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "keltner",
+          "accuracy": 50,
+          "samples": 10,
+          "bias": "bear",
+          "currentBias": 1.6,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "macd",
+          "accuracy": 48,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.6,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "hma",
+          "accuracy": 41.66666666666667,
+          "samples": 24,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        }
+      ],
+      "regimeStats": {
+        "bull": {
+          "w": 3,
+          "t": 3
+        },
+        "bear": {
+          "w": 0,
+          "t": 0
+        },
+        "neutral": {
+          "w": 11,
+          "t": 22
+        }
+      }
+    },
+    "h5": {
+      "horizonMin": 5,
+      "filter": {
+        "entryThreshold": 0.36,
+        "minAgreement": 0.56
+      },
+      "observations": 235,
+      "activeSignals": 25,
+      "coverage": 10.638297872340425,
+      "winRate": 56.00000000000001,
+      "wins": 14,
+      "losses": 9,
+      "avgWin": 0.0951133150816154,
+      "avgLoss": 0.08540228113003366,
+      "avgSignedReturn": 0.022518635238892512,
+      "profitFactor": 1.7324366951889465,
+      "equity": {
+        "final": 100.56291059692919,
+        "returnPct": 0.5629105969291857,
+        "maxDrawdownPct": 0.22204134927509034
+      },
+      "sharpe": 28.15640334574119,
+      "sortino": 42.28649386518288,
+      "calmar": 1402.7403538524513,
+      "buckets": {
+        "strong": {
+          "count": 22,
+          "winRate": 54.54545454545454
+        },
+        "moderate": {
+          "count": 3,
+          "winRate": 66.66666666666666
+        },
+        "light": {
+          "count": 0,
+          "winRate": null
+        }
+      },
+      "sessions": [
+        {
+          "session": "Off-Hours",
+          "total": 6,
+          "winRate": 66.66666666666666
+        },
+        {
+          "session": "London",
+          "total": 9,
+          "winRate": 44.44444444444444
+        },
+        {
+          "session": "NY Open",
+          "total": 10,
+          "winRate": 60
+        }
+      ],
+      "indicatorAccuracy": [
+        {
+          "indicator": "ema",
+          "accuracy": 73.68421052631578,
+          "samples": 19,
+          "bias": "bear",
+          "currentBias": 0.5,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "volume",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "ichimoku",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.3,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "supertrend",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 0.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "persistence",
+          "accuracy": 65.21739130434783,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.8,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "adx",
+          "accuracy": 65.21739130434783,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "sma",
+          "accuracy": 65,
+          "samples": 20,
+          "bias": "bear",
+          "currentBias": 0.2,
+          "baseWeight": 0.03
+        },
+        {
+          "indicator": "williamsR",
+          "accuracy": 64.70588235294117,
+          "samples": 17,
+          "bias": "bear",
+          "currentBias": 2,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "vwap",
+          "accuracy": 62.5,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "vwma",
+          "accuracy": 62.5,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1.2,
+          "baseWeight": 0.06
+        },
+        {
+          "indicator": "cmf",
+          "accuracy": 62.5,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "mfi",
+          "accuracy": 60,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.5,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "obv",
+          "accuracy": 59.09090909090909,
+          "samples": 22,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "cci",
+          "accuracy": 59.09090909090909,
+          "samples": 22,
+          "bias": "bear",
+          "currentBias": 1.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "structure",
+          "accuracy": 58.333333333333336,
+          "samples": 12,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "fisher",
+          "accuracy": 56.52173913043478,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 1.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "bands",
+          "accuracy": 55.55555555555556,
+          "samples": 9,
+          "bias": "bear",
+          "currentBias": 2.5,
+          "baseWeight": 0.08
+        },
+        {
+          "indicator": "stochrsi",
+          "accuracy": 54.166666666666664,
+          "samples": 24,
+          "bias": "bear",
+          "currentBias": 1.8,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "momentum",
+          "accuracy": 50,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.25,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "keltner",
+          "accuracy": 50,
+          "samples": 10,
+          "bias": "bear",
+          "currentBias": 1.6,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "macd",
+          "accuracy": 48,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.6,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "hma",
+          "accuracy": 41.66666666666667,
+          "samples": 24,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        }
+      ],
+      "regimeStats": {
+        "bull": {
+          "w": 3,
+          "t": 3
+        },
+        "bear": {
+          "w": 0,
+          "t": 0
+        },
+        "neutral": {
+          "w": 11,
+          "t": 22
+        }
+      }
+    },
+    "h10": {
+      "horizonMin": 10,
+      "filter": {
+        "entryThreshold": 0.36,
+        "minAgreement": 0.57
+      },
+      "observations": 234,
+      "activeSignals": 25,
+      "coverage": 10.683760683760683,
+      "winRate": 56.00000000000001,
+      "wins": 14,
+      "losses": 10,
+      "avgWin": 0.1305466429605933,
+      "avgLoss": 0.12338519139078456,
+      "avgSignedReturn": 0.023752043501618417,
+      "profitFactor": 1.4812579863492519,
+      "equity": {
+        "final": 100.59243034793182,
+        "returnPct": 0.592430347931824,
+        "maxDrawdownPct": 0.5198877925876777
+      },
+      "sharpe": 15.080622052425324,
+      "sortino": 19.576706379910473,
+      "calmar": 659.8600191186381,
+      "buckets": {
+        "strong": {
+          "count": 22,
+          "winRate": 54.54545454545454
+        },
+        "moderate": {
+          "count": 3,
+          "winRate": 66.66666666666666
+        },
+        "light": {
+          "count": 0,
+          "winRate": null
+        }
+      },
+      "sessions": [
+        {
+          "session": "Off-Hours",
+          "total": 6,
+          "winRate": 50
+        },
+        {
+          "session": "London",
+          "total": 9,
+          "winRate": 55.55555555555556
+        },
+        {
+          "session": "NY Open",
+          "total": 10,
+          "winRate": 60
+        }
+      ],
+      "indicatorAccuracy": [
+        {
+          "indicator": "cmf",
+          "accuracy": 81.25,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "vwap",
+          "accuracy": 75,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "sma",
+          "accuracy": 75,
+          "samples": 20,
+          "bias": "bear",
+          "currentBias": 0.2,
+          "baseWeight": 0.03
+        },
+        {
+          "indicator": "ema",
+          "accuracy": 73.68421052631578,
+          "samples": 19,
+          "bias": "bear",
+          "currentBias": 0.5,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "ichimoku",
+          "accuracy": 72,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.3,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "persistence",
+          "accuracy": 69.56521739130434,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.8,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "vwma",
+          "accuracy": 68.75,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1.2,
+          "baseWeight": 0.06
+        },
+        {
+          "indicator": "volume",
+          "accuracy": 64,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "supertrend",
+          "accuracy": 64,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 0.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "cci",
+          "accuracy": 63.63636363636363,
+          "samples": 22,
+          "bias": "bear",
+          "currentBias": 1.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "stochrsi",
+          "accuracy": 62.5,
+          "samples": 24,
+          "bias": "bear",
+          "currentBias": 1.8,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "adx",
+          "accuracy": 60.86956521739131,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "fisher",
+          "accuracy": 60.86956521739131,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 1.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "williamsR",
+          "accuracy": 58.82352941176471,
+          "samples": 17,
+          "bias": "bear",
+          "currentBias": 2,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "obv",
+          "accuracy": 50,
+          "samples": 22,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "momentum",
+          "accuracy": 50,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.25,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "structure",
+          "accuracy": 50,
+          "samples": 12,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "bands",
+          "accuracy": 44.44444444444444,
+          "samples": 9,
+          "bias": "bear",
+          "currentBias": 2.5,
+          "baseWeight": 0.08
+        },
+        {
+          "indicator": "macd",
+          "accuracy": 44,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.6,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "mfi",
+          "accuracy": 40,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.5,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "keltner",
+          "accuracy": 40,
+          "samples": 10,
+          "bias": "bear",
+          "currentBias": 1.6,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "hma",
+          "accuracy": 33.33333333333333,
+          "samples": 24,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        }
+      ],
+      "regimeStats": {
+        "bull": {
+          "w": 2,
+          "t": 3
+        },
+        "bear": {
+          "w": 0,
+          "t": 0
+        },
+        "neutral": {
+          "w": 12,
+          "t": 22
+        }
+      }
+    },
+    "h15": {
+      "horizonMin": 15,
+      "filter": {
+        "entryThreshold": 0.36,
+        "minAgreement": 0.58
+      },
+      "observations": 233,
+      "activeSignals": 25,
+      "coverage": 10.72961373390558,
+      "winRate": 72,
+      "wins": 18,
+      "losses": 7,
+      "avgWin": 0.15943668904397656,
+      "avgLoss": 0.14628147693065036,
+      "avgSignedReturn": 0.07383560257108102,
+      "profitFactor": 2.8026792328328685,
+      "equity": {
+        "final": 101.85702749229308,
+        "returnPct": 1.857027492293085,
+        "maxDrawdownPct": 0.6460664858073325
+      },
+      "sharpe": 29.228034091916737,
+      "sortino": 44.431046609584484,
+      "calmar": 15820.71020532009,
+      "buckets": {
+        "strong": {
+          "count": 22,
+          "winRate": 72.72727272727273
+        },
+        "moderate": {
+          "count": 3,
+          "winRate": 66.66666666666666
+        },
+        "light": {
+          "count": 0,
+          "winRate": null
+        }
+      },
+      "sessions": [
+        {
+          "session": "Off-Hours",
+          "total": 6,
+          "winRate": 83.33333333333334
+        },
+        {
+          "session": "London",
+          "total": 9,
+          "winRate": 66.66666666666666
+        },
+        {
+          "session": "NY Open",
+          "total": 10,
+          "winRate": 70
+        }
+      ],
+      "indicatorAccuracy": [
+        {
+          "indicator": "cmf",
+          "accuracy": 81.25,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "ema",
+          "accuracy": 78.94736842105263,
+          "samples": 19,
+          "bias": "bear",
+          "currentBias": 0.5,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "fisher",
+          "accuracy": 78.26086956521739,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 1.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "vwap",
+          "accuracy": 75,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "stochrsi",
+          "accuracy": 75,
+          "samples": 24,
+          "bias": "bear",
+          "currentBias": 1.8,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "sma",
+          "accuracy": 75,
+          "samples": 20,
+          "bias": "bear",
+          "currentBias": 0.2,
+          "baseWeight": 0.03
+        },
+        {
+          "indicator": "cci",
+          "accuracy": 72.72727272727273,
+          "samples": 22,
+          "bias": "bear",
+          "currentBias": 1.2,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "williamsR",
+          "accuracy": 70.58823529411765,
+          "samples": 17,
+          "bias": "bear",
+          "currentBias": 2,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "persistence",
+          "accuracy": 69.56521739130434,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.8,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "adx",
+          "accuracy": 69.56521739130434,
+          "samples": 23,
+          "bias": "bear",
+          "currentBias": 0.3,
+          "baseWeight": 0.04
+        },
+        {
+          "indicator": "vwma",
+          "accuracy": 68.75,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 1.2,
+          "baseWeight": 0.06
+        },
+        {
+          "indicator": "volume",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "ichimoku",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.3,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "supertrend",
+          "accuracy": 68,
+          "samples": 25,
+          "bias": "bear",
+          "currentBias": 0.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "structure",
+          "accuracy": 58.333333333333336,
+          "samples": 12,
+          "bias": "bear",
+          "currentBias": 1.4,
+          "baseWeight": 0.1
+        },
+        {
+          "indicator": "bands",
+          "accuracy": 55.55555555555556,
+          "samples": 9,
+          "bias": "bear",
+          "currentBias": 2.5,
+          "baseWeight": 0.08
+        },
+        {
+          "indicator": "obv",
+          "accuracy": 54.54545454545454,
+          "samples": 22,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "mfi",
+          "accuracy": 52,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.5,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "keltner",
+          "accuracy": 50,
+          "samples": 10,
+          "bias": "bear",
+          "currentBias": 1.6,
+          "baseWeight": 0.05
+        },
+        {
+          "indicator": "macd",
+          "accuracy": 40,
+          "samples": 25,
+          "bias": "bull",
+          "currentBias": 0.6,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "hma",
+          "accuracy": 20.833333333333336,
+          "samples": 24,
+          "bias": "bull",
+          "currentBias": 0.1,
+          "baseWeight": 0.07
+        },
+        {
+          "indicator": "momentum",
+          "accuracy": 18.75,
+          "samples": 16,
+          "bias": "bull",
+          "currentBias": 0.25,
+          "baseWeight": 0.05
+        }
+      ],
+      "regimeStats": {
+        "bull": {
+          "w": 1,
+          "t": 3
+        },
+        "bear": {
+          "w": 0,
+          "t": 0
+        },
+        "neutral": {
+          "w": 17,
+          "t": 22
+        }
+      }
+    }
+  }
+}
