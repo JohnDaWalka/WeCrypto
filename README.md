@@ -261,6 +261,7 @@ graph LR
         POLY["Polymarket API<br/>Resolved Markets"]
         COIN["Coinbase API<br/>Predictions"]
         BINANCE["Binance/Kraken<br/>OHLCV Candles"]
+        PYTH["Pyth Network<br/>Price Feeds & CI"]
     end
     
     MAIN --> IPC
@@ -273,6 +274,7 @@ graph LR
     FETCHER --> POLY
     FETCHER --> COIN
     FETCHER --> BINANCE
+    FETCHER --> PYTH
     
     style electron fill:#1e90ff,color:#fff,stroke:#000,stroke-width:2px
     style renderer fill:#228b22,color:#fff,stroke:#000,stroke-width:2px
@@ -302,6 +304,7 @@ graph LR
 - Polymarket API — Resolved market data
 - Coinbase API — Prediction outcomes
 - Binance/Kraken — OHLCV candles for technical analysis
+- Pyth Network — First-party price feeds with confidence intervals
 
 **Flow:** Main → IPC → Renderer → Prediction Engine → External APIs → Back to UI Display
 
@@ -581,6 +584,117 @@ Each regime automatically adjusts:
 
 ---
 
+## 🔮 Pyth Network: First-Party Financial Oracle
+
+WE-CRYPTO is integrating with the **[Pyth Network](https://pyth.network/)** — a decentralized, first-party financial oracle that delivers institutional-grade price feeds directly on-chain. Unlike traditional oracles that rely on third-party aggregators, Pyth sources data straight from the market participants who generate it: trading firms, market makers, and exchanges.
+
+> 🚧 **Status:** Pyth Network integration is actively planned. The architecture and data model are documented below for contributors and as a technical reference.
+
+### Why Pyth?
+
+Traditional financial market data is locked behind institutional access. The Pyth Network democratizes this by incentivizing first-party publishers — the same entities that trade in these markets — to share their real-time price data. This data is aggregated on-chain and made available to DeFi applications and tools like WE-CRYPTO.
+
+```mermaid
+graph LR
+    subgraph publishers["📡 First-Party Publishers"]
+        MM["Market Makers"]
+        EX["Exchanges"]
+        TF["Trading Firms"]
+    end
+
+    subgraph pythnet["⛓️ Pythnet (Solana Appchain)"]
+        AGG["Price Aggregation<br/>(Weighted Median)"]
+        MB["Message Buffer<br/>Program"]
+        MKL["Merkle Tree<br/>Root"]
+    end
+
+    subgraph broadcast["🌐 Cross-Chain Broadcast"]
+        WH["Wormhole Network<br/>(Decentralized Bridge)"]
+    end
+
+    subgraph targets["🎯 Target Chains"]
+        ETH["Ethereum"]
+        SOL["Solana"]
+        OTHER["Other EVM Chains"]
+    end
+
+    MM -->|"price ± confidence"| AGG
+    EX -->|"price ± confidence"| AGG
+    TF -->|"price ± confidence"| AGG
+
+    AGG --> MB
+    MB --> MKL
+    MKL --> WH
+    WH --> ETH
+    WH --> SOL
+    WH --> OTHER
+
+    style publishers fill:#1e90ff,color:#fff,stroke:#000,stroke-width:2px
+    style pythnet fill:#228b22,color:#fff,stroke:#000,stroke-width:2px
+    style broadcast fill:#ff8c00,color:#fff,stroke:#000,stroke-width:2px
+    style targets fill:#9370db,color:#fff,stroke:#000,stroke-width:2px
+```
+
+<details>
+<summary>📋 How Pyth Works (Architecture Details)</summary>
+
+### 🏗️ Cross-Chain Architecture (Pull Oracle)
+
+Pyth uses a three-part **pull oracle** workflow that keeps costs low and latency minimal:
+
+**1. Publish on Pythnet**
+- Permissioned publishers submit `price ± confidence` updates for free on Pythnet (a Solana fork)
+- The on-chain oracle program aggregates prices each slot (~400ms)
+
+**2. Broadcast via Wormhole**
+- Pythnet validators construct a Merkle tree of aggregate prices after each slot
+- The Merkle root is broadcast to all target chains via the Wormhole decentralized bridge
+- Full price data remains publicly accessible on Pythnet for a rolling historical window
+
+**3. Pull on Target Chains (On Demand)**
+- Each target chain has a Pyth receiver contract storing the latest price per feed
+- Anyone can permissionlessly update the on-chain price by providing: attested Merkle root + price leaf + Merkle path
+- **Consumers pay gas only when they actually need the price** — not continuously
+
+This pull model means Pyth can support high-frequency updates (every 400ms) across many assets and chains without continuous gas expenditure.
+
+### 🧮 Price Aggregation Algorithm
+
+Pyth's aggregation is designed to be **manipulation-resistant** and **accuracy-weighted**:
+
+Each publisher submits `price ± confidence`. The aggregation algorithm:
+
+1. **Gives each publisher 3 votes:** one at `price`, one at `price + confidence`, one at `price - confidence`
+2. **Takes the stake-weighted median** of all votes → **Aggregate Price**
+3. **Computes the distance** from the aggregate to the stake-weighted 25th and 75th percentiles → **Aggregate Confidence Interval** (larger distance wins)
+
+This approach minimizes the objective:
+```
+Score(R) = (1/3) × Σᵢ sᵢ|R − pᵢ| + (2/3) × Σᵢ sᵢ max(|R − pᵢ| − cᵢ, 0)
+```
+Where `sᵢ` is stake-weight, `pᵢ` is price, and `cᵢ` is confidence of publisher `i`.
+
+**Key properties:**
+- A single outlier publisher cannot significantly move the aggregate price
+- Publishers with tighter confidence intervals (more liquid venues) have greater influence
+- The aggregate confidence reflects real-world price dispersion across venues
+
+### 📊 How WE-CRYPTO Uses Pyth
+
+| Pyth Feature | WE-CRYPTO Usage |
+|---|---|
+| **Price Feed** | Real-time asset prices for signal calculation |
+| **Confidence Interval** | Volatility proxy for market regime detection |
+| **High Frequency (400ms)** | Enables precise EMA and momentum calculations |
+| **Cross-Chain Data** | Consistent prices across all supported assets |
+| **First-Party Source** | Higher data quality vs. third-party oracle feeds |
+
+→ **[Learn more about Pyth Network](https://docs.pyth.network/)**
+
+</details>
+
+---
+
 ## ⚡ What Makes It Special
 
 ### 🧠 It Learns
@@ -604,6 +718,7 @@ Pulls historical settlement data from:
 - **Kalshi** — Prediction markets
 - **Polymarket** — Crypto prediction contracts
 - **Coinbase** — Prediction market data
+- **Pyth Network** — First-party financial oracle (real-time price feeds & confidence intervals) *(planned)*
 
 ### ⚙️ It Works Automatically
 
@@ -635,7 +750,8 @@ Pulls historical settlement data from:
 | **🔐 Secure** | Electron IPC bridge, environment-based API secrets |
 | **📈 Dashboard** | Real-time accuracy trending, portfolio WR, tuning logs |
 | **🔧 Debug** | Console commands for inspection & manual weight adjustment |
-| **🌍 Multi-Exchange** | Kalshi, Polymarket, Coinbase, Binance, Kraken, CoinGecko |
+| **🌍 Multi-Exchange** | Kalshi, Polymarket, Coinbase, Binance, Kraken, CoinGecko, Pyth Network |
+| **🔮 Pyth Oracle** | First-party price feeds + confidence intervals via Pyth Network pull oracle *(planned)* |
 | **💾 Caching** | 5-minute price cache, 24-hour accuracy history |
 
 ---
@@ -823,6 +939,7 @@ We welcome contributions! Areas to enhance:
 - [ ] Multi-timeframe analysis
 - [ ] Cross-chain correlation
 - [ ] WebSocket live updates
+- [ ] Pyth Network price feed integration (live pull oracle calls)
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
