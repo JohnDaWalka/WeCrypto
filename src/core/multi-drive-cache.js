@@ -10,6 +10,7 @@
  *   5. C:\Users\user (local cache)
  *   6. localStorage (browser persistence)
  *   7. OneDrive (cloud)
+ *   8. Google Drive (cloud)
  * 
  * No async delays — synchronous to each drive before returning
  * ════════════════════════════════════════════════════════════════════════════
@@ -34,8 +35,10 @@
         'C:\\Users\\user\\AppData\\Local\\WE-CRYPTO-CACHE',  // Local cache
       ];
 
-      // OneDrive paths
-      this.onedriveFolder = this._getOnedriveFolder();
+      // OneDrive paths (personal + org profiles)
+      this.onedriveFolders = this._getOnedriveFolders();
+      this.onedriveFolder = this.onedriveFolders[0] || null; // backward-compatible alias
+      this.googleDriveFolder = this._getGoogleDriveFolder();
 
       // In-memory cache (same structure as ContractCacheManager)
       this.data = {
@@ -45,29 +48,82 @@
         orders: [],
         errors: [],
         correlations: [],
+        marketContexts: [],
+        inferences: [],
         lastSyncTime: Date.now(),
       };
 
       this._ensureDirectories();
       this._loadFromDrives();
 
-      console.log('[MultiDriveCache] Initialized with', this.drivePaths.length, 'drive targets');
+      console.log('[MultiDriveCache] Initialized with', this.drivePaths.length, 'base drive targets');
     }
 
     /**
-     * Get OneDrive folder path (Windows 10/11)
+     * Get OneDrive folder paths (Windows 10/11)
      */
-    _getOnedriveFolder() {
-      if (!this.isElectron || !this.path) return null;
+    _getOnedriveFolders() {
+      if (!this.isElectron || !this.path || !this.fs) return [];
 
       const username = process.env.USERNAME || 'user';
-      const onedrivePath = this.path.join(
-        process.env.OneDriveConsumer || 
-        `C:\\Users\\${username}\\OneDrive`,
-        'WE-CRYPTO-CACHE'
-      );
+      const home = process.env.USERPROFILE || `C:\\Users\\${username}`;
+      const candidates = [
+        process.env.OneDriveConsumer || '',
+        process.env.OneDriveCommercial || '',
+        process.env.ONEDRIVE || '',
+        process.env.ONEDRIVE_BUSINESS || '',
+        this.path.join(home, 'OneDrive'),
+        this.path.join(home, 'OneDrive - Personal'),
+        this.path.join(home, 'OneDrive - ctstate.edu'),
+        this.path.join(home, 'OneDrive - Azure ctstate.edu'),
+      ].filter(Boolean);
 
-      return onedrivePath;
+      // Capture any additional OneDrive profile folder under C:\Users\user\
+      try {
+        if (home && this.fs.existsSync(home)) {
+          for (const name of this.fs.readdirSync(home)) {
+            if (name.startsWith('OneDrive')) {
+              candidates.push(this.path.join(home, name));
+            }
+          }
+        }
+      } catch (_) {}
+
+      const unique = Array.from(new Set(candidates));
+      return unique
+        .filter(folder => {
+          try { return this.fs.existsSync(folder); } catch (_) { return false; }
+        })
+        .map(folder => this.path.join(folder, 'WE-CRYPTO-CACHE'));
+    }
+
+    /**
+     * Get Google Drive folder path (Windows)
+     */
+    _getGoogleDriveFolder() {
+      if (!this.isElectron || !this.path || !this.fs) return null;
+
+      const username = process.env.USERNAME || 'user';
+      const home = process.env.USERPROFILE || `C:\\Users\\${username}`;
+      const candidates = [
+        `Z:\\`,
+        `Z:\\My Drive`,
+        process.env.GOOGLE_DRIVE_PATH || '',
+        process.env.GOOGLEDRIVEPATH || '',
+        `G:\\My Drive`,
+        this.path.join(home, 'Google Drive'),
+        this.path.join(home, 'My Drive'),
+      ].filter(Boolean);
+
+      for (const candidate of candidates) {
+        try {
+          if (this.fs.existsSync(candidate)) {
+            return this.path.join(candidate, 'WE-CRYPTO-CACHE');
+          }
+        } catch (_) {}
+      }
+
+      return null;
     }
 
     /**
@@ -77,7 +133,8 @@
       if (!this.isElectron || !this.fs) return;
 
       const allPaths = [...this.drivePaths];
-      if (this.onedriveFolder) allPaths.push(this.onedriveFolder);
+      if (this.onedriveFolders.length) allPaths.push(...this.onedriveFolders);
+      if (this.googleDriveFolder) allPaths.push(this.googleDriveFolder);
 
       allPaths.forEach(dirPath => {
         try {
@@ -115,6 +172,67 @@
       if (typeof window !== 'undefined' && window.localStorage) {
         try {
           localStorage.setItem('contract-cache-predictions-latest', JSON.stringify(record));
+        } catch (e) {
+          console.warn('[MultiDriveCache] localStorage write failed:', e.message);
+        }
+      }
+
+      return record;
+    }
+
+    /**
+     * Record compact market context for inference/recall
+     */
+    recordMarketContext(coin, context = {}, options = {}) {
+      const now = Date.now();
+      const record = {
+        coin,
+        ...context,
+        timestamp: now,
+        id: `ctx-${coin}-${now}`,
+      };
+
+      this.data.marketContexts.push(record);
+      this._trim('marketContexts', 3000);
+
+      if (options.sync !== false) {
+        this._syncAllDrives();
+      }
+
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          localStorage.setItem('contract-cache-market-context-latest', JSON.stringify(record));
+        } catch (e) {
+          console.warn('[MultiDriveCache] localStorage write failed:', e.message);
+        }
+      }
+
+      return record;
+    }
+
+    /**
+     * Record inference output + optional input snapshot
+     */
+    recordInference(coin, inference = {}, snapshot = null, options = {}) {
+      const now = Date.now();
+      const record = {
+        coin,
+        inference,
+        snapshot,
+        timestamp: now,
+        id: `inf-${coin}-${now}`,
+      };
+
+      this.data.inferences.push(record);
+      this._trim('inferences', 1500);
+
+      if (options.sync !== false) {
+        this._syncAllDrives();
+      }
+
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          localStorage.setItem('contract-cache-inference-latest', JSON.stringify(record));
         } catch (e) {
           console.warn('[MultiDriveCache] localStorage write failed:', e.message);
         }
@@ -211,24 +329,45 @@
         }
       });
 
-      // OneDrive
-      if (this.onedriveFolder) {
+      // OneDrive (all discovered profiles)
+      this.onedriveFolders.forEach(onedriveFolder => {
         try {
-          const filePath = this.path.join(this.onedriveFolder, this.cacheFile);
+          const filePath = this.path.join(onedriveFolder, this.cacheFile);
           this.fs.writeFileSync(filePath, cacheJson, 'utf8');
           successCount++;
         } catch (e) {
-          console.warn(`[MultiDriveCache] Write to OneDrive failed:`, e.message);
+          console.warn(`[MultiDriveCache] Write to OneDrive failed (${onedriveFolder}):`, e.message);
+        }
+      });
+
+      // Google Drive
+      if (this.googleDriveFolder) {
+        try {
+          const filePath = this.path.join(this.googleDriveFolder, this.cacheFile);
+          this.fs.writeFileSync(filePath, cacheJson, 'utf8');
+          successCount++;
+        } catch (e) {
+          console.warn(`[MultiDriveCache] Write to Google Drive failed:`, e.message);
         }
       }
 
       this.data.lastSyncTime = Date.now();
+      const targetCount = this.drivePaths.length
+        + this.onedriveFolders.length
+        + (this.googleDriveFolder ? 1 : 0);
 
       if (successCount === 0) {
         console.error('[MultiDriveCache] Failed to write to all drives!');
-      } else if (successCount < this.drivePaths.length) {
-        console.warn(`[MultiDriveCache] Partial write: ${successCount}/${this.drivePaths.length} drives`);
+      } else if (successCount < targetCount) {
+        console.warn(`[MultiDriveCache] Partial write: ${successCount}/${targetCount} targets`);
       }
+    }
+
+    /**
+     * Public sync trigger for batched writes
+     */
+    flushSync() {
+      this._syncAllDrives();
     }
 
     /**
@@ -238,7 +377,8 @@
       if (!this.isElectron || !this.fs) return;
 
       const allPaths = [...this.drivePaths];
-      if (this.onedriveFolder) allPaths.push(this.onedriveFolder);
+      if (this.onedriveFolders.length) allPaths.push(...this.onedriveFolders);
+      if (this.googleDriveFolder) allPaths.push(this.googleDriveFolder);
 
       for (const dirPath of allPaths) {
         try {
@@ -263,6 +403,10 @@
             this.data.errors = (loaded.errors || []).slice(-500);
             this.data.correlations = (loaded.correlations || [])
               .filter(c => now - c.timestamp < maxAge);
+            this.data.marketContexts = (loaded.marketContexts || loaded.contexts || [])
+              .filter(c => now - c.timestamp < maxAge);
+            this.data.inferences = (loaded.inferences || loaded.inference || [])
+              .filter(i => now - i.timestamp < maxAge);
 
             console.log(`[MultiDriveCache] Loaded from ${dirPath}: ${this.data.predictions.length} predictions, ${this.data.settlements.length} settlements`);
             return;  // Loaded successfully, stop looking
@@ -294,6 +438,10 @@
         this.data.orders = this.data.orders.filter(o => now - o.timestamp < maxAge);
       } else if (key === 'correlations') {
         this.data.correlations = this.data.correlations.filter(c => now - c.timestamp < maxAge);
+      } else if (key === 'marketContexts') {
+        this.data.marketContexts = this.data.marketContexts.filter(c => now - c.timestamp < maxAge);
+      } else if (key === 'inferences') {
+        this.data.inferences = this.data.inferences.filter(i => now - i.timestamp < maxAge);
       }
 
       if (maxCount) {
@@ -312,9 +460,14 @@
         orders: this.data.orders.length,
         errors: this.data.errors.length,
         correlations: this.data.correlations.length,
+        marketContexts: this.data.marketContexts.length,
+        inferences: this.data.inferences.length,
         lastSyncTime: new Date(this.data.lastSyncTime).toISOString(),
         drivesConfigured: this.drivePaths.length,
-        onedriveConfigured: this.onedriveFolder ? true : false,
+        onedriveConfigured: this.onedriveFolders.length > 0,
+        onedriveTargets: this.onedriveFolders.length,
+        googleDriveConfigured: this.googleDriveFolder ? true : false,
+        totalTargets: this.drivePaths.length + this.onedriveFolders.length + (this.googleDriveFolder ? 1 : 0),
       };
     }
 
@@ -352,6 +505,8 @@
         predictions: this.data.predictions.filter(p => p.timestamp > cutoff),
         settlements: this.data.settlements.filter(s => s.timestamp > cutoff),
         errors: this.data.errors.filter(e => e.timestamp > cutoff),
+        marketContexts: this.data.marketContexts.filter(c => c.timestamp > cutoff),
+        inferences: this.data.inferences.filter(i => i.timestamp > cutoff),
       };
     }
   }

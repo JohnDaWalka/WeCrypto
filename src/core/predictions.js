@@ -54,6 +54,10 @@
   let predictionTimer = null;
   let predictionRunPromise = null;
   let advancedBacktestWarmPromise = null;
+  let inferenceRunPromise = null;
+  let lastInferenceRunTs = 0;
+  const INFERENCE_MIN_INTERVAL_MS = 12000;
+  const INFERENCE_REQUEST_TIMEOUT_MS = 7000;
 
   // ── Backtest localStorage cache (cold-start / refresh acceleration) ───────
   const BT_CACHE_KEY    = 'beta1_bt_cache';
@@ -3868,6 +3872,175 @@
     window.dispatchEvent(new CustomEvent(name, { detail }));
   }
 
+  function withTimeout(promise, timeoutMs, label = 'operation') {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), timeoutMs)),
+    ]);
+  }
+
+  function toFiniteNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function buildInferenceSnapshot(coin, pred) {
+    const indicators = pred?.indicators || {};
+    const diagnostics = pred?.diagnostics || {};
+    const mktSentiment = indicators.mktSentiment || {};
+    const book = indicators.book || {};
+    const volume = indicators.volume || {};
+    const combinedProbRaw = Number.isFinite(mktSentiment.combined)
+      ? mktSentiment.combined
+      : Number.isFinite(mktSentiment.kalshi)
+        ? mktSentiment.kalshi
+        : 0.5;
+    const kalshiProb = clamp(combinedProbRaw, 0, 1);
+    const rawImbalance = toFiniteNumber(book.imbalance, 0);
+    const normalizedImbalance = rawImbalance >= -1 && rawImbalance <= 1
+      ? (rawImbalance + 1) / 2
+      : clamp(rawImbalance, 0, 1);
+    const buyPressure = Number.isFinite(volume.buyPct)
+      ? clamp(volume.buyPct / 100, 0, 1)
+      : normalizedImbalance;
+    const conflict = toFiniteNumber(diagnostics.conflict, 0);
+    const conflicts = [];
+    if (conflict >= 0.55) conflicts.push(`High indicator conflict (${Math.round(conflict * 100)}%)`);
+    if (diagnostics.directionalConflict) conflicts.push('Signal router directional conflict');
+    if (Array.isArray(pred?.reversalFlags) && pred.reversalFlags.length) {
+      conflicts.push(`Reversal flags active (${pred.reversalFlags.length})`);
+    }
+
+    const summary = pred?.backtest?.summary || {};
+    const winRatePct = Number.isFinite(summary.winRate) ? summary.winRate : 50;
+    const avgSignedReturn = toFiniteNumber(summary.avgSignedReturn, 0);
+
+    return {
+      coin: coin.sym,
+      horizon: 'h15',
+      volatility: Math.max(0, toFiniteNumber(pred?.volatility?.atrPct, 0) / 100),
+      orderbook: {
+        imbalance: normalizedImbalance,
+        buyPressure,
+      },
+      indicators: {
+        RSI: toFiniteNumber(indicators.rsi?.value, 50),
+        MACD: toFiniteNumber(indicators.macd?.macd, 0),
+        Signal: toFiniteNumber(indicators.macd?.signal, 0),
+        MACDHist: toFiniteNumber(indicators.macd?.histogram, 0),
+        CCI: toFiniteNumber(indicators.cci?.value, 0),
+        Fisher: toFiniteNumber(indicators.fisher?.value ?? diagnostics.components?.fisher, 0),
+        ADX: toFiniteNumber(indicators.adx?.adx, 20),
+        PlusDI: toFiniteNumber(indicators.adx?.pdi, 20),
+        MinusDI: toFiniteNumber(indicators.adx?.mdi, 20),
+        ATR: toFiniteNumber(pred?.volatility?.atr, 0),
+        KalshiPercent: kalshiProb,
+      },
+      weights: pred?.adaptiveWeights || COMPOSITE_WEIGHTS,
+      recentAccuracy: {
+        winRate: clamp(winRatePct / 100, 0, 1),
+        trend: clamp(avgSignedReturn / 100, -1, 1),
+      },
+      conflicts,
+    };
+  }
+
+  async function runInferenceOverlay(predictionsMap) {
+    if (!window?.electron?.invoke) return [];
+    if (inferenceRunPromise) return inferenceRunPromise;
+    if ((Date.now() - lastInferenceRunTs) < INFERENCE_MIN_INTERVAL_MS) return [];
+
+    const work = PREDICTION_COINS
+      .map(coin => ({ coin, pred: predictionsMap?.[coin.sym] }))
+      .filter(({ pred }) => pred && pred.source !== 'error' && pred.source !== 'loading');
+
+    if (!work.length) return [];
+
+    inferenceRunPromise = (async () => {
+      const results = await Promise.all(work.map(async ({ coin, pred }) => {
+        const snapshot = buildInferenceSnapshot(coin, pred);
+        try {
+          const response = await withTimeout(
+            window.electron.invoke('llm:analyzeSnapshot', snapshot),
+            INFERENCE_REQUEST_TIMEOUT_MS,
+            `llm:${coin.sym}`
+          );
+
+          if (!response?.success || !response.output) {
+            return { coin: coin.sym, ok: false, reason: response?.error || 'empty-response' };
+          }
+
+          const llmOutput = response.output;
+          const llmConfidencePct = Math.round(clamp(toFiniteNumber(llmOutput.confidence, 0), 0, 1) * 100);
+          const llmNotes = String(
+            llmOutput?.suggestions?.notes
+            || llmOutput?.suggestions?.reasoning
+            || ''
+          ).trim();
+
+          pred.llm = {
+            regime: String(llmOutput.regime || 'unknown'),
+            confidence: llmConfidencePct,
+            suggestions: llmOutput.suggestions || {},
+            warnings: Array.isArray(llmOutput.warnings) ? llmOutput.warnings.map(String) : [],
+            notes: llmNotes,
+            provider: response?.diagnostics?.provider || null,
+          };
+
+          pred.diagnostics = {
+            ...(pred.diagnostics || {}),
+            llmRegime: pred.llm.regime,
+            llmConfidence: llmConfidencePct,
+            llmWarnings: pred.llm.warnings.slice(0, 3),
+            llmSuggestedIncreases: Array.isArray(pred.llm.suggestions?.increase_weight)
+              ? pred.llm.suggestions.increase_weight.slice(0, 3)
+              : [],
+            llmSuggestedDecreases: Array.isArray(pred.llm.suggestions?.decrease_weight)
+              ? pred.llm.suggestions.decrease_weight.slice(0, 3)
+              : [],
+            llmNotes,
+          };
+
+          if (window.MultiDriveCache?.recordInference) {
+            try {
+              window.MultiDriveCache.recordInference(
+                coin.sym,
+                {
+                  regime: pred.llm.regime,
+                  confidence: llmConfidencePct,
+                  warnings: pred.llm.warnings.slice(0, 3),
+                  notes: llmNotes.slice(0, 220),
+                },
+                snapshot,
+                { sync: false }
+              );
+            } catch (_) {}
+          }
+
+          return { coin: coin.sym, ok: true };
+        } catch (err) {
+          return { coin: coin.sym, ok: false, reason: err?.message || 'failed' };
+        }
+      }));
+
+      const updated = results.filter(r => r.ok).length;
+      if (updated > 0) {
+        emitPredictionEvent('predictioninference', { updated, total: results.length });
+      }
+      if (window.MultiDriveCache?.flushSync) {
+        try { window.MultiDriveCache.flushSync(); } catch (_) {}
+      }
+      return results;
+    })();
+
+    try {
+      return await inferenceRunPromise;
+    } finally {
+      inferenceRunPromise = null;
+      lastInferenceRunTs = Date.now();
+    }
+  }
+
   function runAdvancedBacktest(coin) {
     const cache = candleCache[coin.sym];
     const candles = cache?.longHistory || [];
@@ -4890,6 +5063,8 @@
         } catch (allocErr) {
           console.error('[allocationEngine] Error:', allocErr);
         }
+
+        runInferenceOverlay(window._predictions).catch(() => {});
         
         warmAdvancedBacktests().catch(() => {});
         // Phase 2: enrich with slow proxy-routed sources 30 s after initial score.

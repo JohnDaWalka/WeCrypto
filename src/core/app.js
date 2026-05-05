@@ -48,6 +48,8 @@
   let chartSnapshot = null;
   let predictionRefreshHandle = null;  // { cancel() } — quarter-aligned scorer + prefetch
   let predictionRunInFlight = null;
+  let _lastPredictionRunTs = 0;
+  let _lastPredRenderTs = 0;
   let orbitalAnimationFrame = null;   // rAF handle for Market Universe orbital canvas
   let _rv = 0; // render version counter — increment on every render/refresh call so stale async renders can self-cancel
 
@@ -59,6 +61,8 @@
   const KALSHI_ERR_STORE    = 'beta1_kalshi_errors';
   const ORCH_LOG_STORE      = 'beta1_orch_log';
   const KALSHI_TRAIL_STORE  = 'beta1_kalshi_2m_trail';
+  const TRADE_BELL_STORE    = 'beta1_trade_setup_bell_v2';
+  const LEGACY_TRADE_BELL_STORE = 'beta1_trade_setup_bell';
 
   // ── Prediction accuracy tracker ──────────────────────────────────────────
   // window._lastPrediction[sym] = { direction: 'UP'|'DOWN'|'FLAT', price, ts, signal }
@@ -77,6 +81,16 @@
   window._marketDivergence   = window._marketDivergence   || {};
   // Orchestrator intent history — logs each actionable state change per coin
   window._orchLog            = window._orchLog            || [];
+  // Trade setup bell preference + cooldown state
+  let _tradeBellEnabled      = true;
+  let _tradeBellCtx          = null;
+  let _tradeBellLastGlobalTs = 0;
+  let _tradeBellUnlockBound  = false;
+  let _tradeBellSessionPrimed = false;
+  let _contractBellCloseMs   = 0;
+  let _contractBellLastTs    = 0;
+  const _contractBellTickerBySym = new Map();
+  let _signalAudioLastPingTs = 0;
 
   // Restore persisted logs from localStorage on startup
   (function restorePersistedData() {
@@ -87,6 +101,17 @@
     try { const r = localStorage.getItem(KALSHI_ERR_STORE);  if (r) window._kalshiErrors       = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(ORCH_LOG_STORE);    if (r) window._orchLog            = JSON.parse(r); } catch(e) {}
     try { const r = localStorage.getItem(KALSHI_TRAIL_STORE); if (r) window._kalshiPredictionTrail = JSON.parse(r); } catch(e) {}
+    try {
+      const r = localStorage.getItem(TRADE_BELL_STORE);
+      if (r == null) {
+        // Split-control migration: default signal bells ON regardless of legacy wall-sound state.
+        _tradeBellEnabled = true;
+        localStorage.setItem(TRADE_BELL_STORE, '1');
+      } else {
+        _tradeBellEnabled = r === '1';
+      }
+    } catch(e) {}
+    try { localStorage.removeItem(LEGACY_TRADE_BELL_STORE); } catch(e) {}
   })();
 
   // ── Initialize 2-Hour Contract Cache + Multi-Drive Sync ──────────────────
@@ -116,6 +141,303 @@
   function saveKalshiErrors() { try { localStorage.setItem(KALSHI_ERR_STORE,  JSON.stringify(window._kalshiErrors.slice(-100))); } catch(e) {} }
   function saveOrchLog()      { try { localStorage.setItem(ORCH_LOG_STORE,    JSON.stringify(window._orchLog.slice(-300)));       } catch(e) {} }
   function saveKalshiTrail()  { try { localStorage.setItem(KALSHI_TRAIL_STORE, JSON.stringify(window._kalshiPredictionTrail));     } catch(e) {} }
+  function saveTradeBellPref(){ try { localStorage.setItem(TRADE_BELL_STORE, _tradeBellEnabled ? '1' : '0'); } catch(e) {} }
+
+  function isTradeBellOn() { return !!_tradeBellEnabled; }
+  function setTradeBellOn(next) {
+    const prev = _tradeBellEnabled;
+    _tradeBellEnabled = !!next;
+    saveTradeBellPref();
+    if (_tradeBellEnabled && !prev) {
+      primeTradeBellSession();
+      playSignalHealthPing('enabled');
+    }
+    return _tradeBellEnabled;
+  }
+
+  function trySystemBeep() {
+    try {
+      const shell = window?.require?.('electron')?.shell;
+      if (shell?.beep) {
+        shell.beep();
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  function ensureTradeBellContext() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!_tradeBellCtx) _tradeBellCtx = new Ctx();
+    return _tradeBellCtx;
+  }
+
+  function primeTradeBellSession() {
+    const ctx = ensureTradeBellContext();
+    if (!ctx || _tradeBellSessionPrimed) return;
+
+    const fire = () => {
+      try {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const start = ctx.currentTime + 0.01;
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(440, start);
+        gain.gain.setValueAtTime(0.00005, start);
+        gain.gain.exponentialRampToValueAtTime(0.00001, start + 0.04);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.05);
+        _tradeBellSessionPrimed = true;
+      } catch (_) {}
+    };
+
+    if (ctx.state === 'suspended') ctx.resume().then(fire).catch(() => {});
+    else fire();
+  }
+
+  function playSignalHealthPing(reason = 'heartbeat') {
+    if (!isTradeBellOn()) return false;
+    const now = Date.now();
+    if ((now - _signalAudioLastPingTs) < 20_000) return false;
+    _signalAudioLastPingTs = now;
+
+    const ctx = ensureTradeBellContext();
+    if (!ctx) return trySystemBeep();
+
+    const play = () => {
+      const start = ctx.currentTime + 0.02;
+      const freqs = [660, 880, 740];
+      const gaps = [0.00, 0.18, 0.40];
+      const durs = [0.14, 0.14, 0.24];
+      const gainScale = 0.22;
+
+      freqs.forEach((freq, i) => {
+        const noteStart = start + gaps[i];
+        const noteDur = durs[i];
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = i === 2 ? 'triangle' : 'sine';
+        osc.frequency.setValueAtTime(freq, noteStart);
+        gain.gain.setValueAtTime(0.0001, noteStart);
+        gain.gain.exponentialRampToValueAtTime(gainScale, noteStart + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + noteDur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(noteStart);
+        osc.stop(noteStart + noteDur + 0.02);
+      });
+    };
+
+    if (ctx.state === 'suspended') ctx.resume().then(play).catch(() => { trySystemBeep(); });
+    else play();
+    console.info(`[signalAudio] ping (${reason})`);
+    return true;
+  }
+
+  function bindTradeBellUnlock() {
+    if (_tradeBellUnlockBound) return;
+    _tradeBellUnlockBound = true;
+
+    const unlock = () => {
+      const ctx = ensureTradeBellContext();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      if (isTradeBellOn()) {
+        primeTradeBellSession();
+        playSignalHealthPing('unlock');
+      }
+      if (ctx.state === 'running') {
+        window.removeEventListener('pointerdown', unlock, true);
+        window.removeEventListener('keydown', unlock, true);
+        window.removeEventListener('touchstart', unlock, true);
+      }
+    };
+
+    window.addEventListener('pointerdown', unlock, true);
+    window.addEventListener('keydown', unlock, true);
+    window.addEventListener('touchstart', unlock, true);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        const ctx = ensureTradeBellContext();
+        if (ctx?.state === 'suspended') {
+          ctx.resume().then(() => {
+            if (isTradeBellOn()) {
+              primeTradeBellSession();
+              playSignalHealthPing('visible');
+            }
+          }).catch(() => { if (isTradeBellOn()) trySystemBeep(); });
+        } else if (isTradeBellOn()) {
+          primeTradeBellSession();
+          playSignalHealthPing('visible');
+        }
+      }
+    });
+  }
+  bindTradeBellUnlock();
+
+  function classifyTradeSetup(ki) {
+    if (!ki || ki.action !== 'trade') return null;
+    if (ki.alignment === 'CROWD_FADE' || ki.crowdFade) return 'crowd-fade';
+    if (ki.sweetSpot) return 'sweet-spot';
+    if (ki.signalLocked) return 'signal-lock';
+    if (ki.alignment === 'ALIGNED') return 'aligned';
+    if (ki.alignment === 'DIVERGENT') return 'divergent';
+    if (ki.alignment === 'MODEL_LEADS') return 'model-leads';
+    return 'trade';
+  }
+
+  function maybePlayTradeSetupBell(sym, ki) {
+    const setupType = classifyTradeSetup(ki);
+    if (!setupType || !isTradeBellOn()) return setupType;
+
+    const now = Date.now();
+    // Keep a short anti-spam gap only; changed-opinion gating is handled upstream.
+    if ((now - _tradeBellLastGlobalTs) < 600) return setupType;
+    _tradeBellLastGlobalTs = now;
+
+    try {
+      const ctx = ensureTradeBellContext();
+      if (!ctx) {
+        trySystemBeep();
+        return setupType;
+      }
+
+      const playProfile = () => {
+        const start = ctx.currentTime + 0.01;
+        const dir = (ki.direction || '').toUpperCase();
+        const base = dir === 'UP' ? 640 : dir === 'DOWN' ? 520 : 580;
+        const master = 0.12;
+
+        const profiles = {
+          'crowd-fade': { ratios: [1.00, 1.26, 1.52], gaps: [0.00, 0.23, 0.48], durs: [0.26, 0.26, 0.34] },
+          'sweet-spot': { ratios: [1.00, 1.20, 1.50], gaps: [0.00, 0.22, 0.44], durs: [0.24, 0.24, 0.30] },
+          'signal-lock': { ratios: [1.00, 1.12, 1.00], gaps: [0.00, 0.24, 0.52], durs: [0.20, 0.20, 0.28] },
+          'aligned': { ratios: [1.00, 1.33], gaps: [0.00, 0.28], durs: [0.26, 0.34] },
+          'divergent': { ratios: [1.00, 1.19, 1.42], gaps: [0.00, 0.20, 0.42], durs: [0.22, 0.22, 0.30] },
+          'model-leads': { ratios: [1.00, 1.15, 1.34], gaps: [0.00, 0.20, 0.42], durs: [0.22, 0.22, 0.28] },
+          'trade': { ratios: [1.00, 1.25], gaps: [0.00, 0.30], durs: [0.24, 0.34] },
+        };
+        const profile = profiles[setupType] || profiles.trade;
+
+        profile.ratios.forEach((ratio, idx) => {
+          const noteStart = start + (profile.gaps[idx] || 0);
+          const noteDur = profile.durs[idx] || 0.24;
+          const freq = base * ratio;
+
+          const osc = ctx.createOscillator();
+          const overtone = ctx.createOscillator();
+          const gain = ctx.createGain();
+
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, noteStart);
+          overtone.type = 'sine';
+          overtone.frequency.setValueAtTime(freq * 2, noteStart);
+
+          gain.gain.setValueAtTime(0.0001, noteStart);
+          gain.gain.exponentialRampToValueAtTime(master, noteStart + 0.03);
+          gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + noteDur);
+
+          osc.connect(gain);
+          overtone.connect(gain);
+          gain.connect(ctx.destination);
+
+          osc.start(noteStart);
+          overtone.start(noteStart);
+          osc.stop(noteStart + noteDur + 0.02);
+          overtone.stop(noteStart + noteDur + 0.02);
+        });
+      };
+
+      if (ctx.state === 'suspended') ctx.resume().then(playProfile).catch(() => { trySystemBeep(); });
+      else playProfile();
+    } catch (e) {
+      console.warn('[tradeBell]', e.message);
+    }
+
+    return setupType;
+  }
+
+  function playContractRolloverBell(direction) {
+    const ctx = ensureTradeBellContext();
+    if (!ctx) return trySystemBeep();
+
+    const playProfile = () => {
+      const dir = (direction || '').toUpperCase();
+      const base = dir === 'UP' ? 460 : dir === 'DOWN' ? 420 : 440;
+      const start = ctx.currentTime + 0.02;
+      const ratios = [1.00, 1.20, 1.42, 1.78, 1.30];
+      const gaps = [0.00, 0.17, 0.35, 0.57, 0.86];
+      const durs = [0.17, 0.17, 0.19, 0.26, 0.34];
+      const gainScale = 0.14;
+
+      ratios.forEach((ratio, idx) => {
+        const noteStart = start + gaps[idx];
+        const noteDur = durs[idx];
+        const freq = base * ratio;
+
+        const osc = ctx.createOscillator();
+        const overtone = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = idx < 3 ? 'sine' : 'triangle';
+        osc.frequency.setValueAtTime(freq, noteStart);
+        overtone.type = 'sine';
+        overtone.frequency.setValueAtTime(freq * 1.99, noteStart);
+
+        gain.gain.setValueAtTime(0.0001, noteStart);
+        gain.gain.exponentialRampToValueAtTime(gainScale, noteStart + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + noteDur);
+
+        osc.connect(gain);
+        overtone.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(noteStart);
+        overtone.start(noteStart);
+        osc.stop(noteStart + noteDur + 0.02);
+        overtone.stop(noteStart + noteDur + 0.02);
+      });
+    };
+
+    if (ctx.state === 'suspended') ctx.resume().then(playProfile).catch(() => { trySystemBeep(); });
+    else playProfile();
+    return true;
+  }
+
+  function maybePlayContractArrivalBell(sym, ki) {
+    if (!ki || !isTradeBellOn()) return false;
+    const now = Date.now();
+
+    const closeMs = Number(ki.closeTimeMs);
+    if (Number.isFinite(closeMs) && closeMs > 0) {
+      if (_contractBellCloseMs <= 0) {
+        _contractBellCloseMs = closeMs; // prime at startup; don't ring on initial paint
+        return false;
+      }
+      if (closeMs <= (_contractBellCloseMs + 5000)) return false;
+      _contractBellCloseMs = closeMs;
+
+      if ((now - _contractBellLastTs) < 75000) return false;
+      _contractBellLastTs = now;
+      playContractRolloverBell(ki.direction);
+      console.info(`[contractBell] New contract cycle detected (${sym}) close=${new Date(closeMs).toLocaleTimeString()}`);
+      return true;
+    }
+
+    const ticker = typeof ki.contractTicker === 'string' ? ki.contractTicker : '';
+    if (!ticker) return false;
+    const prev = _contractBellTickerBySym.get(sym);
+    _contractBellTickerBySym.set(sym, ticker);
+    if (!prev || prev === ticker) return false;
+    if ((now - _contractBellLastTs) < 75000) return false;
+    _contractBellLastTs = now;
+    playContractRolloverBell(ki.direction);
+    console.info(`[contractBell] New contract ticker detected (${sym}) ${ticker}`);
+    return true;
+  }
 
   // ── Contract error logging helper ─────────────────────────────────────────
   // Records anomalies (wick events, proxy mismatches, fetch failures) to
@@ -1650,6 +1972,7 @@
         try {
           predictionRunInFlight = PredictionEngine.runAll(); // Bug fix: was dead || fallback
           await predictionRunInFlight;
+          _lastPredictionRunTs = Date.now();
           predsLoaded = true;
           snapshotPredictions();
           // Bug fix: re-check currentView after the async gap
@@ -1681,6 +2004,13 @@
     snapshotPredictions();
     if (currentView !== 'predictions' || !predsLoaded || predictionRunInFlight) return;
     renderPredictions();
+  });
+
+  // Inference overlay complete — capture latest LLM context and refresh cards
+  window.addEventListener('predictioninference', () => {
+    if (!predsLoaded || predictionRunInFlight) return;
+    if (currentView === 'universe') renderUniverse();
+    else if (['predictions', 'cfm'].includes(currentView)) renderPredictions();
   });
 
   // ================================================================
@@ -1821,6 +2151,39 @@
         }
       }
 
+      // ── Record compact market context for inference recall ────────────────
+      if (window._contractCache?.recordMarketContext) {
+        try {
+          const topDrivers = Array.isArray(p.diagnostics?.topDrivers)
+            ? p.diagnostics.topDrivers.slice(0, 3).map(driver => ({
+                name: driver?.name || '',
+                value: Number(driver?.value || 0),
+                weight: Number(driver?.weight || 0),
+              }))
+            : [];
+          const kaCtx = p.projections?.p15?.kalshiAlign || null;
+
+          window._contractCache.recordMarketContext(coin.sym, {
+            price: Number(p.price || 0),
+            signal: p.signal || 'neutral',
+            score: Number(p.score || 0),
+            confidence: Number(p.confidence || 0),
+            regime: p.liveRegime?.regime || null,
+            regimeLabel: p.liveRegime?.label || null,
+            agreement: Number(p.diagnostics?.agreement || 0),
+            conflict: Number(p.diagnostics?.conflict || 0),
+            routedAction: p.diagnostics?.routedAction || null,
+            kalshiYesPct: kaCtx?.kalshiYesPct ?? null,
+            modelYesPct: kaCtx?.modelYesPct ?? null,
+            llmRegime: p.llm?.regime || p.diagnostics?.llmRegime || null,
+            llmConfidence: Number(p.llm?.confidence || p.diagnostics?.llmConfidence || 0),
+            topDrivers,
+          }, { sync: false });
+        } catch (e) {
+          console.warn('[ContractCache] Market context record error:', e.message);
+        }
+      }
+
       // Snapshot Kalshi alignment state so we can evaluate outcome on bucket close
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
@@ -1886,6 +2249,9 @@
         }
       }
     });
+    if (window._contractCache?.flushSync) {
+      try { window._contractCache.flushSync(); } catch (_) {}
+    }
     saveLastPred();
     saveLastKalshi();
   }
@@ -4425,7 +4791,7 @@
       // Also kick off predictions in background
       if (!predsLoaded) {
         PredictionEngine.runAll()
-          .then(() => { predsLoaded = true; snapshotPredictions(); })
+          .then(() => { predsLoaded = true; _lastPredictionRunTs = Date.now(); snapshotPredictions(); })
           .catch(() => {});
       }
       if (window.PredictionMarkets && !window._mktStarted) { window.PredictionMarkets.start(); window._mktStarted = true; }
@@ -5086,7 +5452,9 @@
     try {
       PREDICTION_COINS.forEach(coin => {
         const ki = kalshiIntents[coin.sym];
-        if (!ki || ki.action === 'skip') return;
+        if (!ki) return;
+        maybePlayContractArrivalBell(coin.sym, ki);
+        if (ki.action === 'skip') return;
         const prev = window._orchLog.length
           ? window._orchLog.filter(e => e.sym === coin.sym).slice(-1)[0] : null;
         const changed = !prev
@@ -5094,6 +5462,7 @@
           || prev.side      !== ki.side
           || prev.alignment !== ki.alignment;
         if (changed) {
+          const setupType = maybePlayTradeSetupBell(coin.sym, ki);
           window._orchLog.push({
             sym:         coin.sym,
             ts:          Date.now(),
@@ -5109,6 +5478,7 @@
             sweetSpot:   ki.sweetSpot    ?? false,
             crowdFade:   ki.crowdFade    ?? false,
             signalLocked:ki.signalLocked ?? false,
+            setupType:   setupType       ?? null,
             contractTicker: ki.contractTicker ?? null,
             humanReason: ki.humanReason  ?? null,
           });
@@ -6581,7 +6951,7 @@
     if (!predsLoaded && !predictionRunInFlight) {
       predictionRunInFlight = PredictionEngine.runAll();
       predictionRunInFlight
-        .then(() => { predsLoaded = true; predictionRunInFlight = null; snapshotPredictions(); if (currentView === 'predictions') render(); })
+        .then(() => { _lastPredictionRunTs = Date.now(); predsLoaded = true; predictionRunInFlight = null; snapshotPredictions(); if (currentView === 'predictions') render(); })
         .catch(e => { predictionRunInFlight = null; console.error('[Predictions] engine error:', e); if (currentView === 'predictions') render(); });
     }
 
@@ -6763,6 +7133,7 @@
         }).join('')}
       </div>
     `;
+    _lastPredRenderTs = Date.now();
 
     // Populate accuracy badge immediately after render
     updateAccuracyBadge();
@@ -6912,6 +7283,12 @@
     const _isLightModel = verdictSource === 'model' && Math.abs(p.score) < 0.25 && verdictDir !== 'wait';
     const weakBadge = _isLightModel
       ? `<span class="pred-weak-warn" title="Low-conviction signal — backtest accuracy below 50%">⚡ WEAK</span>`
+      : '';
+    const llmRegime = p.llm?.regime || p.diagnostics?.llmRegime || null;
+    const llmConfidence = Number(p.llm?.confidence || p.diagnostics?.llmConfidence || 0);
+    const llmNotes = String(p.llm?.notes || p.diagnostics?.llmNotes || '').trim();
+    const llmBadge = llmRegime && llmRegime !== 'unknown'
+      ? `<span class="pred-source-badge" style="border-color:rgba(143,168,255,0.45);color:#8fa8ff">🧠 LLM ${escapeHtml(llmRegime.replace(/_/g, ' '))}${llmConfidence ? ` ${Math.round(llmConfidence)}%` : ''}</span>`
       : '';
     const { primary: ratPrimary, secondary: ratSecondary } = getDecisionRationale(p);
 
@@ -7103,6 +7480,7 @@
           </div>
           <div class="pred-verdict-meta">
             <span class="pred-source-badge model">MODEL</span>
+            ${llmBadge}
             ${_liveKPctCard !== null
               ? `<span class="pred-source-badge ${_fadeActive ? 'kalshi-fade' : 'kalshi-align'}">${_fadeActive ? '⚡ ' : ''}KALSHI ${_liveKPctCard}% YES</span>`
               : ''}
@@ -7113,6 +7491,7 @@
             ${londonBadge}${calibBadge}${weakBadge}
           </div>
           ${ratPrimary ? `<div class="pred-verdict-rationale">${ratPrimary}</div>` : ''}
+          ${llmNotes ? `<div class="pred-verdict-rationale" style="opacity:.82">🧠 ${escapeHtml(llmNotes.slice(0, 180))}</div>` : ''}
           <div class="pred-verdict-bar-wrap">
             <div class="pred-verdict-bar-fill ${verdictDir}" style="width:${p.confidence}%"></div>
           </div>
@@ -7453,7 +7832,7 @@
               ${ki.crowdFadeSuggested && !ki.crowdFade ? `<div style="font-size:11px;color:#ffb74d;font-weight:700;margin-top:4px">⏳ CROWD FADE SETUP — mispricing persisting (${ki.crowdFadeMispricingPp ?? '?'}pp), confirm in ${ki.crowdFadeConfirmLeftSec ?? '?'}s</div>` : ''}
               ${ki.signalLocked ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">🔒 Signal locked (${ki.humanReason?.match(/\d+s/)?.[0] || '?'} ago) — holding position</div>` : ''}
               ${ki.illiquid ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Low liquidity ($${ki.liquidity?.toFixed(0)}) — size carefully</div>` : ''}
-              ${isSplit     ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Kalshi vs model disagree — watch only, do not trade</div>` : ''}
+              ${!isTrade && isDivergent ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Kalshi vs model disagree — watch only, do not trade</div>` : ''}
             </div>`;
           })()}
         </div>
@@ -8022,7 +8401,7 @@
     if (!hud) return;
     let minimized = false;
     let hudFilter = 'ALL';
-    let soundOn = true;
+    let soundOn = isTradeBellOn();
 
     function renderHud() {
       const all = window.OB?.wallAlerts || [];
@@ -8055,8 +8434,8 @@
         <div class="hud-header">
           <span class="hud-title">⚡ WALL ALERTS <span class="hud-conn">${connCount}/7</span></span>
           <div class="hud-header-btns">
-            <button class="hud-icon-btn" id="hud-sound-btn" title="Toggle sound">
-              ${soundOn ? '🔊' : '🔇'}
+            <button class="hud-icon-btn" id="hud-sound-btn" title="Toggle signal alerts">
+              ${soundOn ? '🔔' : '🔕'}
             </button>
             <button class="hud-icon-btn" id="hud-min-btn" title="Minimize">
               ${minimized ? '▲' : '▼'}
@@ -8073,7 +8452,8 @@
         minimized = !minimized; renderHud();
       });
       hud.querySelector('#hud-sound-btn')?.addEventListener('click', () => {
-        soundOn = window.OB?.toggleSound?.() ?? !soundOn;
+        soundOn = !soundOn;
+        setTradeBellOn(soundOn);
         renderHud();
       });
       hud.querySelectorAll('[data-hud-filter]').forEach(btn => {
@@ -8983,6 +9363,35 @@
       try { renderPredictions(); } catch (_) {}
     }
   });
+
+  // Prediction live-stream watchdog — keeps cards updated between manual refreshes.
+  // Important: snapshotPredictions() stability lock assumes ~15s snapshots (see MIN_FLIP_STREAK comment).
+  setInterval(async () => {
+    if (!['predictions', 'cfm', 'universe'].includes(currentView) || document.hidden) return;
+    if (predictionRunInFlight) return;
+    try {
+      const now = Date.now();
+      const liveRunCadenceMs = currentView === 'predictions'
+        ? Math.max(15000, (refreshSecs || 15) * 1000)
+        : 30000;
+      const renderAge = now - (_lastPredRenderTs || 0);
+      if (_lastPredRenderTs && renderAge > 20000) {
+        renderPredictions();
+      }
+      const runAge = now - (_lastPredictionRunTs || 0);
+      if ((predsLoaded && !_lastPredictionRunTs) || (_lastPredictionRunTs && runAge > liveRunCadenceMs)) {
+        predictionRunInFlight = PredictionEngine.runAll();
+        await predictionRunInFlight;
+        _lastPredictionRunTs = Date.now();
+        predictionRunInFlight = null;
+        predsLoaded = true;
+        snapshotPredictions();
+        renderPredictions();
+      }
+    } catch (_) {
+      predictionRunInFlight = null;
+    }
+  }, 10000);
 
   // ── Order Book HUD — initialise after DOM is ready ──────────────
   initOBHud();

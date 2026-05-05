@@ -23,15 +23,22 @@
     onedrive: [
       // Personal OneDrive
       process.env.ONEDRIVE || '',
+      process.env.OneDriveConsumer || '',
       // Business OneDrive (usually OneDrive for Business)
       process.env.ONEDRIVE_BUSINESS || '',
+      process.env.OneDriveCommercial || '',
       // Fallback paths
       'C:\\Users\\' + (process.env.USERNAME || 'user') + '\\OneDrive',
+      'C:\\Users\\' + (process.env.USERNAME || 'user') + '\\OneDrive - Personal',
+      'C:\\Users\\' + (process.env.USERNAME || 'user') + '\\OneDrive - ctstate.edu',
+      'C:\\Users\\' + (process.env.USERNAME || 'user') + '\\OneDrive - Azure ctstate.edu',
       'C:\\Users\\' + (process.env.USERNAME || 'user') + '\\OneDrive - Company',
     ],
     google_drive: [
       // Google Drive via Backup and Sync
       'C:\\Users\\' + (process.env.USERNAME || 'user') + '\\Google Drive',
+      'C:\\Users\\' + (process.env.USERNAME || 'user') + '\\My Drive',
+      'G:\\My Drive',
       process.env.GOOGLE_DRIVE_PATH || ''
     ]
   };

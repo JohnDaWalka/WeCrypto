@@ -19,6 +19,12 @@ require('./multi-drive-logger-handlers.js');
 
 // ── Web Service (HTTPS) ────────────────────────────────────────────────────
 const { startWebService, updateState, broadcastUpdate } = require('./wecrypto-web-service.js');
+let LLMSignalAssistant = null;
+try {
+  LLMSignalAssistant = require('../src/llm/llm_signal_assistant');
+} catch (e) {
+  console.warn('[LLM] Assistant module unavailable:', e.message);
+}
 
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
@@ -444,13 +450,34 @@ ipcMain.handle('storage:readContractCache', async () => {
     'D:\\WECRYP\\data\\contract-cache.json',
     
     // OneDrive locations
+    `${home}\\OneDrive\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
     `${home}\\OneDrive\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\OneDrive - Personal\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
     `${home}\\OneDrive - Personal\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\OneDrive - ctstate.edu\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
+    `${home}\\OneDrive - ctstate.edu\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\OneDrive - Azure ctstate.edu\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
+    `${home}\\OneDrive - Azure ctstate.edu\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\OneDrive\\WECRYP\\contract-cache-2h.json`,
     `${home}\\OneDrive\\WECRYP\\contract-cache.json`,
+    `${home}\\OneDrive - Personal\\WECRYP\\contract-cache-2h.json`,
+    `${home}\\OneDrive - Personal\\WECRYP\\contract-cache.json`,
+    `${home}\\OneDrive - ctstate.edu\\WECRYP\\contract-cache-2h.json`,
+    `${home}\\OneDrive - ctstate.edu\\WECRYP\\contract-cache.json`,
+    `${home}\\OneDrive - Azure ctstate.edu\\WECRYP\\contract-cache-2h.json`,
+    `${home}\\OneDrive - Azure ctstate.edu\\WECRYP\\contract-cache.json`,
     
     // Google Drive
+    `${home}\\Google Drive\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
     `${home}\\Google Drive\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\Google Drive\\WECRYP\\contract-cache-2h.json`,
     `${home}\\Google Drive\\WECRYP\\contract-cache.json`,
+    `${home}\\My Drive\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
+    `${home}\\My Drive\\WE-CRYPTO-CACHE\\contract-cache.json`,
+    `${home}\\My Drive\\WECRYP\\contract-cache-2h.json`,
+    `${home}\\My Drive\\WECRYP\\contract-cache.json`,
+    'G:\\My Drive\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
+    'G:\\My Drive\\WE-CRYPTO-CACHE\\contract-cache.json',
     
     // C: drive (OS/temp)
     'C:\\WE-CRYPTO-CACHE\\contract-cache.json',
@@ -458,7 +485,11 @@ ipcMain.handle('storage:readContractCache', async () => {
     `${home}\\AppData\\Local\\WECRYP\\contract-cache.json`,
     
     // Network drives (Z:, Y:, etc.)
+    'Z:\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
     'Z:\\WE-CRYPTO-CACHE\\contract-cache.json',
+    'Z:\\WECRYP\\contract-cache-2h.json',
+    'Z:\\WECRYP\\contract-cache.json',
+    'Y:\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
     'Y:\\WE-CRYPTO-CACHE\\contract-cache.json',
   ];
 
@@ -519,6 +550,9 @@ ipcMain.handle('storage:getDrives', async () => {
   const home = process.env.USERPROFILE || '';
   const cloudCandidates = [
     `${home}\\OneDrive`,
+    `${home}\\OneDrive - Personal`,
+    `${home}\\OneDrive - ctstate.edu`,
+    `${home}\\OneDrive - Azure ctstate.edu`,
     `${home}\\Google Drive`,
     `${home}\\My Drive`,
   ];
@@ -538,6 +572,38 @@ ipcMain.handle('storage:getDrives', async () => {
   }
 
   return found;
+});
+
+// ── IPC: LLM inference bridge (main process inference layer) ──────────────────
+ipcMain.handle('llm:analyzeSnapshot', async (_event, snapshot = {}) => {
+  if (!LLMSignalAssistant || typeof LLMSignalAssistant.analyzeSnapshot !== 'function') {
+    return { success: false, error: 'LLM assistant unavailable' };
+  }
+
+  if (!snapshot || typeof snapshot !== 'object' || !snapshot.coin) {
+    return { success: false, error: 'Invalid snapshot payload' };
+  }
+
+  try {
+    const output = await LLMSignalAssistant.analyzeSnapshot(snapshot);
+    const diagnostics = typeof LLMSignalAssistant.getDiagnostics === 'function'
+      ? LLMSignalAssistant.getDiagnostics()
+      : {};
+    return { success: true, output, diagnostics };
+  } catch (error) {
+    return { success: false, error: error.message || 'LLM inference failed' };
+  }
+});
+
+ipcMain.handle('llm:getDiagnostics', async () => {
+  if (!LLMSignalAssistant || typeof LLMSignalAssistant.getDiagnostics !== 'function') {
+    return { success: false, error: 'LLM assistant unavailable' };
+  }
+  try {
+    return { success: true, diagnostics: LLMSignalAssistant.getDiagnostics() };
+  } catch (error) {
+    return { success: false, error: error.message || 'LLM diagnostics failed' };
+  }
 });
 
 // ── IPC: Validator15m (15-min confidence calibration) ────────────────────────

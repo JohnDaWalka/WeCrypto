@@ -18,6 +18,7 @@
   const WALL_MIN_AGE  = 400;  // ms
   const LIQSNAP_INTERVAL = 2000;
   const LIQSNAP_MAX   = 450;
+  const WALL_BEEPS_PERMANENTLY_DISABLED = true;
 
   const books        = {};   // sym → { bids, asks, mid }
   const wallTracker  = {};   // sym → { bids: Map<priceStr,{qty,firstTs,lastQty}>, asks: Map }
@@ -30,11 +31,39 @@
   let lastSnapTs     = {};
   let soundEnabled   = false;  // muted — no sound alerts
   let audioCtx       = null;
+  let _audioUnlockBound = false;
 
   // Timestamp of last HL message per sym — used to suppress Binance data when HL is live
   const _hlLastMsg   = {};
   let _hlWs          = null;
   let _hlReconnTimer = null;
+
+  function ensureAudioCtx() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!audioCtx) audioCtx = new Ctx();
+    return audioCtx;
+  }
+
+  function bindAudioUnlock() {
+    if (_audioUnlockBound) return;
+    _audioUnlockBound = true;
+
+    const unlock = () => {
+      const ctx = ensureAudioCtx();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      if (ctx.state === 'running') {
+        window.removeEventListener('pointerdown', unlock, true);
+        window.removeEventListener('keydown', unlock, true);
+        window.removeEventListener('touchstart', unlock, true);
+      }
+    };
+
+    window.addEventListener('pointerdown', unlock, true);
+    window.addEventListener('keydown', unlock, true);
+    window.addEventListener('touchstart', unlock, true);
+  }
 
   function _initBookState(sym) {
     if (books[sym]) return;
@@ -208,7 +237,7 @@
     log.push({ ts, price, side, type, bias });
     if (log.length > 100) log.shift();
 
-    if (soundEnabled) playBeep(bias);
+    if (!WALL_BEEPS_PERMANENTLY_DISABLED && soundEnabled) playBeep(bias);
     alertListeners.forEach(fn => fn(alert));
 
     console.log(`[OB] ${sym} ${side}-WALL ${type} @ ${price} | qty=${qty.toFixed(2)} age=${ageMs}ms [${bias}]`);
@@ -217,17 +246,24 @@
   // ── Audio ─────────────────────────────────────────────────────────────────
   function playBeep(bias) {
     try {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc  = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.type = 'sine';
-      osc.frequency.value = bias === 'BULL' ? 880 : 440;
-      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
-      osc.start(audioCtx.currentTime);
-      osc.stop(audioCtx.currentTime  + 0.4);
+      const ctx = ensureAudioCtx();
+      if (!ctx) return;
+      const play = () => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const start = ctx.currentTime + 0.01;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(bias === 'BULL' ? 880 : 440, start);
+        gain.gain.setValueAtTime(0.15, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.4);
+        osc.start(start);
+        osc.stop(start + 0.4);
+      };
+
+      if (ctx.state === 'suspended') ctx.resume().then(play).catch(() => {});
+      else play();
     } catch (_) {}
   }
 
@@ -236,7 +272,16 @@
     books, wallAlerts, wallTracker, liquiditySnaps, wallEventLog,
     WALL_MIN_QTY, WALL_MULTI,
     isSoundOn: () => soundEnabled,
-    toggleSound: () => { soundEnabled = !soundEnabled; return soundEnabled; },
+    setSoundOn: (next) => {
+      soundEnabled = !!next;
+      if (soundEnabled) bindAudioUnlock();
+      return soundEnabled;
+    },
+    toggleSound: () => {
+      soundEnabled = !soundEnabled;
+      if (soundEnabled) bindAudioUnlock();
+      return soundEnabled;
+    },
     connect,
     connectAll: () => {
       // Init all book state upfront
@@ -274,5 +319,8 @@
     },
   };
 
-  document.addEventListener('DOMContentLoaded', () => window.OB.connectAll());
+  document.addEventListener('DOMContentLoaded', () => {
+    bindAudioUnlock();
+    window.OB.connectAll();
+  });
 })();
