@@ -387,7 +387,6 @@
       minAgreement:  0.56,
       minConfidence: 44,
       medAbsScore:   0.45,
->>>>>>> 96b6965 (Apply 15m signal and validation updates)
       medAgreement:  0.62,
     },
     XRP: {
