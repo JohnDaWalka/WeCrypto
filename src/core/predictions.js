@@ -3749,39 +3749,115 @@
     };
   }
 
+  // Sectioned momentum gate — splits last 15 1m bars into 3 sections of 5.
+  // A signal is only armed when >=2/3 sections agree on direction (gated) or
+  // all 3 agree (hardGated). Per-horizon scores weight the relevant sections.
   function buildFastTimingModel(candles, sym = null) {
-    if (!candles || candles.length < 20) return null;
+    if (!candles || candles.length < 15) return null;
     const closes = candles.map(c => c.c);
-    const lastPrice = closes[closes.length - 1];
-    const rsi = calcRSI(closes, 9);
-    const ema8 = calcEMA(closes, 8);
+    const volumes = candles.map(c => c.v || 0);
+    const N = closes.length;
+    const lastPrice = closes[N - 1];
+
+    const SEC_SIZE = 5;
+    const NUM_SECS = 3;
+    const sections = [];
+
+    for (let i = 0; i < NUM_SECS; i++) {
+      const end   = N - SEC_SIZE * (NUM_SECS - i - 1);
+      const start = end - SEC_SIZE;
+      const sc = closes.slice(Math.max(0, start), end);
+      const sv = volumes.slice(Math.max(0, start), end);
+      if (sc.length < 3) { sections.push(null); continue; }
+
+      const secMom = ((sc[sc.length - 1] - sc[0]) / (sc[0] || 1)) * 100;
+      const mu = sc.reduce((s, v) => s + v, 0) / sc.length;
+      const lrSlope = sc.reduce((s, v, j) => s + (v - mu) * (j - (sc.length - 1) / 2), 0)
+        / (sc.length * (sc.length * sc.length - 1) / 12 || 1);
+      const normSlope = (lrSlope / (mu || 1)) * 100;
+
+      const rsiSeries = calcRSI(closes.slice(0, end), 9);
+      const secRSI = rsiSeries[rsiSeries.length - 1] ?? 50;
+
+      const avgVol = sv.slice(0, -1).reduce((s, v) => s + v, 0) / Math.max(1, sv.length - 1);
+      const volBurst = avgVol > 0 ? (sv[sv.length - 1] || 0) / avgVol : 1;
+
+      const dir = secMom > 0.06 ? 1 : secMom < -0.06 ? -1 : 0;
+      const strength = clamp(Math.abs(secMom) / 0.32, 0, 1);
+      sections.push({ momentum: secMom, slope: normSlope, rsi: secRSI, volBurst, dir, strength });
+    }
+
+    const valid = sections.filter(Boolean);
+    if (valid.length < 2) return null;
+
+    const lastSec  = valid[valid.length - 1];
+    const midSec   = valid[valid.length - 2] || lastSec;
+
+    const latestDir = lastSec.dir;
+    const agreeing  = latestDir === 0 ? 0 : valid.filter(s => s.dir === latestDir).length;
+    const gated     = agreeing >= 2;
+    const hardGated = agreeing === NUM_SECS && latestDir !== 0;
+
+    const accelerating = Math.sign(lastSec.momentum) !== 0
+      && Math.sign(lastSec.momentum) === Math.sign(midSec.momentum)
+      && Math.abs(lastSec.momentum) > Math.abs(midSec.momentum);
+
+    const ema8  = calcEMA(closes, 8);
     const ema21 = calcEMA(closes, 21);
     const emaCross = ((ema8[ema8.length - 1] - ema21[ema21.length - 1]) / (ema21[ema21.length - 1] || 1)) * 100;
-    const momentum = closes.length > 10 ? ((closes[closes.length - 1] - closes[closes.length - 11]) / (closes[closes.length - 11] || 1)) * 100 : 0;
-    const recentVol = candles.slice(-20).map(c => c.v || 0);
-    const avgVol = average(recentVol.slice(0, -1));
-    const volBurst = avgVol > 0 ? (recentVol[recentVol.length - 1] || 0) / avgVol : 1;
-
-    const rsiSig = rsi < 38 ? clamp((45 - rsi) / 12, 0, 1) : rsi > 62 ? -clamp((rsi - 55) / 12, 0, 1) : 0;
+    const rsiArr = calcRSI(closes, 9);
+    const rsi    = rsiArr[rsiArr.length - 1] ?? 50;
     const emaSig = clamp(emaCross * 8, -1, 1);
-    const momentumSig = clamp(momentum / 0.45, -1, 1);
-    const volumeSig = clamp((volBurst - 1) * 0.5, -0.5, 0.5) * Math.sign(momentumSig || emaSig || 0);
-    const score = clamp(rsiSig * 0.20 + emaSig * 0.36 + momentumSig * 0.32 + volumeSig * 0.12, -1, 1);
-    const agreement = summarizeAgreement({ rsi: rsiSig, ema: emaSig, momentum: momentumSig, volume: volumeSig });
+
+    const WEIGHTS = [0.20, 0.35, 0.45];
+    const sectionScore = valid.reduce((sum, s, i) => {
+      const w = WEIGHTS[i + (NUM_SECS - valid.length)] ?? 0.33;
+      return sum + s.dir * s.strength * w;
+    }, 0);
+
+    const gateMult   = hardGated ? 1.18 : gated ? 0.96 : 0.30;
+    const accelBoost = accelerating && gated ? 0.07 * Math.sign(sectionScore) : 0;
+    const rawScore   = (emaSig * 0.22 + sectionScore * 0.78) * gateMult + accelBoost;
+    const score      = clamp(rawScore, -1, 1);
+
+    // Per-horizon scores — shorter horizons weight the latest section more heavily
+    const h1Score  = gated ? clamp(lastSec.dir * lastSec.strength * (hardGated ? 1.12 : 0.95), -1, 1) : 0;
+    const h5Score  = gated ? clamp(lastSec.dir * lastSec.strength * 0.62 + midSec.dir * midSec.strength * 0.38, -1, 1) : 0;
+    const h10Score = gated ? clamp(score * 0.88, -1, 1) : score * 0.22;
+    const h15Score = gated ? score : score * 0.16;
+
+    const gateLabel = hardGated
+      ? `🔒 All ${NUM_SECS} sections locked`
+      : gated ? `🔑 ${agreeing}/${NUM_SECS} sections agree`
+      : `⛔ Gate blocked (${agreeing}/${NUM_SECS})`;
+    const moveLabel = score > 0.14 ? 'upside pulse' : score < -0.14 ? 'downside pulse' : 'balanced';
 
     return {
       price: lastPrice,
       score,
       signal: signalFromScore(score),
-      confidence: confidenceFromScore(Math.abs(score)),
-      label: score > 0.12 ? '1m pooled upside pulse' : score < -0.12 ? '1m pooled downside pulse' : '1m pooled balanced',
+      confidence: gated
+        ? Math.min(95, Math.round(confidenceFromScore(Math.abs(score)) * (hardGated ? 1.10 : 1.0)))
+        : Math.floor(confidenceFromScore(Math.abs(score)) * 0.40),
+      label: `${gateLabel} · ${moveLabel}`,
+      gated,
+      hardGated,
+      gateLabel,
+      accelerating,
+      agreeing,
+      sections: valid,
+      horizonScores: { h1: h1Score, h5: h5Score, h10: h10Score, h15: h15Score },
       diagnostics: {
-        agreement: agreement.agreement,
-        conflict: agreement.conflict,
+        agreement: agreeing / NUM_SECS,
+        conflict: 1 - agreeing / NUM_SECS,
         rsi,
         emaCross,
-        momentum,
-        volBurst,
+        momentum: lastSec.momentum,
+        volBurst: lastSec.volBurst,
+        sections: valid.map((s, idx) => ({ i: idx + 1, momentum: s.momentum, dir: s.dir, strength: s.strength, rsi: s.rsi })),
+        gated,
+        hardGated,
+        accelerating,
       },
     };
   }
@@ -4260,8 +4336,17 @@
   }
 
   function applyLiveCalibration(model, backtest) {
-    const reliability = backtest?.summary?.reliability ?? 0.5;
-    const tradeFit = backtest?.summary?.tradeFit ?? reliability;
+    const wfReliability = backtest?.summary?.reliability ?? 0.5;
+    const wfTradeFit    = backtest?.summary?.tradeFit ?? wfReliability;
+
+    // Blend D1/D7 advanced backtest (structural long-term fit) with short walk-forward.
+    // 65 % walk-forward (tactical) + 35 % advanced (structural baseline).
+    const advReliability = backtest?.advanced?.summary?.reliability;
+    const advTradeFit    = backtest?.advanced?.summary?.tradeFit;
+    const reliability = Number.isFinite(advReliability)
+      ? 0.65 * wfReliability + 0.35 * advReliability : wfReliability;
+    const tradeFit = Number.isFinite(advTradeFit)
+      ? 0.65 * wfTradeFit + 0.35 * advTradeFit : wfTradeFit;
     const agreement = model.diagnostics?.agreement ?? 0.5;
     const conflict = model.diagnostics?.conflict ?? 0;
     const coreScore = Number.isFinite(model.diagnostics?.coreScore) ? model.diagnostics.coreScore : model.score;
@@ -4370,14 +4455,24 @@
   function applyFastTimingOverlay(model, fastTiming) {
     if (!fastTiming) return model;
     if (model.diagnostics?.vetoed) return model;
-    const aligns = Math.sign(model.score) === 0 || Math.sign(fastTiming.score) === 0 || Math.sign(model.score) === Math.sign(fastTiming.score);
-    const overlayWeight = aligns ? 0.14 : 0.07;
+    const aligns = Math.sign(model.score) === 0 || Math.sign(fastTiming.score) === 0
+      || Math.sign(model.score) === Math.sign(fastTiming.score);
+
+    // Gate-aware overlay: hard-locked sections carry more weight than a soft gate;
+    // a blocked gate provides almost no contribution and penalises confidence.
+    const overlayWeight = fastTiming.hardGated && aligns ? 0.22
+      : fastTiming.gated && aligns                       ? 0.16
+      : fastTiming.gated === false                       ? 0.04
+      : aligns ? 0.14 : 0.07;
+
     const adjustedScore = clamp(model.score + fastTiming.score * overlayWeight, -1, 1);
-    const adjustedConfidence = Math.round(clamp(
-      model.confidence + (aligns ? fastTiming.confidence * 0.12 : -fastTiming.confidence * 0.05),
-      0,
-      95
-    ));
+
+    const confDelta = fastTiming.hardGated && aligns ? fastTiming.confidence * 0.16
+      : fastTiming.gated && aligns                   ? fastTiming.confidence * 0.12
+      : fastTiming.gated === false                   ? -fastTiming.confidence * 0.08
+      : aligns ? fastTiming.confidence * 0.12 : -fastTiming.confidence * 0.05;
+
+    const adjustedConfidence = Math.round(clamp(model.confidence + confDelta, 0, 95));
 
     return {
       ...model,
@@ -4386,12 +4481,9 @@
       confidence: adjustedConfidence,
       diagnostics: {
         ...model.diagnostics,
-        fastTiming: {
-          ...fastTiming,
-          aligns,
-        },
+        fastTiming: { ...fastTiming, aligns },
         driverSummary: fastTiming.score && Math.abs(fastTiming.score) >= 0.12
-          ? `${model.diagnostics?.driverSummary || 'No dominant driver cluster'} · Pooled 1m ${fastTiming.label}`
+          ? `${model.diagnostics?.driverSummary || 'No dominant driver cluster'} · ${fastTiming.label}`
           : (model.diagnostics?.driverSummary || 'No dominant driver cluster'),
       },
     };
@@ -4532,14 +4624,21 @@
     }
 
     if (innerArmed && fastTiming) {
+      const horizonScore = fastTiming.horizonScores?.[`h${preferredHorizon}`] ?? fastTiming.score;
+      const gateArmed    = fastTiming.gated !== undefined;  // is this the new sectioned model?
       pushPacket({
         family: 'timing',
         category: 'timing',
-        label: 'Pooled 1m timing',
+        label: gateArmed
+          ? `${fastTiming.gateLabel || 'Sectioned timing'} ${preferredHorizon}m`
+          : 'Pooled 1m timing',
         detail: fastTiming.label,
-        direction: Math.sign(fastTiming.score || 0),
-        strength: clamp(Math.abs(fastTiming.score || 0), 0, 1),
-        trust: timingTrust,
+        direction: Math.sign(horizonScore || 0),
+        strength: clamp(
+          Math.abs(horizonScore || 0) * (fastTiming.hardGated ? 1.15 : fastTiming.gated === false ? 0.35 : 1.0),
+          0, 1
+        ),
+        trust: timingTrust * (fastTiming.gated === false ? 0.45 : 1.0),
         relevance: ultraFast ? 0.98 : slowerShort ? 0.44 : shortBias ? 0.88 : 0.28,
       });
     }
