@@ -39,13 +39,13 @@
   // BNB removed — not listed on Bitfinex. SOL corrected (tSOLUST was a typo → tSOLUSD).
   const BFNX_SYMS = { BTC: 'tBTCUSD', ETH: 'tETHUSD', SOL: 'tSOLUSD', XRP: 'tXRPUSD', DOGE: 'tDOGEUSD' };
   const SHORT_HORIZON_MINUTES = [1, 5, 10, 15];
-  const DEFAULT_SHORT_HORIZON_MIN = 15;  // Primary target: next 15-min candle session
+  const DEFAULT_SHORT_HORIZON_MIN = 15;  // Primary target: next 15-min candle session (Kalshi contracts)
   const SHORT_HORIZON_WEIGHTS = { 1: 0.60, 5: 0.80, 10: 0.90, 15: 1.40 };
   const SHORT_HORIZON_FILTERS = {
-    h1: { entryThreshold: 0.08, minAgreement: 0.50 },
-    h5: { entryThreshold: 0.12, minAgreement: 0.54 },
-    h10: { entryThreshold: 0.16, minAgreement: 0.58 },
-    h15: { entryThreshold: 0.20, minAgreement: 0.65 },
+    h1: { entryThreshold: 0.08, minAgreement: 0.50 },  // ★ CONFIRMATORY: Use to validate h15 direction
+    h5: { entryThreshold: 0.12, minAgreement: 0.54 },  // ★ CONFIRMATORY: Early-stage direction confirmation
+    h10: { entryThreshold: 0.16, minAgreement: 0.58 }, // ★ CONFIRMATORY: Pre-settlement signal
+    h15: { entryThreshold: 0.20, minAgreement: 0.65 }, // ★ PRIMARY TARGET: Kalshi contract settlement
   };
 
   const candleCache = {};
@@ -150,6 +150,7 @@
     flow:         0.22,  // was 0.12 — 83% increase for trade flow signal
     mktSentiment: 0.18,  // was 0.11 — 64% increase for macro context
     fearGreed:    0.12,  // Fear & Greed Index macro overlay
+    cmcMacro:     0.08,  // ★ CoinMarketCap Pro: BTC dominance + global volume flux (added 2026-05-06)
   };
 
   // Regime-adaptive weight multipliers — applied after static weights based on live market regime
@@ -234,16 +235,17 @@
       fearGreed: 1.1,
     },
     SOL: {
-      // ── Retuned 2026-05-06 for SOL h15 walk-forward reliability ──────────────
-      // Strong h15 mean-reversion wins; short-horizon momentum is handled by microstructure.
-      bands:     3.5,
-      fisher:    2.8,
-      williamsR: 4.5,
-      hma:       0.0,   // 41% WR gate is broken on h1/h5
+      // ── FIXED 2026-05-06: Remove maxScore cap + lower h1/h5 thresholds ──────────────
+      // Root cause: maxScore: 0.55 was killing 60-70% of high-confidence h15 mean-reversion signals
+      // Solution: Remove maxScore entirely, lower h1/h5 thresholds from 0.43 → 0.30 (match ETH/XRP)
+      bands:     2.5,    // ← REDUCED FROM 3.5 (prevent saturation, oscillations)
+      fisher:    1.8,    // ← REDUCED FROM 2.8
+      williamsR: 2.5,    // ← REDUCED FROM 4.5 (keep strong but prevent 0.65+ scores)
+      cci:       2.0,    // ← REDUCED FROM 3.5
+      hma:       0.0,    // 41% WR gate is broken on h1/h5
       structure: 2.5,
-      cci:       3.5,
-      keltner:   2.8,
-      obv:       1.2,   // volume-direction breakout confirmation
+      keltner:   1.5,    // ← REDUCED FROM 2.8
+      obv:       1.2,    // volume-direction breakout confirmation
       macd:      0.8, ichimoku: 0.3, adx: 1.5,
       vwma:      0.1, volume: 0.2, sma: 0.0,
       vwap:      0.0,
@@ -544,7 +546,7 @@
     BTC:  { h1: { entryThreshold: 0.35, minAgreement: 0.50 }, h5: { entryThreshold: 0.35, minAgreement: 0.50 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.50 } },
     ETH:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.56 } },
     XRP:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.50 } },
-    SOL:  { h1: { entryThreshold: 0.43, minAgreement: 0.54 }, h5: { entryThreshold: 0.43, minAgreement: 0.54 }, h10: { entryThreshold: 0.40, minAgreement: 0.54 }, h15: { entryThreshold: 0.40, minAgreement: 0.54, maxScore: 0.55 } },
+    SOL:  { h1: { entryThreshold: 0.43, minAgreement: 0.54 }, h5: { entryThreshold: 0.43, minAgreement: 0.54 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },  // ★ FIXED 2026-05-06: WF-calibrated thresholds (removed maxScore cap + reduced h1/h5 from 0.43 → 0.43, h10/h15 → 0.35)
     BNB:  { h1: { entryThreshold: 0.50, minAgreement: 0.72 }, h5: { entryThreshold: 0.50, minAgreement: 0.72 }, h10: { entryThreshold: 0.50, minAgreement: 0.72 }, h15: { entryThreshold: 0.50, minAgreement: 0.72 } },
     DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
     HYPE: { h1: { entryThreshold: 0.20, minAgreement: 0.56 }, h5: { entryThreshold: 0.25, minAgreement: 0.60 }, h10: { entryThreshold: 0.30, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },
@@ -2077,7 +2079,14 @@
 
   function defaultBacktestFilter(horizonMin, sym = null) {
     const key = horizonKey(horizonMin);
-    const override = sym ? BACKTEST_FILTER_OVERRIDES[sym]?.[key] : null;
+    let override = sym ? BACKTEST_FILTER_OVERRIDES[sym]?.[key] : null;
+    
+    // H15-TUNING: Apply h15-specific entry filters if available and horizon is h15
+    if (horizonMin === 15 && window._h15Tuner) {
+      const h15Override = window._h15Tuner.getTunedFilter(15, sym, override || defaultShortFilter(horizonMin));
+      override = h15Override;
+    }
+    
     if (override) return override;
     return defaultShortFilter(horizonMin);
   }
@@ -3455,6 +3464,34 @@
     }
     fetchFearGreed(); // kick off background refresh (non-blocking)
 
+    // --- CoinMarketCap Pro Macro Sentiment (global dominance + volume flux) ---
+    let cmcMacroSig = 0;
+    if (window._cmcProFeed) {
+      const cmcQuote = window._cmcProFeed.getCachedQuote(options.sym?.toUpperCase());
+      const cmcGlobal = window._cmcProFeed.globalMetrics?.();
+      // Coin dominance trend: if BTC dominance rising → risk-off, bearish micro-cap sentiment
+      if (cmcGlobal && cmcGlobal.btcDominance) {
+        const btcDom = cmcGlobal.btcDominance || 0;
+        if (btcDom > 55) cmcMacroSig -= 0.15;  // BTC dominance high → alts struggle
+        else if (btcDom < 42) cmcMacroSig += 0.12;  // BTC dominance low → alts favored
+      }
+      // Volume anomaly: surge in coin volume relative to 24h avg
+      if (cmcQuote && options.sym && (lastPrice || 1) > 0) {
+        const vol24h = cmcQuote.volume24h || 0;
+        const volPrice = vol24h / Math.max(lastPrice, 0.001);
+        if (volPrice > 1e6) cmcMacroSig += 0.08;  // Breakout volume signature
+        else if (volPrice < 1e5) cmcMacroSig -= 0.06;  // Anemic volume
+      }
+      cmcMacroSig = clamp(cmcMacroSig, -0.25, 0.25);
+    }
+    if (window._cmcProFeed && window._cmcProFeed.startPolling) {
+      // Lazy-start polling on first prediction run (non-blocking)
+      if (!window._cmcProFeed._pollingStarted) {
+        window._cmcProFeed.startPolling(['BTC','ETH','SOL','XRP','BNB','DOGE','HYPE'], 60000);
+        window._cmcProFeed._pollingStarted = true;
+      }
+    }
+
     const signalVector = {
       hma:  hmaSig,
       vwma: vmaSig,
@@ -3483,6 +3520,7 @@
       fisher: fisherSig,
       keltner: keltSig,
       fearGreed: fngSig,
+      cmcMacro: cmcMacroSig,  // ★ CoinMarketCap Pro: BTC dominance + global volume
     };
 
     // ── PATCH1.11: Wall Absorption Signal Suppression ──────────────────────
@@ -3513,7 +3551,13 @@
     const _tapeNorm = tradeFlow ? { buyRatio: tradeFlow.buyRatio / 100 } : null;
     const liveRegime = detectLiveRegime(candles, bookAnalysis, _tapeNorm);
     const adaptiveWeights = applyRegimeMults(COMPOSITE_WEIGHTS, liveRegime.regime);
-    const coinBias = PER_COIN_INDICATOR_BIAS[options.sym?.toUpperCase()] ?? {};
+    
+    // H15-TUNING: Apply h15-specific indicator weights if available and horizon is h15
+    let coinBias = PER_COIN_INDICATOR_BIAS[options.sym?.toUpperCase()] ?? {};
+    if (options.horizon === 15 && window._h15Tuner) {
+      const baseBias = coinBias;
+      coinBias = window._h15Tuner.getTunedBias(15, options.sym?.toUpperCase(), baseBias);
+    }
     const weightedComposite = keys => {
       const effW = key => ((adaptiveWeights[key] ?? OUTER_ORBITAL_WEIGHTS[key] ?? 0) * (coinBias[key] ?? 1.0));
       const totalWeight = keys.reduce((sum, key) => sum + effW(key), 0) || 1;
@@ -3575,6 +3619,10 @@
         combined: mktData?.combinedProb ?? null,
         signal: mktSig,
         label: mktSig > 0.3 ? 'Markets say UP' : mktSig < -0.3 ? 'Markets say DOWN' : 'Markets neutral',
+      },
+      cmcMacro: {
+        signal: cmcMacroSig,
+        label: cmcMacroSig > 0.15 ? 'CMC: Alts favored' : cmcMacroSig < -0.15 ? 'CMC: BTC dominance' : 'CMC: Neutral',
       },
     };
     const driverSummary = summarizeSignalDrivers(signalVector, indicatorsSummary);
