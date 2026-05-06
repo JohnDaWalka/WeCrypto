@@ -142,6 +142,7 @@ const PREDICTION_COINS = [
     ],
   },
 ];
+window.PREDICTION_COINS = PREDICTION_COINS;
 
 // ---- AGGRESSIVE 4-COIN FOCUS ────────────────────────────────────────────────
 // Removed HYPE (48% WR, losing money)
