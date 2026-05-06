@@ -2248,24 +2248,35 @@
           lock.flipDir    = rawDir;
           lock.flipStreak = 1;
         }
-        if (lock.flipStreak >= MIN_FLIP_STREAK) {
-          // Sustained reversal confirmed over MIN_FLIP_STREAK snapshots — accept flip
+        // ── Fast-path: pure drift flip needs only 1 snapshot ───────────────
+        // If the proprietary momentum gate shows a hardGated clean flip
+        // (driftPurity >= 0.60, streak confirmed), don't wait 45s — exit now.
+        const ft         = p.diagnostics?.fastTiming;
+        const pureFlip   = ft?.hardGated && ft?.momentumQuality >= 0.60
+                           && Math.sign(ft?.score || 0) !== 0
+                           && Math.sign(ft?.score || 0) !== (rawDir === 'UP' ? -1 : 1);
+        const requiredStreak = pureFlip ? 1 : MIN_FLIP_STREAK;
+
+        if (lock.flipStreak >= requiredStreak) {
+          // Sustained reversal confirmed — accept flip
           const oldDir = lock.lockedDir;
           lock.lockedDir  = rawDir;
           lock.flipStreak = 0;
           lock.flipDir    = null;
-          // Fire early exit warning — prediction has confirmed a direction flip within the active 15M bucket.
-          // This is the primary notification path when CFM-based exit didn't fire fast enough.
           if (oldDir !== 'FLAT') {
+            const flipReason = pureFlip
+              ? `Pure thin drift flip detected · ${(ft.momentumQuality * 100).toFixed(0)}% quality`
+              : `${coin.sym} ${oldDir}→${rawDir} confirmed (${requiredStreak}× sustained)`;
             try {
               window.dispatchEvent(new CustomEvent('cfm:earlyExit', { detail: {
                 sym:        coin.sym,
-                reason:     `${coin.sym} ${oldDir}→${rawDir} confirmed (${MIN_FLIP_STREAK}× sustained signal)`,
-                strength:   0.8,
+                reason:     flipReason,
+                strength:   pureFlip ? Math.min(0.95, 0.70 + ft.momentumQuality * 0.25) : 0.8,
                 prediction: oldDir,
-                type:       'confirmed_prediction_flip',
+                type:       pureFlip ? 'pure_drift_flip' : 'confirmed_prediction_flip',
                 severity:   'high',
                 shouldExit: true,
+                driftQuality: ft?.momentumQuality ?? null,
               }}));
             } catch (_e) { /* non-critical */ }
           }
@@ -2397,6 +2408,47 @@
         }
       }
     });
+
+    // ── MACRO MARKET CONSENSUS EXIT ─────────────────────────────────────────
+    // When the whole market moves together (3+ coins in the same direction),
+    // fire exit alerts immediately for any locked predictions that oppose the
+    // macro move — don't wait for MIN_FLIP_STREAK.
+    try {
+      const marketDirs = PREDICTION_COINS.map(c => {
+        const p = preds[c.sym];
+        if (!p || !p.price || p.disabled) return null;
+        return (p.score || 0) > 0.08 ? 'UP' : (p.score || 0) < -0.08 ? 'DOWN' : null;
+      }).filter(Boolean);
+
+      const upCount   = marketDirs.filter(d => d === 'UP').length;
+      const downCount = marketDirs.filter(d => d === 'DOWN').length;
+      const macroDir  = upCount >= 3 ? 'UP' : downCount >= 3 ? 'DOWN' : null;
+
+      if (macroDir) {
+        const macroCoins = macroDir === 'UP' ? upCount : downCount;
+        const macroStrength = Math.min(0.97, 0.62 + (macroCoins / PREDICTION_COINS.length) * 0.38);
+
+        PREDICTION_COINS.forEach(coin => {
+          const lock = window._predLock[coin.sym];
+          if (!lock || lock.lockedDir === 'FLAT' || lock.lockedDir === macroDir) return;
+          // This coin's locked direction is AGAINST the macro move — fire exit now
+          try {
+            window.dispatchEvent(new CustomEvent('cfm:earlyExit', { detail: {
+              sym:        coin.sym,
+              reason:     `${macroCoins}/${PREDICTION_COINS.length} coins moving ${macroDir} · whole-market move`,
+              strength:   macroStrength,
+              prediction: lock.lockedDir,
+              type:       'macro_market_move',
+              severity:   'critical',
+              shouldExit: true,
+              macroDir,
+              macroCoins,
+            }}));
+          } catch (_e) { /* non-critical */ }
+        });
+      }
+    } catch (_macroErr) { /* non-critical */ }
+
     if (window._contractCache?.flushSync) {
       try { window._contractCache.flushSync(); } catch (_) {}
     }
@@ -2864,21 +2916,38 @@
   // Appears at top-right when CFM detects momentum reversal vs
   // an active prediction. Auto-dismisses after 45s.
   const activeToasts = new Map(); // sym → element
-  function showEarlyExitToast(sym, prediction, reason, strength = 0.5, type = '') {
+  function showEarlyExitToast(sym, prediction, reason, strength = 0.5, type = '', detail = {}) {
     // Remove prior toast for same coin
     if (activeToasts.has(sym)) {
       activeToasts.get(sym).remove();
       activeToasts.delete(sym);
     }
-    const strPct   = Math.round((strength || 0) * 100);
-    const isWall   = type === 'coordinated_sell' || type === 'confirmed_prediction_flip';
-    const isFlip   = type === 'confirmed_prediction_flip';
-    const label    = isWall && !isFlip ? '⚠️ WALL EVENT' : isFlip ? '🔄 SIGNAL FLIP' : '⚡ EARLY EXIT';
-    const bdrColor = isWall ? 'var(--color-gold,#f90)' : 'var(--color-down,#f45)';
+    const strPct    = Math.round((strength || 0) * 100);
+    const isMacro   = type === 'macro_market_move';
+    const isPure    = type === 'pure_drift_flip';
+    const isFlip    = type === 'confirmed_prediction_flip' || isPure || isMacro;
+    const isWall    = type === 'coordinated_sell' || (!isMacro && !isPure && isFlip);
+    const coin      = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
+    const icon      = coin?.icon || sym;
+
+    const label = isMacro ? '🚨 EXIT NOW — MARKET WIDE'
+                : isPure  ? '🔄 DRIFT FLIP — EXIT NOW'
+                : isFlip  ? '🔄 SIGNAL FLIP'
+                : isWall  ? '⚠️ WALL EVENT'
+                          : '⚡ EARLY EXIT';
+
+    const bdrColor = isMacro ? '#ff2222'
+                   : isPure  ? 'var(--color-down,#f45)'
+                   : isWall  ? 'var(--color-gold,#f90)'
+                             : 'var(--color-down,#f45)';
+
     const strColor = strength >= 0.7 ? bdrColor : strength >= 0.45 ? 'var(--color-gold)' : 'var(--color-text-muted)';
-    const coin     = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
-    const icon     = coin?.icon || sym;
-    const bodyText = isWall && !isFlip
+
+    const bodyText = isMacro
+      ? `${detail.macroCoins ?? '3+'}/${(typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS.length : '?')} coins moving <b>${detail.macroDir || ''}</b> — your <b>${prediction}</b> contract is wrong side`
+      : isPure
+      ? `Pure thin drift flip · ${(detail.driftQuality != null ? Math.round(detail.driftQuality * 100) + '% quality' : '')} · exit your <b>${prediction}</b> now`
+      : isWall && !isFlip
       ? `Cross-coin sell detected · exit ${prediction} bet now`
       : `${prediction} call reversed · momentum flip`;
 
@@ -2886,32 +2955,33 @@
     toast.setAttribute('data-exit-toast', sym);
     toast.style.cssText = [
       'position:fixed', 'top:68px', 'right:16px', 'z-index:9999',
-      `background:var(--color-surface,#12192e)`, `border:1px solid ${bdrColor}`,
-      'border-radius:10px', 'padding:10px 14px', 'min-width:240px', 'max-width:320px',
-      'box-shadow:0 4px 24px rgba(0,0,0,.55)', 'animation:fadeInRight .25s ease',
+      `background:var(--color-surface,#12192e)`, `border:2px solid ${bdrColor}`,
+      'border-radius:10px', 'padding:12px 16px', 'min-width:260px', 'max-width:340px',
+      'box-shadow:0 4px 32px rgba(0,0,0,.72)', 'animation:fadeInRight .2s ease',
       'cursor:pointer',
+      isMacro ? 'animation:fadeInRight .15s ease,pulse 0.6s ease 2' : '',
     ].join(';');
     toast.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <span style="font-size:18px">${icon}</span>
-        <span style="font-weight:700;color:${bdrColor}">${sym} · ${label}</span>
-        <span style="margin-left:auto;font-size:10px;color:${strColor}">${strPct}%</span>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+        <span style="font-size:20px">${icon}</span>
+        <span style="font-weight:800;font-size:13px;color:${bdrColor}">${sym} · ${label}</span>
+        <span style="margin-left:auto;font-size:11px;font-weight:700;color:${strColor}">${strPct}%</span>
       </div>
-      <div style="font-size:11px;color:var(--color-text-muted);line-height:1.4">
+      <div style="font-size:12px;color:var(--color-text-muted);line-height:1.5">
         ${bodyText}<br>
         <span style="color:var(--color-text-faint);font-size:10px">${reason || ''}</span>
       </div>
-      <div style="font-size:10px;color:var(--color-text-faint);margin-top:5px">Click to dismiss</div>
+      <div style="font-size:10px;color:var(--color-text-faint);margin-top:6px">Click to dismiss</div>
     `;
     toast.addEventListener('click', () => { toast.remove(); activeToasts.delete(sym); });
     document.body.appendChild(toast);
     activeToasts.set(sym, toast);
 
-    // Auto-dismiss after 45s
+    const dismissMs = isMacro ? 90000 : 45000;
     setTimeout(() => {
       if (toast.isConnected) { toast.remove(); activeToasts.delete(sym); }
-    }, 45000);
-    console.log(`[CFMRouter] Early exit toast: ${sym} ${prediction} → CFM flip (${strPct}%)`);
+    }, dismissMs);
+    console.log(`[CFMRouter] Exit toast: ${sym} ${prediction} type=${type} strength=${strPct}%`);
   }
 
 
@@ -9225,7 +9295,7 @@
   window.addEventListener('cfm:earlyExit', (e) => {
     const { sym, reason, strength, prediction, type } = e.detail || {};
     if (!sym) return;
-    showEarlyExitToast(sym, prediction, reason, strength, type);
+    showEarlyExitToast(sym, prediction, reason, strength, type, e.detail || {});
   });
 
   // ── Shell Router Veto Toasts ────────────────────────────────────

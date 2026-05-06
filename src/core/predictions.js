@@ -3749,115 +3749,156 @@
     };
   }
 
-  // Sectioned momentum gate — splits last 15 1m bars into 3 sections of 5.
-  // A signal is only armed when >=2/3 sections agree on direction (gated) or
-  // all 3 agree (hardGated). Per-horizon scores weight the relevant sections.
+  // ── PROPRIETARY MOMENTUM QUALITY GATE ─────────────────────────────────────
+  // Detects pure directional drift ("thin upward/downward momentum") vs choppy
+  // price action. Replaces rigid section-count gate with 7 quality dimensions:
+  //   1. DriftPurity   — net move vs total absolute moves (1=pure drift, 0=choppy)
+  //   2. CandlePurity  — body-to-range ratio (thin candles = clean momentum)
+  //   3. Staircase     — % of successive closes stepping in drift direction
+  //   4. WickBalance   — continuation wicks vs rejection wicks ratio
+  //   5. GradientSteadiness — low variance in per-bar returns = steady drift
+  //   6. VolumeSteadiness   — consistent volume = organic not pump-driven
+  //   7. RecentStreak  — unbroken recent candles in drift direction
   function buildFastTimingModel(candles, sym = null) {
-    if (!candles || candles.length < 15) return null;
-    const closes = candles.map(c => c.c);
-    const volumes = candles.map(c => c.v || 0);
-    const N = closes.length;
-    const lastPrice = closes[N - 1];
+    if (!candles || candles.length < 8) return null;
+    const N       = candles.length;
+    const window  = candles.slice(-Math.min(15, N));
+    const last5   = candles.slice(-5);
+    const lastPrice = candles[N - 1].c;
 
-    const SEC_SIZE = 5;
-    const NUM_SECS = 3;
-    const sections = [];
+    // ── 1. DriftPurity — net move / Σ|candle moves| ──────────────────────────
+    let netMove = 0, totalAbs = 0;
+    for (const c of window) {
+      const m = c.c - c.o;
+      netMove  += m;
+      totalAbs += Math.abs(m);
+    }
+    const driftPurity = totalAbs > 0 ? Math.abs(netMove) / totalAbs : 0;
+    const driftDir    = netMove > 0 ? 1 : netMove < 0 ? -1 : 0;
 
-    for (let i = 0; i < NUM_SECS; i++) {
-      const end   = N - SEC_SIZE * (NUM_SECS - i - 1);
-      const start = end - SEC_SIZE;
-      const sc = closes.slice(Math.max(0, start), end);
-      const sv = volumes.slice(Math.max(0, start), end);
-      if (sc.length < 3) { sections.push(null); continue; }
+    // ── 2. CandlePurity — body / (high - low) ────────────────────────────────
+    const avgPurity = window.reduce((s, c) => {
+      const body = Math.abs(c.c - c.o);
+      const range = (c.h - c.l) || 0.0001;
+      return s + body / range;
+    }, 0) / window.length;
 
-      const secMom = ((sc[sc.length - 1] - sc[0]) / (sc[0] || 1)) * 100;
-      const mu = sc.reduce((s, v) => s + v, 0) / sc.length;
-      const lrSlope = sc.reduce((s, v, j) => s + (v - mu) * (j - (sc.length - 1) / 2), 0)
-        / (sc.length * (sc.length * sc.length - 1) / 12 || 1);
-      const normSlope = (lrSlope / (mu || 1)) * 100;
+    // ── 3. Staircase — successive closes stepping in drift direction ──────────
+    let stairSteps = 0;
+    for (let i = 1; i < window.length; i++) {
+      if (driftDir > 0 && window[i].c > window[i - 1].c) stairSteps++;
+      if (driftDir < 0 && window[i].c < window[i - 1].c) stairSteps++;
+    }
+    const staircaseRate = stairSteps / Math.max(1, window.length - 1);
 
-      const rsiSeries = calcRSI(closes.slice(0, end), 9);
-      const secRSI = rsiSeries[rsiSeries.length - 1] ?? 50;
+    // ── 4. WickBalance — continuation vs rejection wicks ─────────────────────
+    // Positive = wicks support the move (buyers/sellers absorb pressure)
+    // Negative = rejection wicks (opposition winning at the extremes)
+    let wickWith = 0, wickContra = 0;
+    for (const c of window) {
+      const bodyTop    = Math.max(c.o, c.c);
+      const bodyBot    = Math.min(c.o, c.c);
+      const upperWick  = c.h - bodyTop;
+      const lowerWick  = bodyBot - c.l;
+      if (driftDir > 0) { wickWith += lowerWick; wickContra += upperWick; }
+      else               { wickWith += upperWick; wickContra += lowerWick; }
+    }
+    const totalWick   = (wickWith + wickContra) || 0.0001;
+    const wickBalance = (wickWith - wickContra) / totalWick; // -1..+1
 
-      const avgVol = sv.slice(0, -1).reduce((s, v) => s + v, 0) / Math.max(1, sv.length - 1);
-      const volBurst = avgVol > 0 ? (sv[sv.length - 1] || 0) / avgVol : 1;
+    // ── 5. GradientSteadiness — low variance = steady not jumpy ──────────────
+    const returns = window.map(c => (c.c - c.o) / (c.o || 1) * 100);
+    const avgRet  = returns.reduce((s, v) => s + v, 0) / returns.length;
+    const stdDev  = Math.sqrt(returns.reduce((s, v) => s + (v - avgRet) ** 2, 0) / returns.length);
+    const gradientSteadiness = Math.abs(avgRet) > 0
+      ? clamp(1 / (1 + stdDev / Math.abs(avgRet)), 0, 1)
+      : 0;
 
-      const dir = secMom > 0.06 ? 1 : secMom < -0.06 ? -1 : 0;
-      const strength = clamp(Math.abs(secMom) / 0.32, 0, 1);
-      sections.push({ momentum: secMom, slope: normSlope, rsi: secRSI, volBurst, dir, strength });
+    // ── 6. VolumeSteadiness — organic buying vs erratic pumps ────────────────
+    const vols   = window.map(c => c.v || 0);
+    const avgVol = vols.reduce((s, v) => s + v, 0) / vols.length;
+    const volCV  = avgVol > 0
+      ? Math.sqrt(vols.reduce((s, v) => s + (v - avgVol) ** 2, 0) / vols.length) / avgVol
+      : 1;
+    const volSteadiness = clamp(1 / (1 + volCV), 0, 1);
+
+    // ── 7. RecentStreak — unbroken recent candles in drift direction ──────────
+    let streak = 0;
+    for (let i = window.length - 1; i >= 0; i--) {
+      if (Math.sign(window[i].c - window[i].o) === driftDir) streak++;
+      else break;
     }
 
-    const valid = sections.filter(Boolean);
-    if (valid.length < 2) return null;
+    // ── COMPOSITE MOMENTUM QUALITY (0..1) ─────────────────────────────────────
+    const momentumQuality = clamp(
+      driftPurity                    * 0.28 +  // primary: directional purity
+      avgPurity                      * 0.16 +  // candle cleanliness
+      staircaseRate                  * 0.18 +  // stairstepping pressure
+      (0.5 + wickBalance * 0.5)      * 0.14 +  // wick support (normalized 0..1)
+      gradientSteadiness             * 0.13 +  // steady gradient
+      volSteadiness                  * 0.11,   // organic volume
+      0, 1
+    );
 
-    const lastSec  = valid[valid.length - 1];
-    const midSec   = valid[valid.length - 2] || lastSec;
+    // ── GATE THRESHOLDS (quality-based, not bar-count) ────────────────────────
+    const highQuality = momentumQuality >= 0.60 && driftPurity >= 0.55 && streak >= 3;
+    const medQuality  = momentumQuality >= 0.42 && driftPurity >= 0.35 && streak >= 2;
+    const gated       = highQuality || medQuality;
+    const hardGated   = highQuality;
 
-    const latestDir = lastSec.dir;
-    const agreeing  = latestDir === 0 ? 0 : valid.filter(s => s.dir === latestDir).length;
-    const gated     = agreeing >= 2;
-    const hardGated = agreeing === NUM_SECS && latestDir !== 0;
+    // ── SCORE ──────────────────────────────────────────────────────────────────
+    const qualMult = hardGated ? 1.22 : medQuality ? 0.90 : 0.24;
+    const score    = clamp(driftDir * momentumQuality * qualMult, -1, 1);
 
-    const accelerating = Math.sign(lastSec.momentum) !== 0
-      && Math.sign(lastSec.momentum) === Math.sign(midSec.momentum)
-      && Math.abs(lastSec.momentum) > Math.abs(midSec.momentum);
+    // ── PER-HORIZON SCORES ─────────────────────────────────────────────────────
+    // 5m contract: needs high quality AND last 5 candles net-aligned
+    const last5Net     = last5.reduce((s, c) => s + (c.c - c.o), 0);
+    const last5Aligned = Math.sign(last5Net) === driftDir;
+    const h1Score  = hardGated && last5Aligned ? clamp(score * 1.12, -1, 1) : 0;
+    const h5Score  = gated && last5Aligned     ? clamp(score * (hardGated ? 1.06 : 0.88), -1, 1) : score * 0.16;
+    const h10Score = gated                     ? clamp(score * 0.90, -1, 1) : score * 0.26;
+    // 15m contract: most forgiving — even medium drift matters; missed quiet ETH drifts end here
+    const h15Score = medQuality                ? clamp(score * 0.88, -1, 1) : score * 0.38;
 
-    const ema8  = calcEMA(closes, 8);
-    const ema21 = calcEMA(closes, 21);
-    const emaCross = ((ema8[ema8.length - 1] - ema21[ema21.length - 1]) / (ema21[ema21.length - 1] || 1)) * 100;
-    const rsiArr = calcRSI(closes, 9);
-    const rsi    = rsiArr[rsiArr.length - 1] ?? 50;
-    const emaSig = clamp(emaCross * 8, -1, 1);
-
-    const WEIGHTS = [0.20, 0.35, 0.45];
-    const sectionScore = valid.reduce((sum, s, i) => {
-      const w = WEIGHTS[i + (NUM_SECS - valid.length)] ?? 0.33;
-      return sum + s.dir * s.strength * w;
-    }, 0);
-
-    const gateMult   = hardGated ? 1.18 : gated ? 0.96 : 0.30;
-    const accelBoost = accelerating && gated ? 0.07 * Math.sign(sectionScore) : 0;
-    const rawScore   = (emaSig * 0.22 + sectionScore * 0.78) * gateMult + accelBoost;
-    const score      = clamp(rawScore, -1, 1);
-
-    // Per-horizon scores — shorter horizons weight the latest section more heavily
-    const h1Score  = gated ? clamp(lastSec.dir * lastSec.strength * (hardGated ? 1.12 : 0.95), -1, 1) : 0;
-    const h5Score  = gated ? clamp(lastSec.dir * lastSec.strength * 0.62 + midSec.dir * midSec.strength * 0.38, -1, 1) : 0;
-    const h10Score = gated ? clamp(score * 0.88, -1, 1) : score * 0.22;
-    const h15Score = gated ? score : score * 0.16;
-
-    const gateLabel = hardGated
-      ? `🔒 All ${NUM_SECS} sections locked`
-      : gated ? `🔑 ${agreeing}/${NUM_SECS} sections agree`
-      : `⛔ Gate blocked (${agreeing}/${NUM_SECS})`;
-    const moveLabel = score > 0.14 ? 'upside pulse' : score < -0.14 ? 'downside pulse' : 'balanced';
+    const qualityLabel = hardGated  ? '🟢 Pure thin drift'
+                       : medQuality ? '🟡 Moderate drift'
+                                    : '🔴 Choppy / no drift';
+    const dirLabel = driftDir > 0 ? 'UP' : driftDir < 0 ? 'DOWN' : 'FLAT';
 
     return {
       price: lastPrice,
       score,
       signal: signalFromScore(score),
       confidence: gated
-        ? Math.min(95, Math.round(confidenceFromScore(Math.abs(score)) * (hardGated ? 1.10 : 1.0)))
-        : Math.floor(confidenceFromScore(Math.abs(score)) * 0.40),
-      label: `${gateLabel} · ${moveLabel}`,
+        ? Math.min(92, Math.round(60 * momentumQuality * (hardGated ? 1.14 : 1.0)))
+        : Math.floor(30 * momentumQuality),
+      label: `${qualityLabel} · ${dirLabel} (streak ${streak}, purity ${(driftPurity * 100).toFixed(0)}%)`,
       gated,
       hardGated,
-      gateLabel,
-      accelerating,
-      agreeing,
-      sections: valid,
+      gateLabel: qualityLabel,
+      accelerating: streak >= 4 && staircaseRate > 0.72,
+      agreeing: streak,
+      momentumQuality,
       horizonScores: { h1: h1Score, h5: h5Score, h10: h10Score, h15: h15Score },
       diagnostics: {
-        agreement: agreeing / NUM_SECS,
-        conflict: 1 - agreeing / NUM_SECS,
-        rsi,
-        emaCross,
-        momentum: lastSec.momentum,
-        volBurst: lastSec.volBurst,
-        sections: valid.map((s, idx) => ({ i: idx + 1, momentum: s.momentum, dir: s.dir, strength: s.strength, rsi: s.rsi })),
+        agreement:         clamp(momentumQuality, 0, 1),
+        conflict:          clamp(1 - driftPurity, 0, 1),
+        momentum:          avgRet,
+        volBurst:          vols[vols.length - 1] / (avgVol || 1),
         gated,
         hardGated,
-        accelerating,
+        accelerating:      streak >= 4 && staircaseRate > 0.72,
+        // quality breakdown — exposed for diagnostics UI
+        driftPurity,
+        avgPurity,
+        staircaseRate,
+        wickBalance,
+        gradientSteadiness,
+        volSteadiness,
+        streak,
+        driftDir,
+        momentumQuality,
+        qualityLabel,
       },
     };
   }
