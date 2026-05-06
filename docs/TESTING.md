@@ -4,140 +4,154 @@ How to run and write tests for WE-CRYPTO.
 
 ---
 
-## Test Scripts
-
-All test scripts live in the project root or `tests/` directory and are run with Node.js directly.
-
-| Script | What it tests | Prerequisites |
-|---|---|---|
-| `test-integration.js` | End-to-end prediction + Kalshi flow | None |
-| `test-snapshot-tuner.js` | Snapshot-layer adaptive tuning | None |
-| `test-realtime-tuner.js` | Real-time gate adjustments | None |
-| `test-signal-logic-audit.js` | Signal inversion + logic audit | None |
-| `tests/test-live-feeds.js` | Live Pyth/Coinbase feeds | Proxy on `http://127.0.0.1:3010` |
-| `tests/test-api-status.js` | API endpoint health | Proxy on `http://127.0.0.1:3010` |
-
----
-
 ## Running Tests
 
+All test scripts live in the repo root and `tests/` directory. Run them with Node.js directly — no test runner required.
+
+### Available Test Scripts
+
 ```bash
-# Unit / integration (no proxy needed)
+# Integration test — full prediction + tuning cycle
 node test-integration.js
-node test-snapshot-tuner.js
+
+# Real-time tuner test — validates adaptive weight updates
 node test-realtime-tuner.js
+
+# Snapshot tuner test — validates snapshot-based tuning
+node test-snapshot-tuner.js
+
+# Signal logic audit — checks signal correctness
 node test-signal-logic-audit.js
 
-# Live feed tests (start proxy first)
-npm start &                     # starts app + proxy
+# Signal inversion test — checks sign conventions
+node test-signal-inversion.js
+
+# Live feed tests (requires proxy on http://127.0.0.1:3010)
 node tests/test-live-feeds.js
+
+# API status test — validates Kalshi credentials
 node tests/test-api-status.js
+```
+
+### Prerequisites for Live Tests
+
+`test-live-feeds.js` and `test-api-status.js` require a running proxy:
+
+```bash
+# Start the app first (or just the proxy server)
+npm start
+# Then in another terminal:
+node tests/test-live-feeds.js
 ```
 
 ---
 
-## Pre-Launch Checklist (8 Levels)
+## Test Structure
 
-The [CRITICAL_CHECKPOINTS.md](./CRITICAL_CHECKPOINTS.md) document defines an 8-level checkpoint framework that should be completed before trading real money:
+### Integration Test (`test-integration.js`)
 
-| Level | What | How to verify |
-|---|---|---|
-| 1 | System startup | App opens, no console errors |
-| 2 | Kalshi connectivity | `window.Kalshi.getBalance()` returns success |
-| 3 | Quantum framework | `window.KalshiEnhancements.SPIN_STATES` defined |
-| 4 | Orbital engine | Prediction cards populate |
-| 5 | Order execution | Test micro order (1 contract) |
-| 6 | Live prediction cycle | Accuracy scorecard updates |
-| 7 | Risk controls | Stop-loss fires correctly |
-| 8 | Accuracy baseline | ≥50 settled contracts, WR ≥52 % |
+Tests the full cycle:
+1. Fetches OHLCV candles
+2. Runs prediction model
+3. Runs adaptive tuning
+4. Validates output shape
+
+Expected output:
+```
+✅ Candle fetch: OK
+✅ Prediction model: OK (BTC: UP 58%)
+✅ Tuning cycle: OK (weights updated)
+✅ All tests passed
+```
+
+### Realtime Tuner Test (`test-realtime-tuner.js`)
+
+Validates that the real-time tuner:
+- Correctly reads historical scorecard
+- Applies boost/reduce logic at the right thresholds
+- Does not exceed max/min weight bounds
+
+### Signal Logic Audit (`test-signal-logic-audit.js`)
+
+Validates each signal's output direction matches expected market behaviour. Tests sign conventions for RSI, MACD, CCI, Fisher, ADX, ATR, order book imbalance, and Kalshi probability extraction.
 
 ---
 
 ## Backtest Validation
 
-```javascript
-// Run in DevTools console after the app is fully loaded
-
-// Get current backtest results
-window._backtests
-
-// Run backtest for a specific coin
-window.PredictionMarkets.runBacktest('BTC', { days: 7 })
-
-// Export backtest to JSON for analysis
-copy(JSON.stringify(window._backtests, null, 2))
-```
-
-The backtest runner script can also be used standalone:
-
 ```bash
-node backtest-runner.js
-# Output appears in backtest-runner-output.txt
+# Run backtest simulator
+node backtest-simulator.js
 ```
+
+Backtest results are written to `backtest-simulation-results.json`. Check:
+- Accuracy > 50%
+- Profit factor > 1.0
+- Sharpe ratio > 0.5
 
 ---
 
 ## Writing New Tests
 
-Tests are plain Node.js scripts. Follow this template:
+### Convention
 
-```javascript
-// tests/test-my-feature.js
-'use strict';
+Test files use simple `assert`-style checks with `console.log` output:
 
-const assert = require('assert');
+```js
+const assert = require('assert')
 
-// Import the module under test (if it exports anything)
-// const myModule = require('../src/core/my-module');
-
-let passed = 0;
-let failed = 0;
-
-function test(name, fn) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-    passed++;
-  } catch (err) {
-    console.error(`  ✗ ${name}: ${err.message}`);
-    failed++;
-  }
-}
-
-// --- Tests ---
-
-test('example: basic assertion', () => {
-  assert.strictEqual(1 + 1, 2);
-});
-
-// --- Summary ---
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);
+// Test a function
+const result = someFunction(input)
+assert.strictEqual(result.direction, 'UP', 'Direction should be UP')
+console.log('✅ Direction test passed')
 ```
+
+### What to Test
+
+- **Signal functions** — Given known OHLCV data, assert correct signal value and direction
+- **Weight update logic** — Given accuracy above/below threshold, assert correct weight adjustment
+- **Contract parsing** — Given a raw Kalshi API response, assert correct `floor_strike` and direction extraction
+- **EV calculation** — Given model probability and Kalshi price, assert correct EV and Kelly fraction
+
+### Fixture Data
+
+Place test fixtures (mock API responses, candle data) in `tests/fixtures/`.
 
 ---
 
-## Signal Audit
+## Debugging Failing Tests
 
-The `test-signal-logic-audit.js` script checks for systematic signal inversions — a common source of accuracy degradation:
+1. **Run with verbose logging:**
+   ```bash
+   DEBUG=true node test-integration.js
+   ```
+
+2. **Check proxy is running** for live feed tests:
+   ```bash
+   curl http://127.0.0.1:3010/health
+   ```
+
+3. **Check API credentials** for Kalshi tests:
+   ```bash
+   node tests/test-api-status.js
+   ```
+
+4. **Inspect signal output:**
+   ```js
+   // In test file, add:
+   console.log(JSON.stringify(result, null, 2))
+   ```
+
+---
+
+## Continuous Validation
+
+After making changes to the prediction engine or tuning logic, run:
 
 ```bash
-node test-signal-logic-audit.js
-# Reports any signals where the direction sign is consistently wrong
+node test-signal-logic-audit.js && node test-integration.js && echo "All clear"
 ```
 
-If inversions are found, inspect the relevant signal in `src/core/predictions.js` and verify the `strike_type` logic for that Kalshi market.
-
 ---
 
-## Continuous Integration
-
-There are no automated CI test runs configured. Run the test scripts manually before each build and before merging changes to `main`.
-
----
-
-## Further Reading
-
-- [CRITICAL_CHECKPOINTS.md](./CRITICAL_CHECKPOINTS.md) — full 8-level pre-launch framework
-- [DEVELOPMENT.md](./DEVELOPMENT.md) — setting up your dev environment
-- [API.md](./API.md) — console commands for manual testing
+**Last Updated:** 2026-05-01 | **Version:** 2.11.0+

@@ -6,13 +6,13 @@ How to set up a local development environment for WE-CRYPTO.
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|---|---|---|
-| Node.js | 18 LTS+ | Runtime & build toolchain |
-| npm | 9+ | Package manager |
-| Git | 2.x | Version control |
-| Windows 10/11 x64 | — | Electron targets Windows |
-| VS Code (recommended) | Latest | Editor with Electron debugging |
+| Tool | Version | Notes |
+|------|---------|-------|
+| Node.js | 18+ | v20 LTS recommended |
+| npm / pnpm | 8+ | Either works |
+| Git | Any | For cloning and branching |
+| Windows 10/11 | — | Required for Electron + .exe builds |
+| VS Code | Recommended | With ESLint extension |
 
 ---
 
@@ -23,24 +23,18 @@ How to set up a local development environment for WE-CRYPTO.
 git clone https://github.com/JohnDaWalka/WE-CFM-Orchestrator.git
 cd WE-CFM-Orchestrator
 
-# 2. Install all dependencies
+# 2. Install dependencies
 npm install
 
-# 3. (Optional) Install Tauri CLI for the Tauri build target
-npm install -g @tauri-apps/cli
-```
+# 3. Set up environment
+cp .env.example .env
+# Edit .env with your API credentials
 
----
-
-## Running in Development Mode
-
-```bash
+# 4. Start in development mode
 npm start
 ```
 
-This launches Electron with live renderer. Changes to files in `src/` and `public/` are reflected on reload (`Ctrl+R`).
-
-> The renderer does **not** hot-reload automatically. Press `Ctrl+R` in the app window after saving files.
+This launches Electron with DevTools enabled.
 
 ---
 
@@ -48,82 +42,128 @@ This launches Electron with live renderer. Changes to files in `src/` and `publi
 
 ```
 WE-CFM-Orchestrator/
-├── electron/           Electron main process & IPC
-│   ├── main.js         Entry point, process lifecycle
-│   ├── preload.js      contextBridge (renderer ↔ main)
-│   └── kalshi-worker.js  Standalone Kalshi HTTP server
-├── public/             Renderer HTML + script load order
-│   └── index.html      Script tags = dependency graph
+├── electron/               ← Electron main process
+│   ├── main.js             ← App entry point (boots proxy, Kalshi worker, renderer)
+│   ├── kalshi-worker.js    ← Kalshi Node.js worker (port 3050)
+│   └── wecrypto-web-service.js  ← Optional web mirror (port 3443)
+├── public/
+│   └── index.html          ← Renderer boot chain (script order matters!)
 ├── src/
-│   ├── core/           Predictions, adaptive tuner, app
-│   ├── kalshi/         Kalshi integration modules
-│   └── ui/             Floating orchestrator, views
-├── assets/             Icons
-├── docs/               Documentation
-├── tests/              Test scripts
-└── package.json        Build config + scripts
+│   ├── core/
+│   │   ├── app.js          ← UI orchestrator and composition layer
+│   │   └── predictions.js  ← Prediction engine
+│   ├── kalshi/
+│   │   ├── prediction-markets.js  ← Kalshi + Polymarket data
+│   │   └── wecrypto-startup-loader.js  ← Startup recovery
+│   ├── ui/
+│   │   └── floating-orchestrator.js  ← EV engine + trade intents
+│   └── ...                 ← Other modules
+├── docs/                   ← Documentation (you are here)
+├── tests/                  ← Test scripts
+├── electron/               ← Electron main process files
+└── package.json
 ```
 
 ---
 
-## Key Conventions
+## Key Architecture Conventions
 
-### Script Load Order
+> Read these carefully before making changes — they are load-order critical.
 
-`public/index.html` defines the **dependency graph** via `<script>` tag ordering.  
-Startup/calibration scripts load before `app.js`. This order is operationally significant — do not reorder without understanding the dependency chain.
+### 1. Script Load Order
 
-### Global Runtime Contract
+`public/index.html` loads scripts in a specific order. **This order is a dependency graph.**
 
-Modules expose their APIs on `window` (e.g. `window.PredictionMarkets`, `window.KalshiOrchestrator`).  
-Use this pattern when adding cross-module integrations — do **not** use ES module imports in the renderer.
+- Startup/calibration modules load **before** `app.js`
+- `prediction-markets.js` loads **before** `market-resolver.js` which loads **before** `app.js`
+- Do not reorder script tags without understanding the dependency chain
 
-### localStorage Namespace
+### 2. Global Window APIs
 
-All persistent state uses the `beta1_*` prefix.  
-Never rename existing keys as this breaks calibration compatibility.
+Modules expose their APIs on `window`, not as ES module exports. Example:
 
-### Coin Universe
+```js
+// predictions.js
+window.PredictionEngine = { ... }
 
-The canonical coin list is `BTC, ETH, SOL, XRP, DOGE, BNB, HYPE`.  
-Adding or removing coins requires changes across: `predictions.js`, Kalshi mapping, orchestrator, and UI tables.
+// prediction-markets.js
+window.PredictionMarkets = { ... }
+
+// app.js consumes them:
+const engine = window.PredictionEngine
+```
+
+**Preserve this pattern** when adding cross-module integrations.
+
+### 3. Coin Universe
+
+The canonical coin list is fixed across many modules:
+
+```
+BTC, ETH, SOL, XRP, DOGE, BNB, HYPE
+```
+
+Adding or removing a coin requires synchronised updates in: predictions, Kalshi mapping, orchestrator, and UI tables.
+
+### 4. localStorage Keys
+
+All persisted state uses the `beta1_*` prefix. **Do not rename these keys.**
+
+---
+
+## Development Workflow
+
+```bash
+# Start with hot-reload (Electron DevTools available)
+npm start
+
+# Make changes to src/ files
+# Reload the renderer: Ctrl+Shift+R (or restart app for main process changes)
+
+# Run tests
+node test-integration.js
+node test-signal-logic-audit.js
+
+# Build for testing
+npm run build:portable
+```
 
 ---
 
 ## Debugging
 
-### Electron DevTools
+### Renderer (UI) Debugging
 
-```
-F12  →  DevTools opens in the renderer
-Ctrl+Shift+I  →  Toggle DevTools
-```
+Open DevTools with `F12` or from the View menu.
 
-The renderer has full access to the browser DevTools including Network, Performance, and Memory tabs.
-
-### Main Process Logs
-
-```bash
-npm start
-# Main process logs appear in the terminal
+```js
+// Inspect module state
+window.PredictionEngine
+window.PredictionMarkets
+window.KalshiOrchestrator
+window._predictions
+window._backtests
 ```
 
-### Attach VS Code Debugger
+### Main Process Debugging
 
-Add to `.vscode/launch.json`:
+Main process logs appear in the terminal where you ran `npm start`.
+
+To add VS Code debugging, create `.vscode/launch.json`:
 
 ```json
 {
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Main Process",
       "type": "node",
       "request": "launch",
-      "cwd": "${workspaceFolder}",
+      "name": "Debug Main Process",
+      "program": "${workspaceFolder}/electron/main.js",
       "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron",
-      "args": [".", "--inspect=9229"],
-      "sourceMaps": true
+      "windows": {
+        "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron.cmd"
+      }
     }
   ]
 }
@@ -131,42 +171,29 @@ Add to `.vscode/launch.json`:
 
 ---
 
-## Running Tests
+## Making Changes
 
-See [TESTING.md](./TESTING.md) for a full guide. Quick reference:
+### Adding a New Signal
 
-```bash
-node test-integration.js
-node test-snapshot-tuner.js
-node test-realtime-tuner.js
-node test-signal-logic-audit.js
-node tests/test-live-feeds.js        # requires proxy on :3010
-node tests/test-api-status.js
-```
+1. Implement the signal function in `src/core/predictions.js`
+2. Add it to the `buildSignalModel()` layer aggregation
+3. Add its default weight in `CONFIGURATION.md` and `AdaptiveLearningEngine`
+4. Update `SIGNALS.md` documentation
+5. Add a test in `test-signal-logic-audit.js`
 
----
+### Adding a New Coin
 
-## Build
-
-```bash
-npm run build:portable   # Portable .exe
-npm run build:installer  # NSIS installer
-npm run build            # Both
-```
+1. Add to the coin list in `predictions.js`
+2. Add Kalshi contract mapping in `prediction-markets.js`
+3. Add to orchestrator coin list in `floating-orchestrator.js`
+4. Add to UI tables in `app.js`
 
 ---
 
-## Code Style
+## Contributing
 
-- **No linter is configured** — match the style of the file you are editing
-- Prefer `const` / `let` over `var`
-- IIFEs are used throughout the renderer; new modules should follow this pattern
-- Comments should explain *why*, not *what*
+See [../CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.
 
 ---
 
-## Further Reading
-
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — system design
-- [TESTING.md](./TESTING.md) — writing and running tests
-- [CONFIGURATION.md](./CONFIGURATION.md) — tuneable parameters
+**Last Updated:** 2026-05-01 | **Version:** 2.11.0+

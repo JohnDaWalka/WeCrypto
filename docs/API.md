@@ -1,199 +1,219 @@
-# 📋 API Reference
+# 🔧 API Reference
 
-All commands are available in the Electron DevTools console (F12 → Console).
+Console commands, debug helpers, and programmatic API for WE-CRYPTO.
 
 ---
 
-## Prediction Engine
+## Overview
 
-```javascript
-// Current prediction for a coin
-window._predictions['BTC']
-// → { direction: 'UP', confidence: 78, spinState: 2, ... }
+All modules expose their APIs on the `window` global object in the renderer process. Open DevTools (`F12`) to access the console.
 
-// All predictions
-window._predictions
+---
 
-// Backtest results
-window._backtests['BTC']
+## Prediction Engine API
 
-// Force a prediction refresh
-window.PredictionMarkets.refresh()
+```js
+// Full namespace
+window.PredictionEngine
+
+// Get latest prediction for a coin
+window._predictions?.BTC        // { direction, confidence, score, horizon }
+window._predictions?.ETH
+// All coins: BTC, ETH, SOL, XRP, DOGE, BNB, HYPE
+
+// Trigger a manual prediction refresh
+window.PredictionEngine?.refresh?.()
+
+// Get raw model score (-1.0 to +1.0)
+window._predictions?.BTC?.score
 ```
 
 ---
 
-## Accuracy & Scorecard
+## Adaptive Learning Engine API
 
-```javascript
-// Per-coin scorecard
-window.KalshiAccuracyDebug.scorecard('BTC')
-// → { winRate: 0.62, trades: 47, correct: 29, ... }
+```js
+// Full namespace
+window.AdaptiveLearningEngine
 
-// Find signal inversions (signs that were flipped)
-window.KalshiAccuracyDebug.findInversions()
+// Get current signal weights
+window.AdaptiveLearningEngine?.getWeights?.()
+// Returns: { RSI: 1.05, MACD: 0.95, CCI: 1.00, ... }
 
-// Export all accuracy data as CSV
-window.KalshiAccuracyDebug.exportCSV()
+// Get accuracy history per coin/signal
+window._historicalScorecard
+// Structure: { BTC: { RSI: { accuracy, count, trend }, ... }, ... }
 
-// Historical scorecard (full table)
-window.historicalScorecard
+// Force an immediate weight update
+window.AdaptiveLearningEngine?.tune?.()
+
+// Get tuning audit log
+window.AdaptiveLearningEngine?.getAuditLog?.()
 ```
 
 ---
 
-## Adaptive Learning Engine
+## Kalshi / Prediction Markets API
 
-```javascript
-// Current adaptive signal weights
-window.AdaptiveLearningEngine.getWeights('BTC')
+```js
+// Full namespace
+window.PredictionMarkets
 
-// Run a manual tuning cycle
-window.AdaptiveLearningEngine.runCycle()
+// Get cached data for a coin
+window.PredictionMarkets?.getCoin?.('BTC')
+// Returns: { kalshi15m: [...], kalshi5m: [...], polymarket: [...] }
 
-// Status report
-window.AdaptiveLearningEngine.status()
+// Get all cached data
+window.PredictionMarkets?.getAll?.()
 
-// Reset weights to baseline
-window.AdaptiveLearningEngine.reset('BTC')
+// Force a Kalshi refresh
+window.PredictionMarkets?.refresh?.()
+
+// Raw contract cache
+window._kalshiContractCache
 ```
 
 ---
 
-## Kalshi Integration
+## Floating Orchestrator API
 
-```javascript
-// Account balance
-await window.Kalshi.getBalance()
-// → { success: true, data: { balance: "50000.00" } }
+```js
+// Full namespace
+window.KalshiOrchestrator   // or window.FloatingOrchestrator
 
-// List markets (up to N)
-await window.Kalshi.getMarkets(100)
+// Get current trade intents
+window.KalshiOrchestrator?.getIntents?.()
+// Returns: [{ coin, intent, edge, kelly, reason }, ...]
 
-// Place an order
-await window.Kalshi.placeOrder({
-  market_ticker: 'KXBTC-25MAY1423-T103499',
-  side: 'yes',
-  action: 'buy',
-  quantity: 5,
-  yes_price: 65
-})
+// Get EV for a specific coin
+window.KalshiOrchestrator?.getEV?.('BTC')
 
-// Cancel an order
-await window.Kalshi.cancelOrder('order-id-here')
-
-// Cancel all open orders
-await window.Kalshi.cancelAllOrders()
-
-// Get open positions
-await window.Kalshi.getPositions()
+// Manual translate (regenerate intents)
+window.KalshiOrchestrator?.translate?.()
 ```
 
 ---
 
-## Kalshi Worker (HTTP — port 3050)
+## Backtest API
 
-These are equivalent REST calls to the standalone worker process:
+```js
+// Full namespace
+window.BacktestRunner
 
-```bash
-# Health check
-curl http://127.0.0.1:3050/health
+// Run a full backtest
+window.BacktestRunner?.run?.()
 
-# Account balance
-curl http://127.0.0.1:3050/balance
+// Get latest backtest results
+window._backtests
+// Structure: { BTC: { accuracy, profitFactor, sharpe, ... }, ... }
 
-# Markets
-curl "http://127.0.0.1:3050/markets?limit=50"
-
-# Events
-curl http://127.0.0.1:3050/events
-
-# Positions
-curl http://127.0.0.1:3050/positions
-
-# Orders
-curl http://127.0.0.1:3050/orders
-```
-
-See [KALSHI_WORKER_GUIDE.md](./KALSHI_WORKER_GUIDE.md) for the full HTTP API reference.
-
----
-
-## Orchestrator (EV Engine)
-
-```javascript
-// Current trade intents
-window.KalshiOrchestrator.getIntents()
-
-// Diagnostic dump
-window.KalshiOrchestrator.diagnostics()
-
-// Force re-evaluation
-window.KalshiOrchestrator.evaluate()
+// Advanced backtest (percentile + Kalshi alignment)
+window.BacktestRunner?.runAdvanced?.()
 ```
 
 ---
 
-## Momentum Exit
+## Market Resolver API
 
-```javascript
-// Active positions + exit status
-window.getMomentumDiagnostics()
-// → { activePositions: 3, positions: {...}, recentExits: [...] }
+```js
+// Full namespace
+window.MarketResolver
 
-// HTML render of momentum status
-window.renderMomentumDashboard()
+// Resolve a contract to metadata
+window.MarketResolver?.resolve?.('KXBTC15M')
 
-// Stop momentum polling
-window.stopMomentumExitIntegration()
+// Get all known contracts for a coin
+window.MarketResolver?.getContracts?.('BTC')
 ```
 
 ---
 
-## Startup Diagnostics
+## Order Book API
 
-```javascript
-// Full startup timeline (ms per phase)
-window.__WECRYPTO_STARTUP.getLog()
+```js
+// Full namespace
+window.OrderBook
 
-// Read contract cache from Electron storage
-await window.electron.invoke('storage:readContractCache')
-
-// Check localStorage calibration
-localStorage.getItem('beta1_adaptive_weights')
+// Get latest order book snapshot for a coin
+window.OrderBook?.getSnapshot?.('BTC')
+// Returns: { bids: [...], asks: [...], imbalance: 0.12 }
 ```
 
 ---
 
-## Pyth Price Feed
+## Data Logger API
 
-```javascript
-// Live price for a coin
-await window.PythSettlement.getCurrentPrice('BTC')
+```js
+// Full namespace
+window.DataLogger
 
-// Validate a settlement outcome
-await window.PythSettlement.validateSettlement(trade)
+// Get logged signal decisions
+window.DataLogger?.getLog?.()
 
-// Current volatility regime
-window.PythSettlement.getVolatility('BTC')
+// Get trade log
+window.DataLogger?.getTradeLog?.()
+
+// Export log to clipboard
+window.DataLogger?.export?.()
+```
+
+---
+
+## Shell Router API
+
+```js
+// Full namespace
+window.ShellRouter
+
+// Get cross-coin shell propagation state
+window.ShellRouter?.getState?.()
+
+// Get shell packet for a coin
+window.ShellRouter?.getPacket?.('BTC')
 ```
 
 ---
 
 ## Debug Helpers
 
-```javascript
-// Log prediction diagnostics for all coins
-Object.keys(window._predictions).forEach(sym =>
-  console.log(sym, window._predictions[sym])
-)
+```js
+// Print full system state summary to console
+window.debugState?.()
 
-// Watch weights in real-time
-setInterval(() =>
-  console.table(window.AdaptiveLearningEngine.getWeights('BTC')),
-  5000
-)
+// Check all feed statuses
+window.checkFeeds?.()
 
-// Export backtest to JSON
-JSON.stringify(window._backtests, null, 2)
+// Inspect proxy routing
+window.suppFetch   // fetch wrapper with proxy support
+
+// Check throttle state
+window.throttledFetch?.getStats?.()
 ```
+
+---
+
+## localStorage Keys
+
+WE-CRYPTO uses `beta1_*` namespace for all persisted state:
+
+| Key | Contents |
+|-----|----------|
+| `beta1_weights` | Current adaptive signal weights |
+| `beta1_scorecard` | Historical accuracy data |
+| `beta1_auditLog` | Weight tuning audit trail |
+| `beta1_contractCache` | Kalshi contract metadata |
+| `beta1_calibration` | Startup calibration data |
+
+```js
+// Read weights from storage
+JSON.parse(localStorage.getItem('beta1_weights'))
+
+// Clear all WE-CRYPTO storage (resets learning)
+Object.keys(localStorage)
+  .filter(k => k.startsWith('beta1_'))
+  .forEach(k => localStorage.removeItem(k))
+```
+
+---
+
+**Last Updated:** 2026-05-01 | **Version:** 2.11.0+

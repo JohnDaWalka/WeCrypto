@@ -1,82 +1,81 @@
-# 📊 Performance Reference
+# 📈 Performance Guide
 
-Expected accuracy, per-coin benchmarks, and optimisation tips for WE-CRYPTO.
-
----
-
-## Baseline vs Target Accuracy
-
-| State | Win Rate | Notes |
-|---|---|---|
-| **Cold start** (no data) | ~50 % | Random baseline |
-| **After 50 contracts** | 55–60 % | Weights starting to calibrate |
-| **Steady state (> 200)** | 60–68 % | Adaptive learning in full effect |
-| **Target (quantum spin)** | 65–72 % | With Kalshi fusion + regime filters |
-
-> Accuracy is measured as: `correct settlements / total settled predictions`
+Benchmarks, metrics, and optimisation tips for WE-CRYPTO.
 
 ---
 
-## Per-Coin Benchmarks (v2.13.3)
+## Expected Accuracy Timeline
 
-| Coin | Baseline WR | Target WR | Kalshi Alignment |
-|---|---|---|---|
-| BTC | 56 % | 65 % | High (liquid market) |
-| ETH | 54 % | 63 % | High |
-| SOL | 52 % | 61 % | Medium |
-| XRP | 51 % | 60 % | Medium |
-| DOGE | 49 % | 57 % | Low |
-| BNB | 50 % | 58 % | Low |
-| HYPE | 48 % | 55 % | Very low |
+Accuracy improves as the learning engine accumulates data:
 
----
+| Time Running | Expected Accuracy | Notes |
+|-------------|-------------------|-------|
+| 0–30 min | ~50% | No tuning yet; initial weights |
+| 30–120 min | 50–52% | First tuning cycles running |
+| 2–6 hours | 52–54% | Weights converging |
+| 6–24 hours | 53–56% | Stable regime established |
+| 24–72 hours | 54–57% | Per-coin tuning optimised |
+| 7+ days | 55–58% | Full adaptive maturity |
 
-## Accuracy by Spin State
-
-| Spin State | Label | Target Win Rate |
-|---|---|---|
-| ±3 | Strong Bear / Bull | > 75 % |
-| ±2 | Bear / Bull | > 65 % |
-| ±1 | Weak Bear / Bull | > 55 % |
-| 0 | Neutral | No trade |
-
-Avoid trading spin ±1 in tight (choppy) regimes — the system auto-filters these.
+> **Note:** Accuracy varies with market conditions. High-volatility / regime-change periods typically reduce accuracy by 2–4%.
 
 ---
 
-## Improvement Factors
+## Per-Coin Benchmarks
 
-| Factor | Expected WR Lift |
-|---|---|
-| 7-state quantisation | +5–8 % |
-| Kalshi fusion | +10–15 % |
-| Volatility regime filters | +5 % |
-| Signal consensus scoring | +3–5 % |
-| Dynamic order sizing | +2–3 % |
-| Choppy market filter | +2–3 % |
+Historical 30-day averages (v2.11.0):
 
----
-
-## Render Performance (v2.13.3 benchmarks)
-
-| Metric | v2.13.2 | v2.13.3 | Δ |
-|---|---|---|---|
-| Scorecard render | 75 ms | 42 ms | ⬇️ 44 % |
-| Panel switch latency | 165 ms | 93 ms | ⬇️ 44 % |
-| Settlement processing | 120 ms | 82 ms | ⬇️ 32 % |
-| Initial app load | 180 ms | 215 ms | ⬆️ +19 % (expected — pre-loads cache) |
-| UI frame rate | 42 fps | 59 fps | ⬆️ 40 % |
+| Coin | Accuracy | Profit Factor | Notes |
+|------|----------|--------------|-------|
+| **BTC** | 54–57% | 1.08–1.15 | Most liquid; best signal quality |
+| **ETH** | 53–56% | 1.06–1.12 | Strong BTC correlation |
+| **SOL** | 52–55% | 1.05–1.10 | Higher volatility |
+| **XRP** | 51–54% | 1.03–1.08 | News-driven regime shifts |
+| **DOGE** | 50–53% | 1.01–1.06 | Most volatile; hardest to predict |
+| **BNB** | 52–54% | 1.04–1.09 | Moderate; GeckoCoin fallback |
+| **HYPE** | 51–53% | 1.02–1.07 | Newer coin; less history |
 
 ---
 
-## Expected Timeline to Steady State
+## UI Performance Benchmarks (v2.13.3)
 
+| Metric | v2.13.2 | v2.13.3 | Change |
+|--------|---------|---------|--------|
+| Scorecard render | 75ms | 42ms | ⬇️ 44% faster |
+| Panel switch latency | 165ms | 93ms | ⬇️ 44% faster |
+| Settlement processing | 120ms | 82ms | ⬇️ 32% faster |
+| Initial app load | 180ms | 215ms | ⬆️ +19% (expected — startup pre-load) |
+| UI frame rate | 42fps | 59fps | ⬆️ 40% smoother |
+
+---
+
+## Monitoring Key Metrics
+
+### In DevTools Console
+
+```js
+// Check prediction latency (time to compute all 7 coins)
+window.PredictionEngine?.getLastCycleDuration?.()
+
+// Check tuning frequency
+window.AdaptiveLearningEngine?.getStats?.()
+
+// Check feed latency
+window.checkFeeds?.()
+
+// Check backtest results
+window._backtests
 ```
-Day 1     : Cold start, ~50% win rate, weights at baseline
-Day 2-3   : 50+ contracts settled, first meaningful calibration
-Day 5-7   : 200+ contracts, weights stable, 58-62% typical
-Week 2+   : Full regime history, 62-68% achievable
-```
+
+### Key Metrics to Watch
+
+| Metric | Healthy Range | Warning |
+|--------|--------------|---------|
+| Prediction cycle time | < 2000ms | > 5000ms |
+| Kalshi fetch time | < 500ms | > 2000ms |
+| Settled contracts/cycle | 10–50 | < 5 |
+| Weight drift from 1.0 | ±0.5 | ±0.9 |
+| Scorecard accuracy | 50–60% | < 47% or > 65% (may overfit) |
 
 ---
 
@@ -84,41 +83,58 @@ Week 2+   : Full regime history, 62-68% achievable
 
 ### Improve Accuracy
 
-1. **Run the full startup sequence** — let the app run for 30+ minutes before evaluating accuracy
-2. **Monitor regime transitions** — accuracy dips during regime changes (tight→trending) are normal
-3. **Check for inversions** — `window.KalshiAccuracyDebug.findInversions()` detects systematic sign errors
-4. **Use Phase 1 (micro trades)** for the first 50 contracts to validate signal quality
+1. **Let the engine run longer** — The most impactful factor is accumulated data. Do not reset weights frequently.
 
-### Reduce Latency
+2. **Stable internet connection** — Dropped requests reduce contract fetch quality. Use a wired connection.
 
-1. Ensure `KALSHI-API-KEY.txt` is on the same drive as the `.exe`
-2. The contract cache saves to `D:` and `F:` drives automatically; prefer fast drives
-3. Close other Electron apps that may compete for Chromium GPU resources
+3. **Keep the app running** — Learning is continuous. Restarting frequently resets in-memory state.
 
-### Memory Footprint
+4. **Don't manually override weights** — Trust the adaptive system. Manual overrides can destabilise learning.
 
-```javascript
-// Check current memory
-performance.memory
-// → { usedJSHeapSize: ..., totalJSHeapSize: ..., jsHeapSizeLimit: ... }
-```
+### Improve UI Performance
 
-Normal operating range: 100–250 MB. Restart if over 500 MB.
+1. **Close unused DevTools panels** — Each panel consumes renderer resources.
 
----
+2. **Clear old audit logs** — If the app has run for weeks, clear the audit log:
+   ```js
+   localStorage.removeItem('beta1_auditLog')
+   ```
 
-## Historical Performance Logs
+3. **Reduce visible coins** — If the UI is slow, try hiding coins you don't trade (feature varies by version).
 
-Detailed per-release performance data:
-
-- [PERFORMANCE-ANALYSIS-v2.13.3.md](./PERFORMANCE-ANALYSIS-v2.13.3.md) — v2.13.3 profiling
-- [ACCURACY-TRENDING-v2.13.3.md](./ACCURACY-TRENDING-v2.13.3.md) — accuracy trend analysis
-- [BACKTEST-2DAY-ANALYSIS-59pct.md](./BACKTEST-2DAY-ANALYSIS-59pct.md) — 2-day backtest at 59 %
+4. **Restart periodically** — After 12+ hours of continuous use, a restart clears memory fragmentation.
 
 ---
 
-## Further Reading
+## Profit Factor Interpretation
 
-- [LEARNING-ENGINE.md](./LEARNING-ENGINE.md) — how weights are adapted
-- [CONFIGURATION.md](./CONFIGURATION.md) — gate thresholds
-- [SIGNALS.md](./SIGNALS.md) — per-indicator accuracy contribution
+Profit factor = gross wins / gross losses.
+
+| Profit Factor | Interpretation |
+|--------------|---------------|
+| < 1.0 | Losing system |
+| 1.0 | Break even |
+| 1.0–1.1 | Marginal edge |
+| 1.1–1.2 | Solid edge (WE-CRYPTO target) |
+| > 1.2 | Strong edge |
+| > 1.5 | Exceptional (verify for overfitting) |
+
+---
+
+## Signal Accuracy Targets
+
+| Signal | Target Accuracy | Boosted Above | Reduced Below |
+|--------|----------------|--------------|--------------|
+| RSI | 52–56% | 52% | 45% |
+| MACD | 50–55% | 52% | 45% |
+| CCI | 51–55% | 52% | 45% |
+| Fisher | 52–57% | 52% | 45% |
+| ADX | 50–53% | 52% | 45% |
+| ATR | 50–52% | 52% | 45% |
+| Order Book | 51–55% | 52% | 45% |
+| Kalshi Prob | 49–52% | 52% | 45% |
+| Crowd Fade | 48–54% | 52% | 45% |
+
+---
+
+**Last Updated:** 2026-05-01 | **Version:** 2.11.0+

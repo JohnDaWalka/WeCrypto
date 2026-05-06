@@ -1,112 +1,137 @@
-# 🏗️ System Architecture
+# System Architecture
 
-> For the full visual component map see [architecture.md](./architecture.md) and for the deepest layer-by-layer breakdown see [DEEP_ARCHITECTURE_ANALYSIS.md](./DEEP_ARCHITECTURE_ANALYSIS.md).
+## Component Map
 
----
+```mermaid
+graph TD
+    subgraph electron["Electron Process"]
+        MAIN[main.js\nBrowserWindow · IPC]
+        PRE[preload.js\ncontextBridge]
+        PROXY[proxy-fetch.js\nAPI router]
+        THROTTLE[throttled-fetch.js\n4.5s timeout · 5 concurrent]
+    end
 
-## Overview
+    subgraph renderer["Renderer — app.js"]
+        UI[Views\nUniverse · Charts · Predictions · Portfolio]
+        ORCH[floating-orchestrator.js\nEV engine · trade intent]
+        SHELL[shell-router.js\ncross-coin shell propagation]
+        WS[candle-ws.js\nWebSocket candle stream]
+    end
 
-WE-CRYPTO is an Electron desktop application that pairs a real-time crypto prediction engine (CFM) with Kalshi prediction-market integration.  
-The system is built around three orthogonal concerns:
+    subgraph prediction["predictions.js"]
+        LOAD[loadCoinData\nfetch + cache candles]
+        BUILD[buildSignalModel\nlayer aggregation]
+        COMPUTE[computePrediction\nfinal score + diagnostics]
+        BACKTEST[backtest engine\nregime calibration]
+    end
 
-| Layer | Role |
-|---|---|
-| **Electron shell** | Process management, native file I/O, IPC bridging |
-| **Prediction engine** | Signal computation, adaptive learning, Kalshi fusion |
-| **UI / renderer** | Dashboard, scorecard, orchestrator panels |
+    subgraph markets["prediction-markets.js"]
+        K15[fetchKalshiSeriesForSym\n15M markets · floor_strike]
+        K5[fetchKalshi5M\n5M markets]
+        POLY[fetchPolymarket\nGamma API]
+        CACHE[PredictionMarkets cache\nwindow.PredictionMarkets]
+    end
 
----
+    subgraph apis["External APIs"]
+        CB[Coinbase Exchange\nOHLCV 350 candles]
+        BN[Binance · Kraken\nfallback feeds]
+        KAL[Kalshi\nUP/DOWN binary contracts]
+        GK[CoinGecko\nBNB · HYPE prices]
+        BY[Bybit · OKX\nBitfinex · KuCoin · MEXC]
+    end
 
-## Process Map
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  Electron Main Process  (electron/main.js)               │
-│                                                          │
-│  ┌─────────────────┐   ┌───────────────────────────┐    │
-│  │  Rust Proxy exe │   │  Kalshi Worker  (Node.js)  │    │
-│  │  port 3010      │   │  port 3050                │    │
-│  └────────┬────────┘   └────────────┬──────────────┘    │
-│           │  IPC                    │  HTTP             │
-│  ┌────────▼────────────────────────▼──────────────┐     │
-│  │            Renderer (Chromium)                  │     │
-│  │  public/index.html  →  src/core/app.js          │     │
-│  │  prediction-markets.js · predictions.js         │     │
-│  │  floating-orchestrator.js · ui modules          │     │
-│  └─────────────────────────────────────────────────┘     │
-└──────────────────────────────────────────────────────────┘
-```
-
----
-
-## Boot Sequence
-
-1. `electron/main.js` spawns **we-crypto-proxy.exe** (port 3010 cascade)
-2. Main process spawns **kalshi-worker.js** (port 3050) and waits for `/health`
-3. BrowserWindow loads `public/index.html`
-4. Scripts execute in order:  
-   calibration → infra → feed → orbital → Kalshi → `src/core/app.js`
-5. `wecrypto-startup-loader.js` restores adaptive weights + contract cache in `<100 ms`
-6. Live polling loops begin (30 s prediction cycle, 15 s momentum, 5 s balance)
-
----
-
-## Prediction Pipeline
-
-```
-Exchange Candles (Coinbase OHLCV)
-         │
-         ▼
-   predictions.js
-   ├─ RSI / MACD / CCI / Fisher / ADX / ATR
-   ├─ Order-book imbalance
-   ├─ Kalshi probability fusion
-   └─ Multi-horizon scoring (5m · 15m · 1h)
-         │
-         ▼
-   prediction-markets.js  (polls every 30 s)
-   ├─ Kalshi 15m markets
-   ├─ Kalshi 5m markets
-   └─ Polymarket fusion
-         │
-         ▼
-   floating-orchestrator.js
-   └─ EV-based trade intents → window.KalshiOrchestrator
+    MAIN --> PRE --> renderer
+    renderer --> PROXY --> THROTTLE
+    THROTTLE -->|direct| CB
+    THROTTLE -->|direct| BN
+    THROTTLE -->|direct| KAL
+    THROTTLE -->|proxied| GK
+    THROTTLE -->|proxied| BY
+    UI --> ORCH
+    ORCH --> SHELL
+    UI --> prediction
+    prediction --> LOAD
+    LOAD --> BUILD
+    BUILD --> COMPUTE
+    COMPUTE --> BACKTEST
+    UI --> markets
+    markets --> K15
+    markets --> K5
+    markets --> CACHE
 ```
 
 ---
 
-## Three-Layer Adaptive Learning
+## File Reference
 
-| Layer | Frequency | What it adjusts |
-|---|---|---|
-| Real-Time | 30 s | Gate thresholds ±4–8% |
-| Snapshot | 1 h | Signal weights ±8% |
-| Walk-Forward | Daily | 14-day baseline optimisation |
-
-Weight deltas are persisted to `localStorage` under the `beta1_*` namespace and restored by `adaptive-weight-restorer.js` on next startup.
+| File | Role | Key exports |
+|------|------|-------------|
+| `main.js` | Electron main process, BrowserWindow, IPC | — |
+| `preload.js` | contextBridge — exposes safe APIs to renderer | `window.electronAPI` |
+| `app.js` | Main renderer — all views and UI logic | `renderPredictions()`, `buildKalshiDebugPanel()` |
+| `predictions.js` | Prediction engine — fetch, compute, score | `window.PredictionEngine` |
+| `prediction-markets.js` | Kalshi + Polymarket data cache | `window.PredictionMarkets` |
+| `floating-orchestrator.js` | EV engine, trade intent, 3-tier logic | `window.FloatingOrchestrator` |
+| `shell-router.js` | Cross-coin signal propagation | `window.ShellRouter` |
+| `candle-ws.js` | WebSocket candle stream | `window.CandleWS` |
+| `market-resolver.js` | Market metadata + contract resolution | `window.MarketResolver` |
+| `proxy-fetch.js` | API routing (direct vs proxied) | `window.suppFetch` |
+| `throttled-fetch.js` | Rate limiter, timeout, concurrency | `window.throttledFetch` |
+| `cfm-engine.js` | CFM model core computations | `window.CFMEngine` |
+| `orderbook.js` | Order book snapshot + imbalance | `window.OrderBook` |
+| `cex-flow.js` | CEX trade flow aggregation | `window.CEXFlow` |
+| `data-logger.js` | Signal + trade logging | `window.DataLogger` |
+| `backtest-runner.js` | Full backtest orchestration | `window.BacktestRunner` |
+| `social-sentiment.js` | X/Twitter sentiment feed | `window.SocialSentiment` |
+| `chain-router.js` | On-chain data routing | `window.ChainRouter` |
+| `wallet-cache.js` | Portfolio holdings cache | `window.WalletCache` |
 
 ---
 
-## Key Files
+## Data Flow — Prediction Cycle
 
-| File | Purpose |
-|---|---|
-| `electron/main.js` | Process lifecycle, IPC handlers |
-| `electron/kalshi-worker.js` | Standalone Kalshi HTTP server (port 3050) |
-| `public/index.html` | Script load order (dependency graph) |
-| `src/core/app.js` | Renderer orchestration, view routing |
-| `src/core/predictions.js` | Signal computation + backtest engine |
-| `src/kalshi/prediction-markets.js` | Kalshi/Polymarket polling + fusion |
-| `src/ui/floating-orchestrator.js` | EV-based trade intents |
-| `src/kalshi/wecrypto-startup-loader.js` | Boot-time calibration restore |
+```
+1. candle-ws.js / loadCoinData()
+   └─ fetch OHLCV from Coinbase (350 candles, 1-min)
+   └─ fallback: Binance → Kraken
+   └─ store in candleCache[sym]
+
+2. prediction-markets.js / fetchKalshiSeriesForSym()
+   └─ fetch open 15M markets for KXBTC15M etc
+   └─ parse floor_strike, strike_type, yes_pct, close_time
+   └─ store in PredictionMarkets.getCoin(sym).kalshi15m
+
+3. predictions.js / buildSignalModel()
+   └─ layer 1: benchmark (BTC dominance, macro)
+   └─ layer 2: trend (EMA cross, price structure)
+   └─ layer 3: momentum (RSI, ROC)
+   └─ layer 4: microstructure (OBV, CVD, trade flow)
+   └─ layer 5: timing (session, vol regime)
+   └─ layer 6: derivatives (funding rate, OI)
+   └─ layer 7: history (backtest regime fit)
+   └─ shell-router packets injected here
+   └─ orbital router applies per-coin weights
+   └─ → modelScore (-1 to +1)
+
+4. floating-orchestrator.js / translate()
+   └─ modelProbUp = 0.5 + score × 0.40
+   └─ EV = modelProbUp − kalshiYesPrice
+   └─ edgeCents = EV × 100
+   └─ Kelly fraction = EV / (winProb × netPayout)  capped 25%
+   └─ 3-tier logic → Trade Intent
+```
 
 ---
 
-## Further Reading
+## Build Output
 
-- [SIGNALS.md](./SIGNALS.md) — per-indicator deep dive
-- [LEARNING-ENGINE.md](./LEARNING-ENGINE.md) — adaptive tuning algorithm
-- [DEEP_ARCHITECTURE_ANALYSIS.md](./DEEP_ARCHITECTURE_ANALYSIS.md) — layer-by-layer analysis
-- [diagrams.md](./diagrams.md) — Mermaid component diagrams
-- [KALSHI_WORKER_GUIDE.md](./KALSHI_WORKER_GUIDE.md) — Kalshi worker quick-start
+```
+dist/
+  WECRYPTO-PATCH-2.1.1.exe    ← portable single-file exe
+  win-unpacked/               ← unpacked app dir (for debugging)
+    WE--CRYPTO--BETA2.exe
+    resources/
+      app.asar                ← bundled renderer files
+      app.asar.unpacked/
+        we-crypto-proxy.exe   ← local proxy server
+```

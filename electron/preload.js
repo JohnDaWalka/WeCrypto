@@ -31,3 +31,8 @@ contextBridge.exposeInMainWorld('auditAPI', {
     getCoin: (sym)     => ipcRenderer.invoke('validator:getCoin', sym),
   }
 });
+
+contextBridge.exposeInMainWorld('pythLazer', {
+  onTickers:  (cb) => ipcRenderer.on('pyth:tickers', (_e, data) => cb(data)),
+  offTickers: ()   => ipcRenderer.removeAllListeners('pyth:tickers'),
+});

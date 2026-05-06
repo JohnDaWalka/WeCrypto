@@ -1,167 +1,182 @@
-# 🔧 Troubleshooting
+# 🔧 Troubleshooting Guide
 
-Common issues and their fixes for WE-CRYPTO.
-
----
-
-## Startup Issues
-
-### App Fails to Open
-
-| Check | Command / Fix |
-|---|---|
-| Node.js installed | `node --version` → must be ≥18 |
-| Dependencies installed | Run `npm install` |
-| Port 3010 in use | Kill the process using port 3010 |
-| Electron version | `npx electron --version` |
-
-### "KALSHI-API-KEY.txt not found"
-
-The app runs in preview mode without credentials. To enable Kalshi:
-1. Create `KALSHI-API-KEY.txt` in the project root
-2. Format: UUID on line 1, RSA key starting on line 5
-3. Restart the app
-
-### Blank Prediction Cards
-
-- **Wait 30–60 s** — the first polling cycle takes one full interval
-- Check DevTools console for fetch errors
-- Verify the Rust proxy is running: look for `[Proxy] listening on 3010` in startup logs
+Common problems and solutions for WE-CRYPTO.
 
 ---
 
-## Prediction Issues
+## Quick Diagnosis
 
-### "No settled data" / Win Rate Always 0 %
+Open DevTools (`F12`) and run:
 
-The accuracy engine needs settled Kalshi contracts to score predictions.
+```js
+// Check all feeds
+window.checkFeeds?.()
 
-```javascript
-// Check if contract cache is populated
-await window.electron.invoke('storage:readContractCache')
-// Should return an array of settled contracts
+// Check if predictions are running
+window._predictions
 
-// Force a cache refresh
-window.KalshiAccuracyDebug.refresh()
+// Check Kalshi data
+window.PredictionMarkets?.getCoin?.('BTC')
 ```
 
-If the cache is empty, ensure the app has been running for at least one settlement cycle (Kalshi settles 15-minute contracts continuously).
+---
+
+## Common Issues
+
+### "No settled data" / Accuracy scorecard is empty
+
+**Symptoms:** The accuracy scorecard shows 0 contracts or no data after several minutes.
+
+**Causes & Fixes:**
+
+1. **Kalshi API credentials missing or invalid**
+   ```bash
+   # Test credentials
+   node tests/test-api-status.js
+   ```
+   Fix: Update `KALSHI_API_KEY` and `KALSHI_API_SECRET` in `.env`.
+
+2. **Kalshi worker not running**
+   - Check that port 3050 is not in use by another process
+   - Restart the app; the worker starts automatically
+
+3. **No settled contracts in the window**
+   - This can happen on weekends or low-activity periods
+   - Wait 5–10 minutes for more contracts to settle
+
+---
 
 ### Weights Not Updating
 
-```javascript
-// Confirm adaptive engine is running
-window.AdaptiveLearningEngine.status()
+**Symptoms:** Signal weights stay at 1.00 indefinitely; `beta1_weights` in localStorage doesn't change.
 
-// Manually trigger a tuning cycle
-window.AdaptiveLearningEngine.runCycle()
+**Causes & Fixes:**
 
-// Check localStorage
-JSON.parse(localStorage.getItem('beta1_adaptive_weights'))
-```
+1. **Not enough settled contracts** — Tuning requires `MIN_CONTRACTS_REQUIRED` (default 10) settled contracts per signal
+   - Solution: Wait for more contracts to accumulate (usually 30–60 min)
 
-If `beta1_adaptive_weights` is `null`, the engine will use baseline defaults and will write new weights after the first cycle.
+2. **Tuning interval not elapsed** — Tuning runs every 2 minutes minimum
+   - Force a manual tune: `window.AdaptiveLearningEngine?.tune?.()`
 
-### Low Accuracy (< 45 %)
-
-1. Check for signal inversion: `window.KalshiAccuracyDebug.findInversions()`
-2. Review current regime: check ATR % in prediction cards
-3. Allow at least 50 settled contracts before evaluating accuracy
-4. Consider resetting weights: `localStorage.removeItem('beta1_adaptive_weights')` then restart
+3. **localStorage corrupted**
+   ```js
+   localStorage.removeItem('beta1_weights')
+   location.reload()
+   ```
 
 ---
 
-## Kalshi Integration Issues
+### Low Accuracy / Predictions Seem Random
 
-### Balance Shows 0 or Fails
+**Symptoms:** Accuracy stays near 50% even after hours of operation.
 
-```javascript
-await window.Kalshi.getBalance()
-// If error: check KALSHI-API-KEY.txt format
-```
+**Causes & Fixes:**
 
-Key format checklist:
-- Line 1: UUID (no spaces, no newlines)
-- Lines 2–4: empty
-- Line 5+: `-----BEGIN RSA PRIVATE KEY-----` block
+1. **Not enough data yet** — The learning engine needs 2–4 hours to find meaningful signal patterns. This is normal.
 
-### "401 Unauthorized"
+2. **Market regime change** — Volatile or unusual markets reduce signal accuracy. This is expected behaviour.
 
-- Verify API key ID and RSA private key are from the **same** Kalshi key pair
-- Check that the environment matches (`--env production` vs `--env demo`)
+3. **Stale data** — Check feed status:
+   ```js
+   window.checkFeeds?.()
+   ```
 
-### "Connection Refused" to Port 3050
-
-The Kalshi worker is not running:
-```bash
-# Start it manually to see the error
-node electron/kalshi-worker.js
-```
-
-Common causes: credentials file missing, port already in use, Node.js not installed.
-
-### Orders Not Placing
-
-```javascript
-// Test with a minimal order
-await window.Kalshi.placeOrder({
-  market_ticker: 'KXBTC-25MAY1423-T103499',
-  side: 'yes',
-  action: 'buy',
-  quantity: 1,
-  yes_price: 50
-})
-```
-
-Check: sufficient balance, market is open, order price within spread.
+4. **Weight drift** — Weights may have drifted to extremes. Reset:
+   ```js
+   localStorage.removeItem('beta1_weights')
+   location.reload()
+   ```
 
 ---
 
-## Network Issues
+### Network / Fetch Errors
 
-### Proxy Fetch Errors
+**Symptoms:** Console shows `fetch failed`, `timeout`, or `ECONNREFUSED` errors.
 
-The Rust proxy retries with backoff. If errors persist:
-1. Check internet connectivity
-2. Verify Coinbase / Kalshi APIs are not down
-3. Restart the app (proxy restarts automatically)
+**Causes & Fixes:**
 
-### Stale Pyth Prices
+1. **Proxy not running** — The Rust proxy (`we-crypto-proxy.exe`) starts on port 3010 automatically. If it fails:
+   - Check that port 3010 is available
+   - Restart the app
 
-```javascript
-// Check price freshness
-window.PythSettlement.isFresh('BTC', 30_000) // ms
-// → false = price is stale
+2. **Rate limiting** — Coinbase or Binance rate limit exceeded
+   - The throttle layer handles this automatically; errors should resolve in 30–60 seconds
 
-// Force refresh
-await window.PythSettlement.getCurrentPrice('BTC')
+3. **Kalshi API down** — Check [status.kalshi.com](https://status.kalshi.com)
+
+4. **Firewall blocking** — Ensure ports 3010, 3050, and 3443 are not blocked
+
+---
+
+### App Won't Start
+
+**Symptoms:** Electron window doesn't open, or crashes immediately.
+
+**Causes & Fixes:**
+
+1. **Another instance running** — Only one instance can run at a time. Close all WECRYPTO processes.
+
+2. **Port conflict** — Check ports 3010 and 3050 are free:
+   ```bash
+   netstat -ano | findstr "3010\|3050"
+   ```
+
+3. **Missing dependencies** — Run `npm install` to restore node_modules.
+
+4. **Corrupted build** — Re-run `npm run build:portable` to get a fresh build.
+
+---
+
+### Performance Issues
+
+**Symptoms:** UI is slow, high CPU usage, frame rate drops.
+
+**Causes & Fixes:**
+
+1. **Too many DevTools panels open** — Close unused DevTools tabs.
+
+2. **Memory leak** — Restart the app after extended use (8+ hours).
+
+3. **Large audit log** — Clear the log:
+   ```js
+   localStorage.removeItem('beta1_auditLog')
+   ```
+
+See [PERFORMANCE.md](./PERFORMANCE.md) for benchmarks and optimisation tips.
+
+---
+
+### Kalshi Contracts Showing Wrong Direction
+
+**Symptoms:** Contract `YES` prices appear inverted vs. expected direction.
+
+**Cause:** WE-CRYPTO uses `strike_type` / `floor_strike` semantics (`above` vs `below`) to determine the YES direction. Do not rely on contract subtitle text for direction logic.
+
+**Fix:** This is a known edge case in contract parsing. If you observe consistent misdirection on a specific contract series, check `market-resolver.js` for the `resolve()` mapping for that ticker.
+
+---
+
+## Resetting to Clean State
+
+To fully reset all adaptive learning and start fresh:
+
+```js
+// In DevTools console
+Object.keys(localStorage)
+  .filter(k => k.startsWith('beta1_'))
+  .forEach(k => localStorage.removeItem(k))
+location.reload()
 ```
 
 ---
 
-## Performance Issues
+## Getting Help
 
-### High Memory Usage
-
-- The app caches 100 error entries and market data; memory stabilises at ~100–200 MB
-- If above 500 MB, restart the app
-
-### Slow Dashboard Updates
-
-- Frame rate should be ~59 fps; if lower, open DevTools → Performance → record
-- The known fix (v2.13.3+) removed the hourly-ranges panel that caused jank
-
-### Build Takes > 10 Minutes
-
-- Close all Electron instances before building
-- Delete `dist/` folder and retry
-- Check disk space
+- **API diagnostics** → [API.md](./API.md)
+- **Performance issues** → [PERFORMANCE.md](./PERFORMANCE.md)
+- **Architecture questions** → [ARCHITECTURE.md](./ARCHITECTURE.md)
+- **GitHub Issues** — Open a bug report in the repository
 
 ---
 
-## Further Reading
-
-- [GETTING-STARTED.md](./GETTING-STARTED.md) — setup guide
-- [CONFIGURATION.md](./CONFIGURATION.md) — all tuneable parameters
-- [API.md](./API.md) — diagnostic console commands
-- [CRITICAL_CHECKPOINTS.md](./CRITICAL_CHECKPOINTS.md) — 8-level verification checklist
+**Last Updated:** 2026-05-01 | **Version:** 2.11.0+

@@ -62,6 +62,7 @@
   "dependencies": {
     "@google/genai": "^1.52.0",
     "@google/generative-ai": "^0.24.1",
+    "@pythnetwork/pyth-lazer-sdk": "^6.2.2",
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
     "ws": "^8.18.3"

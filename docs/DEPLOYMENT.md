@@ -1,123 +1,153 @@
 # 🚢 Deployment Guide
 
-This guide covers building and deploying WE-CRYPTO for production use.
+How to build and deploy WE-CRYPTO for production use.
 
 ---
 
-## Build Targets
+## Overview
 
-| Command | Output | Use Case |
-|---|---|---|
-| `npm run build:portable` | `dist/WE-CRYPTO-*.exe` (portable) | Single-file, no install required |
-| `npm run build:installer` | `dist/WE-CRYPTO-*-Setup.exe` | NSIS installer with shortcuts |
-| `npm run build` | Both portable + installer | Full release build |
+WE-CRYPTO ships as a self-contained Windows portable executable. No installation required on the target machine — just copy and run.
 
-> **Important:** Close any running instance of WE-CRYPTO before building.  
-> The previous `.exe` is **never overwritten** — each build creates a versioned artifact.
+---
+
+## Build Requirements
+
+| Tool | Version |
+|------|---------|
+| Node.js | 18+ (20 LTS recommended) |
+| npm / pnpm | 8+ |
+| electron-builder | Bundled via devDependencies |
+| Windows | 10/11 (for building .exe targets) |
+
+---
+
+## Build Commands
+
+```bash
+# Install dependencies first
+npm install
+
+# Portable single-file executable (recommended)
+npm run build:portable
+
+# Windows installer (NSIS)
+npm run build:installer
+
+# Both targets
+npm run build
+```
+
+### Output Location
+
+```
+dist/
+  WECRYPTO-v2.x.x-portable.exe    ← portable app (no install needed)
+  WECRYPTO-Setup-v2.x.x.exe       ← installer (optional)
+  win-unpacked/                    ← unpacked app (for debugging)
+    resources/
+      app.asar
+      app.asar.unpacked/
+        we-crypto-proxy.exe        ← local proxy server (bundled)
+```
+
+> ⚠️ **Important:** Close any running WECRYPTO process before building, or output files in `dist/` may be locked.
+
+> ⚠️ **Do not overwrite previous builds.** Preserve build history in `dist/` for rollback capability. Rename or archive old executables rather than deleting them.
 
 ---
 
 ## Pre-Deployment Checklist
 
-- [ ] `npm install` completed with no errors
-- [ ] `KALSHI-API-KEY.txt` is present and credentials are valid
-- [ ] `npm start` runs without console errors
-- [ ] Kalshi balance is visible in the header badge
-- [ ] Prediction cards populate within 30 s
-- [ ] Accuracy scorecard shows data for at least one coin
-- [ ] `window.Kalshi.getBalance()` returns a success response in DevTools
-- [ ] Momentum exit integration initialises: `window.getMomentumDiagnostics()`
-
----
-
-## Build Process
-
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Build portable executable
-npm run build:portable
-
-# 3. Verify output
-ls dist/
-# → WE-CRYPTO-Kalshi-15m-v*.exe
-```
-
-Build takes approximately 2–3 minutes on a typical workstation.
+- [ ] `.env` configured with valid API keys
+- [ ] All running WECRYPTO instances closed
+- [ ] `npm install` completed successfully
+- [ ] No TypeScript/build errors
+- [ ] `we-crypto-proxy.exe` present in build output
+- [ ] Kalshi credentials valid (test with `node tests/test-api-status.js`)
+- [ ] Port 3010 available on target machine
 
 ---
 
 ## Deployment Steps
 
-### Windows (Portable)
+### 1. Build the Executable
 
-1. Copy `dist/WE-CRYPTO-Kalshi-15m-v*.exe` to the target machine
-2. Place `KALSHI-API-KEY.txt` in the **same folder** as the `.exe`
-3. Double-click the `.exe` to launch
-4. No installation or Node.js required on the target machine
-
-### Windows (Installer)
-
-1. Run `dist/WE-CRYPTO-*-Setup.exe` on the target machine
-2. Follow the NSIS installer prompts
-3. Place `KALSHI-API-KEY.txt` in the install directory
-4. Launch via Start Menu shortcut `WE--CRYPTO--BETA3`
-
----
-
-## Configuration Before Go-Live
-
-1. Set Kalshi environment (demo vs production) in `KALSHI-API-KEY.txt` header
-2. Review signal thresholds in [CONFIGURATION.md](./CONFIGURATION.md)
-3. Run the 8-level checkpoint framework: [CRITICAL_CHECKPOINTS.md](./CRITICAL_CHECKPOINTS.md)
-
----
-
-## Monitoring in Production
-
-```javascript
-// Run in DevTools console to monitor health every 60 s
-setInterval(async () => {
-  const balance = await window.Kalshi.getBalance()
-  const preds   = Object.keys(window._predictions).length
-  console.log(`[Health] balance=${balance.data?.balance} predictions=${preds}`)
-}, 60_000)
+```bash
+npm run build:portable
 ```
 
-Key metrics to watch:
-- **Kalshi balance** — should not change unexpectedly
-- **Win rate** in the Accuracy Scorecard — target ≥55%
-- **Active positions** via `window.getMomentumDiagnostics()`
-- **Adaptive weights** drift via `window.AdaptiveLearningEngine.status()`
+### 2. Verify the Build
+
+```bash
+# Check build output
+ls dist/
+# Should show: WECRYPTO-v2.x.x-portable.exe
+
+# Run smoke test
+node tests/test-api-status.js
+```
+
+### 3. Deploy to Target
+
+Copy `dist/WECRYPTO-v2.x.x-portable.exe` to the target machine. No installer needed.
+
+### 4. Configure on Target
+
+Ensure `we-crypto-proxy.exe` is accessible (it is bundled inside the `.exe`). On first launch, the proxy will start automatically on port 3010.
+
+---
+
+## Port Usage
+
+| Port | Service | Description |
+|------|---------|-------------|
+| 3010 | Rust Proxy | Local API proxy (cascade: 3010 → 3011 → ...) |
+| 3050 | Kalshi Worker | Node.js Kalshi bridge (HTTP) |
+| 3443 | Web Mirror | Optional web service |
+
+Ensure these ports are available and not blocked by firewall rules.
+
+---
+
+## Monitoring After Deployment
+
+```js
+// In DevTools console — check all systems are live
+window.checkFeeds?.()
+
+// Verify Kalshi data is flowing
+window.PredictionMarkets?.getCoin?.('BTC')
+
+// Confirm predictions are updating
+window._predictions?.BTC
+```
 
 ---
 
 ## Rolling Back
 
-Each build produces a uniquely versioned `.exe`. To roll back:
+To roll back to a previous version:
 
-1. Stop the current instance
-2. Launch the previous versioned `.exe` from the same `dist/` folder
-3. Calibration weights are stored in `localStorage` (tied to the machine, not the build)
+1. Close the current WECRYPTO process
+2. Launch the previous `WECRYPTO-v2.x.x-portable.exe` from `dist/`
+3. Stored weights and scorecard in `localStorage` are version-compatible
 
----
+To fully reset learning state:
 
-## Phase-Based Rollout (Recommended)
-
-| Phase | Contracts/trade | Monitoring |
-|---|---|---|
-| **Phase 1 — Micro** | 1–5 | Monitor every trade |
-| **Phase 2 — Normal** | 20–50 | Daily review |
-| **Phase 3 — Full** | Up to limit | Weekly review |
-
-Stay in Phase 1 for at least 50 trades before advancing.
+```js
+// In DevTools console
+Object.keys(localStorage)
+  .filter(k => k.startsWith('beta1_'))
+  .forEach(k => localStorage.removeItem(k))
+location.reload()
+```
 
 ---
 
-## Further Reading
+## Environment Variables
 
-- [CRITICAL_CHECKPOINTS.md](./CRITICAL_CHECKPOINTS.md) — 8-level pre-launch test suite
-- [CONFIGURATION.md](./CONFIGURATION.md) — all tuning parameters
-- [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — common deployment issues
-- [PERFORMANCE.md](./PERFORMANCE.md) — expected accuracy benchmarks
+See [CONFIGURATION.md](./CONFIGURATION.md) for all `.env` variables.
+
+---
+
+**Last Updated:** 2026-05-01 | **Version:** 2.11.0+

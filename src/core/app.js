@@ -48,6 +48,7 @@
   let chartSnapshot = null;
   let predictionRefreshHandle = null;  // { cancel() } — quarter-aligned scorer + prefetch
   let predictionRunInFlight = null;
+  let predictionRunTimeoutId = null;
   let _lastPredictionRunTs = 0;
   let _lastPredRenderTs = 0;
   let orbitalAnimationFrame = null;   // rAF handle for Market Universe orbital canvas
@@ -63,6 +64,47 @@
   const KALSHI_TRAIL_STORE  = 'beta1_kalshi_2m_trail';
   const TRADE_BELL_STORE    = 'beta1_trade_setup_bell_v2';
   const LEGACY_TRADE_BELL_STORE = 'beta1_trade_setup_bell';
+  const PREDICTION_RUN_TIMEOUT_MS = 25_000;
+
+  function startPredictionRun() {
+    if (predictionRunInFlight) return predictionRunInFlight;
+    const engine = window.PredictionEngine;
+    if (!engine?.runAll) return Promise.reject(new Error('PredictionEngine.runAll unavailable'));
+
+    const rawRun = Promise.resolve().then(() => engine.runAll());
+    let guardedRun;
+    guardedRun = new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        if (predictionRunInFlight !== guardedRun) return;
+        console.warn(`[Predictions] runAll timed out after ${PREDICTION_RUN_TIMEOUT_MS}ms; clearing stuck in-flight state.`);
+        predictionRunInFlight = null;
+        if (predictionRunTimeoutId === timeoutId) predictionRunTimeoutId = null;
+        engine.forceReset?.();
+        reject(new Error(`Prediction run timed out after ${PREDICTION_RUN_TIMEOUT_MS}ms`));
+      }, PREDICTION_RUN_TIMEOUT_MS);
+      predictionRunTimeoutId = timeoutId;
+
+      rawRun.then(resolve, reject).finally(() => {
+        if (predictionRunInFlight === guardedRun) predictionRunInFlight = null;
+        if (predictionRunTimeoutId === timeoutId) {
+          clearTimeout(timeoutId);
+          predictionRunTimeoutId = null;
+        }
+      });
+    });
+
+    predictionRunInFlight = guardedRun;
+    return guardedRun;
+  }
+
+  function resetPredictionRunState() {
+    if (predictionRunTimeoutId) {
+      clearTimeout(predictionRunTimeoutId);
+      predictionRunTimeoutId = null;
+    }
+    predictionRunInFlight = null;
+    window.PredictionEngine?.forceReset?.();
+  }
 
   // ── Prediction accuracy tracker ──────────────────────────────────────────
   // window._lastPrediction[sym] = { direction: 'UP'|'DOWN'|'FLAT', price, ts, signal }
@@ -709,6 +751,12 @@
   const BIN_BASE      = 'https://api.binance.us/api/v3';   // .com → 451 from US
   const MEXC_BASE     = 'https://api.mexc.com/api/v3';
   const PYTH_HERMES   = 'https://hermes.pyth.network';
+  const PYTH_LAZER_PROXIES = [
+    'pyth-lazer-proxy-1.dourolabs.app',
+    'pyth-lazer-proxy-2.dourolabs.app',
+    'pyth-lazer-proxy-3.dourolabs.app',
+  ];
+  const PYTH_HISTORY_BASE  = 'https://pyth.dourolabs.app';
   const HL_BASE       = 'https://api.hyperliquid.xyz';
   const CB_BASE       = 'https://api.exchange.coinbase.com';
 
@@ -801,6 +849,22 @@
   const PYTH_ID_TO_INSTRUMENT = Object.fromEntries(
     Object.entries(PYTH_FEEDS).map(([instr, id]) => [id, instr])
   );
+  // Pyth Lazer numeric feed IDs → instrument (IDs confirmed via proxy scan)
+  const LAZER_ID_INSTR = { 1:'BTCUSD', 2:'ETHUSD', 6:'SOLUSD', 10:'DOGEUSD', 14:'XRPUSD', 15:'BNBUSD' };
+  // History API symbol strings for OHLC candle fetching
+  const INSTR_TO_PYTH_SYM = {
+    'BTCUSD':'Crypto.BTC/USD',    'ETHUSD':'Crypto.ETH/USD',    'SOLUSD':'Crypto.SOL/USD',
+    'XRPUSD':'Crypto.XRP/USD',    'DOGEUSD':'Crypto.DOGE/USD',  'BNBUSD':'Crypto.BNB/USD',
+    'AVAXUSD':'Crypto.AVAX/USD',  'LINKUSD':'Crypto.LINK/USD',  'ADAUSD':'Crypto.ADA/USD',
+    'LTCUSD':'Crypto.LTC/USD',    'DOTUSD':'Crypto.DOT/USD',    'UNIUSD':'Crypto.UNI/USD',
+    'NEARUSD':'Crypto.NEAR/USD',  'ARBUSD':'Crypto.ARB/USD',    'OPUSD':'Crypto.OP/USD',
+    'SUIUSD':'Crypto.SUI/USD',    'APTUSD':'Crypto.APT/USD',    'ATOMUSD':'Crypto.ATOM/USD',
+    'XLMUSD':'Crypto.XLM/USD',    'AAVEUSD':'Crypto.AAVE/USD',  'PYTHUSD':'Crypto.PYTH/USD',
+    'SEIUSD':'Crypto.SEI/USD',    'BONKUSD':'Crypto.BONK/USD',  'WIFUSD':'Crypto.WIF/USD',
+    'JUPUSD':'Crypto.JUP/USD',    'DYDXUSD':'Crypto.DYDX/USD',  'FETUSD':'Crypto.FET/USD',
+    'ICPUSD':'Crypto.ICP/USD',    'HBARUSD':'Crypto.HBAR/USD',  'POLUSD':'Crypto.POL/USD',
+    'RENDERUSD':'Crypto.RENDER/USD','TAOUSD':'Crypto.TAO/USD',  'FLOKIUSD':'Crypto.FLOKI/USD',
+  };
 
   // Hyperliquid sym → instrument. kXXX = 1000x contracts (price * 0.001 = real price)
   const HL_SYM_MAP = {
@@ -1179,6 +1243,39 @@
     return result;
   }
 
+  // ---- Pyth Lazer proxy — no-auth REST, BTC/ETH/SOL/XRP/BNB, sub-5ms ----
+  async function fetchPythLazerProxyTickers() {
+    const qs = 'price_feed_ids=1&price_feed_ids=2&price_feed_ids=6&price_feed_ids=10&price_feed_ids=14&price_feed_ids=15';
+    for (const host of PYTH_LAZER_PROXIES) {
+      try {
+        const res = await fetchWithTimeout(`https://${host}/v1/latest_price?${qs}`, 4000);
+        if (!res.ok) continue;
+        const j = await res.json();
+        const result = [];
+        for (const f of j.priceFeeds || []) {
+          const instr = LAZER_ID_INSTR[f.priceFeedId];
+          if (!instr) continue;
+          const exp   = f.exponent ?? -8;
+          const scale = Math.pow(10, exp);
+          const px    = Number(f.price) * scale;
+          if (!px || px <= 0 || isNaN(px)) continue;
+          result.push({
+            instrument_name: instr, last: px,
+            high: px, low: px, change: 0,
+            best_bid:      f.bestBidPrice != null ? Number(f.bestBidPrice) * scale : null,
+            best_ask:      f.bestAskPrice != null ? Number(f.bestAskPrice) * scale : null,
+            best_bid_size: '', best_ask_size: '',
+            volume: 0, volume_value: 0,
+            timestamp: Date.now(),
+            source: 'pyth-lazer',
+          });
+        }
+        if (result.length >= 4) return result;
+      } catch (_) {}
+    }
+    throw new Error('Pyth Lazer proxies unavailable');
+  }
+
   // ---- Hyperliquid allMids — decentralized perps, covers HYPE + wide alt universe ----
   async function fetchHyperliquidMids() {
     const res = await fetchWithTimeout(
@@ -1411,7 +1508,7 @@
     try {
       const apiInstr = instrument.replace(/([A-Z]+)(USD[T]?)$/, '$1_$2');
       const cdcLimit = timeframe === '1m' ? 180 : timeframe === '3m' ? 180 : 300;
-      const [cdc, binance, mexc, gecko] = await Promise.all([
+      const [cdc, binance, mexc, gecko, pythHist] = await Promise.all([
         fetch(`${CDC_BASE}/get-candlestick?instrument_name=${apiInstr}&timeframe=${timeframe}&count=${cdcLimit}`)
           .then(async res => {
             if (!res.ok) throw new Error(`Candles HTTP ${res.status}`);
@@ -1423,9 +1520,10 @@
         fetchBinanceCandlesticks(instrument, timeframe).catch(() => []),
         fetchMEXCCandlesticks(instrument, timeframe).catch(() => []),
         geckoId ? fetchGeckoCandlesticks(instrument, timeframe).catch(() => []) : Promise.resolve([]),
+        fetchPythHistoryCandles(instrument, timeframe).catch(() => []),
       ]);
-      // Exchange sources lead; gecko fills H/L/V gaps but doesn't override O/C
-      const pooled = poolCandles(cdc, binance, mexc, gecko);
+      // Exchange sources lead; gecko fills H/L/V gaps; Pyth History provides official OHLC
+      const pooled = poolCandles(cdc, binance, mexc, gecko, pythHist);
       if (pooled.length) return pooled;
       throw new Error(`No pooled candles for ${instrument}`);
     } catch (err) {
@@ -1435,6 +1533,27 @@
       }
       throw err;
     }
+  }
+
+  // ---- Pyth History API OHLC — official candles, real_time channel ----
+  async function fetchPythHistoryCandles(instrument, timeframe) {
+    const sym  = INSTR_TO_PYTH_SYM[instrument];
+    const TF_RES = { '1m':'1','3m':'5','5m':'5','15m':'15','30m':'30',
+                     '1h':'60','2h':'120','4h':'240','6h':'360','12h':'720','1d':'D','1w':'W' };
+    const res  = TF_RES[timeframe];
+    if (!sym || !res) throw new Error(`No Pyth History mapping for ${instrument}/${timeframe}`);
+    const SEC  = { '1':60,'5':300,'15':900,'30':1800,'60':3600,'120':7200,
+                   '240':14400,'360':21600,'720':43200,'D':86400,'W':604800 };
+    const BARS = { '1':300,'5':300,'15':200,'30':200,'60':168,'120':100,
+                   '240':90,'360':72,'720':60,'D':30,'W':26 };
+    const now  = Math.floor(Date.now() / 1000);
+    const from = now - (SEC[res] || 3600) * (BARS[res] || 100);
+    const url  = `${PYTH_HISTORY_BASE}/v1/real_time/history?symbol=${encodeURIComponent(sym)}&from=${from}&to=${now}&resolution=${res}`;
+    const r    = await fetchWithTimeout(url, 8000);
+    if (!r.ok) throw new Error(`Pyth History HTTP ${r.status}`);
+    const d    = await r.json();
+    if (d.s !== 'ok' || !d.c?.length) throw new Error(`Pyth History no data (s=${d.s})`);
+    return d.t.map((ts, i) => [ts * 1000, +d.o[i], +d.h[i], +d.l[i], +d.c[i], +(d.v?.[i] ?? 0)]);
   }
 
   // ================================================================
@@ -1593,6 +1712,36 @@
     scheduleNewContractRetries();
   }
 
+  // ---- Pyth Lazer live ticker stream — IPC-pushed prices from main process ----
+  function startPythLazerStream() {
+    if (!window.pythLazer?.onTickers) return;
+    window.pythLazer.onTickers((prices) => {
+      if (!prices || typeof prices !== 'object') return;
+      let updated = false;
+      for (const [instr, data] of Object.entries(prices)) {
+        if (!tickers[instr]) continue;    // only overlay known instruments
+        tickers[instr] = {
+          ...tickers[instr],
+          last:      data.last,
+          best_bid:  data.best_bid  ?? tickers[instr].best_bid,
+          best_ask:  data.best_ask  ?? tickers[instr].best_ask,
+          timestamp: data.timestamp,
+          source:    'pyth-lazer',
+        };
+        updated = true;
+      }
+      if (!updated) return;
+      window._appTickers = tickers;
+      if (!startPythLazerStream._debounce) {
+        startPythLazerStream._debounce = setTimeout(() => {
+          startPythLazerStream._debounce = null;
+          if (['cfm','predictions','universe'].includes(currentView)) refreshActiveView();
+        }, 500);
+      }
+    });
+    console.info('[PythLazer] ✓ Live ticker stream active');
+  }
+
   async function fetchAll(manual = false, settlement = false) {
     setFeedStatus('loading');
     if (refreshBtn) refreshBtn.classList.add('spinning');
@@ -1611,6 +1760,7 @@
           const cdcPromise = fetchTickers().catch(() => null);
           const winner = await Promise.any([
             cdcPromise.then(d => { if (!d?.length) throw new Error('cdc empty'); return { source: 'cdc', data: d }; }),
+            fetchPythLazerProxyTickers().then(d => ({ source: 'pyth-lazer', data: d })),
             fetchPythTickers().then(d => ({ source: 'pyth', data: d })),
             fetchHyperliquidMids().then(d => ({ source: 'hyperliquid', data: d })),
             fetchBinanceTickers().then(d => ({ source: 'binance', data: d })),
@@ -1653,6 +1803,7 @@
           console.warn('[WE] CDC slow — racing Pyth/HL/Binance/Kraken/Coinbase');
           try {
             const winner = await Promise.any([
+              fetchPythLazerProxyTickers().then(d => ({ source: 'pyth-lazer', data: d })),
               fetchPythTickers().then(d => ({ source: 'pyth', data: d })),
               fetchHyperliquidMids().then(d => ({ source: 'hyperliquid', data: d })),
               fetchBinanceTickers().then(d => ({ source: 'binance', data: d })),
@@ -1676,7 +1827,7 @@
       }
 
       // Pyth/HL give spot price only (no 24h change%/high/low) — overlay async
-      if (dataSource === 'pyth' || dataSource === 'hyperliquid') {
+      if (dataSource === 'pyth' || dataSource === 'pyth-lazer' || dataSource === 'hyperliquid') {
         overlayBinance24hStats().catch(() => {});
       }
 
@@ -1970,8 +2121,8 @@
         // Bug fix: guard checked before await — must re-check after too
         if (!['predictions', 'cfm', 'universe'].includes(currentView) || document.hidden || predictionRunInFlight) return;
         try {
-          predictionRunInFlight = PredictionEngine.runAll(); // Bug fix: was dead || fallback
-          await predictionRunInFlight;
+          const predictionRun = startPredictionRun();
+          await predictionRun;
           _lastPredictionRunTs = Date.now();
           predsLoaded = true;
           snapshotPredictions();
@@ -1979,9 +2130,6 @@
           if (currentView === 'universe') renderUniverse();
           else if (['predictions', 'cfm'].includes(currentView)) renderPredictions();
         } catch {}
-        finally {
-          predictionRunInFlight = null;
-        }
       });
 
       predictionRefreshHandle = {
@@ -2022,11 +2170,11 @@
   // ── PATCH1.11: 15M Prediction Stability Lock ──────────────────────────────
   // One candle cannot flip a 15-minute Kalshi contract prediction.
   // Once a direction is committed for the active 15M bucket, we require
-  // MIN_FLIP_STREAK consecutive opposing snapshots (~75s at 15s refresh)
+  // MIN_FLIP_STREAK consecutive opposing snapshots (~45s at 15s refresh)
   // before accepting a direction change. A single wick candle is ignored.
   if (!window._predLock) window._predLock = {};
   const _BUCKET_MS    = 15 * 60 * 1000;
-  const MIN_FLIP_STREAK = 5; // 5 × 15s refresh = 75s of sustained opposing signal required
+  const MIN_FLIP_STREAK = 3; // 3 × 15s refresh = 45s of sustained opposing signal required
 
   // Call after every PredictionEngine.runAll() to capture the current signal per coin
   function snapshotPredictions() {
@@ -2060,7 +2208,7 @@
       const signalDir = p.signal === 'strong_bull' || p.signal === 'bullish' ? 'UP'
                       : p.signal === 'strong_bear' || p.signal === 'bearish' ? 'DOWN'
                       : 'FLAT';
-      const scoreDir = p.score > 0.12 ? 'UP' : p.score < -0.12 ? 'DOWN' : 'FLAT';
+      const scoreDir = p.score > 0.08 ? 'UP' : p.score < -0.08 ? 'DOWN' : 'FLAT';
       if (signalDir !== 'FLAT' && scoreDir !== 'FLAT' && signalDir !== scoreDir) {
         logContractError('signal_score_mismatch', coin.sym, {
           signal: p.signal,
@@ -2193,7 +2341,7 @@
         const _noDir       = _yesDir === 'up' ? 'down' : 'up';
         const _modelScore  = p.score ?? 0;
         const _modelConf   = p.confidence ?? null;
-        const _modelDirRaw = _modelScore > 0.12 ? 'up' : _modelScore < -0.12 ? 'down' : 'wait';
+        const _modelDirRaw = _modelScore > 0.08 ? 'up' : _modelScore < -0.08 ? 'down' : 'wait';
         const _modelDir    = (ka.modelYesPct ?? 50) >= 58 ? _yesDir
                            : (ka.modelYesPct ?? 50) <= 42 ? _noDir
                            : _modelDirRaw;
@@ -4790,7 +4938,7 @@
         .catch(e => { _cfmStarting = false; console.error('[CFM] engine start failed:', e); if (currentView === 'cfm') render(); });
       // Also kick off predictions in background
       if (!predsLoaded) {
-        PredictionEngine.runAll()
+        startPredictionRun()
           .then(() => { predsLoaded = true; _lastPredictionRunTs = Date.now(); snapshotPredictions(); })
           .catch(() => {});
       }
@@ -5495,8 +5643,9 @@
         const cfm  = cfmAll[coin.sym];
         if (!pred || !cfm || cfm.cfmRate === 0) return;
         const ind = pred.indicators || {};
+        const lastPred = window._lastPrediction?.[coin.sym];
         window.DataLogger.logPrediction(coin.sym, {
-          dir:       pred.direction ?? null,
+          dir:       pred.direction ?? lastPred?.direction ?? null,
           score:     pred.score     ?? null,
           conf:      pred.confidence ?? null,
           quality:   pred.modelQuality ?? null,
@@ -6949,10 +7098,10 @@
 
     // Fire-and-forget: start prediction engine in background if not yet loaded
     if (!predsLoaded && !predictionRunInFlight) {
-      predictionRunInFlight = PredictionEngine.runAll();
-      predictionRunInFlight
-        .then(() => { _lastPredictionRunTs = Date.now(); predsLoaded = true; predictionRunInFlight = null; snapshotPredictions(); if (currentView === 'predictions') render(); })
-        .catch(e => { predictionRunInFlight = null; console.error('[Predictions] engine error:', e); if (currentView === 'predictions') render(); });
+      const predictionRun = startPredictionRun();
+      predictionRun
+        .then(() => { _lastPredictionRunTs = Date.now(); predsLoaded = true; snapshotPredictions(); if (currentView === 'predictions') render(); })
+        .catch(e => { console.error('[Predictions] engine error:', e); if (currentView === 'predictions') render(); });
     }
 
     if (_rv !== _myRV) return; // guard: stale render version
@@ -7148,8 +7297,7 @@
     const rerunBtn = document.getElementById('rerunPreds');
     if (rerunBtn) {
       rerunBtn.addEventListener('click', async () => {
-        predictionRunInFlight = null; // cancel any stuck run
-        window.PredictionEngine?.forceReset?.();  // clear hung internal promise
+        resetPredictionRunState(); // cancel any stuck run
         predsLoaded = false;
         rerunBtn.textContent = 'Analyzing...';
         rerunBtn.disabled = true;
@@ -9338,6 +9486,7 @@
       clearTimeout(_bootGuard);
       resetTimer();
       // Stagger heavy background modules so they don't contend with first render
+      startPythLazerStream();   // wire Lazer WS live ticker overlay
       setTimeout(() => { if (window.PredictionMarkets) window.PredictionMarkets.start(); },  500); // +0.5s
       setTimeout(() => { if (window.BlockchainScan)   window.BlockchainScan.start(); },     2000); // +2s
       setTimeout(() => { if (window.CexFlow)          window.CexFlow.start(); },             4000); // +4s
@@ -9380,17 +9529,14 @@
       }
       const runAge = now - (_lastPredictionRunTs || 0);
       if ((predsLoaded && !_lastPredictionRunTs) || (_lastPredictionRunTs && runAge > liveRunCadenceMs)) {
-        predictionRunInFlight = PredictionEngine.runAll();
-        await predictionRunInFlight;
+        const predictionRun = startPredictionRun();
+        await predictionRun;
         _lastPredictionRunTs = Date.now();
-        predictionRunInFlight = null;
         predsLoaded = true;
         snapshotPredictions();
         renderPredictions();
       }
-    } catch (_) {
-      predictionRunInFlight = null;
-    }
+    } catch (_) {}
   }, 10000);
 
   // ── Order Book HUD — initialise after DOM is ready ──────────────
