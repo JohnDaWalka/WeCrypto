@@ -3,10 +3,18 @@ const path = require('path');
 const fs   = require('fs');
 const { spawn } = require('child_process');
 
-// Load .env file for environment variables (Bybit proxy, etc.)
+// Load .env — check next to .exe (packaged) then repo root (dev)
 try {
   const dotenv = require('dotenv');
-  dotenv.config({ path: path.join(__dirname, '..', '.env') });
+  const exeDir = path.dirname(app.getPath ? process.execPath : __filename);
+  const candidates = [
+    path.join(exeDir, '.env'),                  // next to .exe (packaged)
+    path.join(__dirname, '..', '.env'),          // repo root (dev)
+    path.join(process.resourcesPath || '', '..', '.env'), // resources sibling
+  ];
+  for (const p of candidates) {
+    if (require('fs').existsSync(p)) { dotenv.config({ path: p }); break; }
+  }
 } catch (e) {
   // dotenv not installed, skip silently
 }
@@ -24,6 +32,91 @@ try {
   LLMSignalAssistant = require('../src/llm/llm_signal_assistant');
 } catch (e) {
   console.warn('[LLM] Assistant module unavailable:', e.message);
+}
+
+// ── Pyth Lazer real-time WebSocket service ────────────────────────────────────
+let mainWin          = null;
+let pythLazerClient  = null;
+const LAZER_FEED_IDS = [1, 2, 6, 10, 13, 14, 15, 110]; // BTC,ETH,SOL,DOGE,F13,XRP,BNB,F110
+const LAZER_ID_MAP   = { 1:'BTCUSD', 2:'ETHUSD', 6:'SOLUSD', 10:'DOGEUSD', 14:'XRPUSD', 15:'BNBUSD' };
+
+async function startPythLazerService(win) {
+  const token = process.env.PYTH_LAZER_TOKEN;
+  if (!token) {
+    console.warn('[PythLazer] PYTH_LAZER_TOKEN not set — Lazer WS disabled');
+    return;
+  }
+  try {
+    const { PythLazerClient } = require('@pythnetwork/pyth-lazer-sdk');
+    pythLazerClient = await PythLazerClient.create({
+      token,
+      webSocketPoolConfig: {
+        urls: [
+          'wss://pyth-lazer-0.dourolabs.app/v1/stream',
+          'wss://pyth-lazer-1.dourolabs.app/v1/stream',
+          'wss://pyth-lazer-2.dourolabs.app/v1/stream',
+        ],
+      },
+    });
+
+    pythLazerClient.subscribe({
+      type:               'subscribe',
+      subscriptionId:     1,
+      priceFeedIds:       LAZER_FEED_IDS,
+      properties:         ['price','bestBidPrice','bestAskPrice','confidence','exponent',
+                           'publisherCount','feedUpdateTimestamp','marketSession',
+                           'fundingRate','fundingTimestamp','fundingRateInterval'],
+      formats:            ['solana','leUnsigned','leEcdsa','evm'],
+      channel:            'real_time',
+      deliveryFormat:     'json',
+      jsonBinaryEncoding: 'hex',
+      parsed:             true,
+      ignoreInvalidFeeds: true,
+    });
+
+    let lastPush = 0;
+    pythLazerClient.addMessageListener((message) => {
+      if (message.type !== 'json') return;
+      const feeds = message.value?.parsed?.priceFeeds;
+      if (!feeds?.length) return;
+      const now = Date.now();
+      if (now - lastPush < 800) return;    // ~1 push/sec max
+      lastPush = now;
+
+      const prices = {};
+      for (const f of feeds) {
+        const instr = LAZER_ID_MAP[f.priceFeedId];
+        if (!instr) continue;              // skip unmapped feeds (13, 110)
+        const exp   = f.exponent ?? -8;
+        const scale = Math.pow(10, exp);
+        const px    = Number(f.price) * scale;
+        if (!px || px <= 0 || isNaN(px)) continue;
+        prices[instr] = {
+          instrument_name:     instr,
+          last:                px,
+          best_bid:            f.bestBidPrice   != null ? Number(f.bestBidPrice)   * scale : null,
+          best_ask:            f.bestAskPrice   != null ? Number(f.bestAskPrice)   * scale : null,
+          confidence:          f.confidence     != null ? Number(f.confidence)     * scale : null,
+          publisherCount:      f.publisherCount,
+          marketSession:       f.marketSession,
+          feedUpdateTimestamp: f.feedUpdateTimestamp,
+          source:              'pyth-lazer',
+          timestamp:           now,
+        };
+      }
+      if (Object.keys(prices).length && !win.isDestroyed()) {
+        win.webContents.send('pyth:tickers', prices);
+      }
+    });
+
+    pythLazerClient.addAllConnectionsDownListener(() => {
+      console.error('[PythLazer] All WebSocket connections are down — will auto-reconnect');
+    });
+
+    console.log('[PythLazer] ✓ Client started — feeds:', LAZER_FEED_IDS.join(','));
+  } catch (e) {
+    console.error('[PythLazer] Failed to start:', e.message);
+  }
 }
 
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
@@ -652,7 +745,7 @@ ipcMain.on('web:broadcast-update', (event, { type, data }) => {
 });
 
 function createWindow() {
-  const win = new BrowserWindow({
+  const win = mainWin = new BrowserWindow({
     width: 1440,
     height: 960,
     minWidth: 1100,
@@ -699,6 +792,7 @@ app.whenReady().then(async () => {
   console.log('[Main] Web service started on https://localhost:3443');
   
   createWindow();
+  startPythLazerService(mainWin).catch(e => console.error('[PythLazer] init error:', e.message));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -709,7 +803,8 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   stopProxy();
-  stopKalshiWorker();  // Stop worker on app close
+  stopKalshiWorker();
+  if (pythLazerClient) { try { pythLazerClient.shutdown(); } catch (_) {} pythLazerClient = null; }
   if (process.platform !== 'darwin') {
     app.quit();
   }

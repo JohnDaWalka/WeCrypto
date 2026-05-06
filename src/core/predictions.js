@@ -27,7 +27,7 @@
   const MEXC_BASE = 'https://api.mexc.com/api/v3';
   const CB_EXCH_BASE = 'https://api.exchange.coinbase.com';
   const CB_EXCH_SYMS = { BTC: 'BTC-USD', ETH: 'ETH-USD', SOL: 'SOL-USD', XRP: 'XRP-USD', DOGE: 'DOGE-USD', BNB: 'BNB-USD', HYPE: 'HYPE-USD' };
-  const GECKO_ONLY = new Set(['HYPE', 'BNB']);
+  const GECKO_ONLY = new Set(['BNB']);
   const BIN_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
   const MEXC_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
   const BYBIT_BASE = 'https://api.bybit.com/v5';
@@ -195,8 +195,8 @@
       stochrsi: 1.8,   // ★ REDUCED FROM 3.5 (64% at h15 but ~40% at h1/h5 - oscillators less reliable short-term)
       vwma:     1.2,   // ★ REDUCED FROM 2.5 (62% at h15 but less reliable at h1/h5)
       volume:   1.4,   // ★ REDUCED FROM 2.2 (60% at h15 but noisy at h1/h5)
-      // Keep proven mean-reversion core
-      bands:      2.5, williamsR: 2.0, structure: 1.4, fisher: 1.3, keltner: 1.6, cci: 1.2,
+      // Keep proven mean-reversion core — bands/williamsR/keltner boosted 2026-05-05 (Pyth oracle accuracy)
+      bands:      2.8, williamsR: 2.2, structure: 1.4, fisher: 1.3, keltner: 1.8, cci: 1.2,
       cmf: 1.0, rsi: 0.8, macd: 0.6, persistence: 0.8, ema: 0.5, ichimoku: 0.3, adx: 0.3,
       vwap: 0.2, sma: 0.2,
       // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
@@ -205,6 +205,8 @@
       hma:      0.1,   // 37% worst
       mfi:      0.5,
       supertrend: 0.4,
+      // Pyth oracle aggregate prices → F&G strongly correlated with BTC macro moves
+      fearGreed: 1.2,
       // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
       book:     0.26,  // NEW: Order book imbalance
       flow:     0.24,  // NEW: Trade flow signal
@@ -219,47 +221,44 @@
       // Solution: Reduce RSI weight dramatically for short horizons
       rsi:      0.5,   // ★ REDUCED FROM 5.0 (82% at h15 but 37% at h1 - disable for short horizons)
       stochrsi: 1.0,   // ★ REDUCED FROM 3.5 (56% at h15 but ~30% at h1/h5 - oscillators less reliable short-term)
-      williamsR: 1.4,  // ★ REDUCED FROM 3.0 (62% at h1 is not justified for 3.0x - mean reversion less reliable)
-      bands:    2.5,   // Keep (proven mean-reversion core works across horizons)
-      structure: 1.4, keltner: 1.2, cci: 0.9, fisher: 0.8, cmf: 0.6,
+      williamsR: 1.8,  // ★ BOOST 2026-05-05: Pyth oracle prices → more reliable %R levels
+      bands:    2.8,   // ★ BOOST: Pyth oracle prices → cleaner band touches at exact levels
+      structure: 1.4, keltner: 1.4, cci: 0.9, fisher: 0.9, cmf: 0.6,
       volume: 0.9, persistence: 0.8, obv: 0.5, macd: 0.4,
       ema: 0.35, sma: 0.1, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.3,
       // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
       momentum: 0.20,  // ★ RESTORED FROM 0.01 (2026-05-04 HOTFIX2) — regime gates amplify/suppress
       mfi:      0.05,  // 38% worst — was 1.8
       hma:      0.05,  // 45% worst
+      // ETH moderately correlated with F&G (less than BTC)
+      fearGreed: 1.1,
     },
     SOL: {
-      // ── Tuned 2026-04-30 & RETUNED 2026-05-04 for h1/h5 recovery ──────────────
-      // h15 best: bands 61%, williamsR 58%, fisher 58%, keltner 57%, structure 57%
-      // h15 worst: vwap 37%, mfi 21%, stochrsi 27%, rsi 29%, momentum 38%
-      // ──── 2026-05-04 UPDATE: h1/h5 CRITICAL FAILURES (30.5% WR) ─────
-      // ROOT CAUSE: Mean-reversion weights fail at h1/h5 (momentum dominates)
-      // FIX: Disable contrarian gates (hma 4.0→0.1), reduce mean-reversion bands,
-      //      BOOST microstructure (flow/book) for momentum trading at short horizons
-      bands:     2.0,   // ★ REDUCED FROM 6.5 (mean-reversion fails at h1/h5, noise dominates)
-      fisher:    1.5,   // ★ REDUCED FROM 4.5 (extreme price levels hard to identify on h1)
-      williamsR: 4.0,   // Keep (proven oscillator, works across horizons)
-      hma:       0.1,   // ★ REDUCED FROM 4.0 (CRITICAL: 41% accuracy = BROKEN quality gate at h1/h5)
-      structure: 1.2,   // ★ REDUCED FROM 3.5 (support/resistance needs multiple candles to form)
-      cci:       3.5,   // Keep (solid oscillator)
-      keltner:   0.8,   // ★ REDUCED FROM 3.0 (ATR bands too volatile at h1)
-      obv:       0.8,   // Keep (volume direction mild signal)
-      macd:      0.3, ichimoku: 0.2, adx: 0.2,
+      // ── Retuned 2026-05-06 for SOL h15 walk-forward reliability ──────────────
+      // Strong h15 mean-reversion wins; short-horizon momentum is handled by microstructure.
+      bands:     3.5,
+      fisher:    2.8,
+      williamsR: 4.5,
+      hma:       0.0,   // 41% WR gate is broken on h1/h5
+      structure: 2.5,
+      cci:       3.5,
+      keltner:   2.8,
+      obv:       1.2,   // volume-direction breakout confirmation
+      macd:      0.8, ichimoku: 0.3, adx: 1.5,
       vwma:      0.1, volume: 0.2, sma: 0.0,
-      // Kill confirmed worst performers (all verified across 14-day run)
-      vwap:      0.05,  // 37% worst
-      rsi:       0.05,  // 29% worst — mean-reversion makes RSI signals backwards
-      persistence: 0.05,  // consistently worst
-      ema:       0.05,  // 36% worst
-      cmf:       0.05,  // consistently bad
-      supertrend: 0.05,  // momentum hypothesis DISPROVEN for SOL h15
-      momentum:  0.50,  // ★ RESTORED FROM 0.05 (2026-05-04 HOTFIX) — regime detection needs this
-      mfi:       0.05,  // 21% worst
-      stochrsi:  0.05,  // 27% worst
-      // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
-      book:      0.30,  // NEW: Order book imbalance (momentum signal at h1/h5)
-      flow:      0.28,  // NEW: Trade flow ratio (key momentum driver for SOL)
+      vwap:      0.0,
+      rsi:       0.0,   // 29% WR is inversely useful, but engine has no rsiInvert flag
+      persistence: 0.0,
+      ema:       0.0,
+      cmf:       0.0,
+      supertrend: 0.05,
+      momentum:  0.0,
+      mfi:       0.0,
+      stochrsi:  0.0,
+      book:      0.45,
+      flow:      0.42,
+      // SOL correlates with broad crypto sentiment; F&G matters
+      fearGreed: 1.0,
     },
     XRP: {
       // h15 best: structure 72%, volume 66%, vwap 65%, fisher 69-70% (h1/h10)
@@ -267,8 +266,8 @@
       // ──── TUNED 2026-05-04: Reduce h15-specific weights, boost h1/h5 performers ──
       structure: 1.0,   // ★ REDUCED FROM 5.0 (72% at h15 but meaningless at h1/h5 - needs multiple candles)
       volume:    1.5,   // ★ REDUCED FROM 4.5 (66% at h15 but volume spikes = noise at h1/h5)
-      vwap:      4.0,   // Keep (65% best)
-      fisher:    2.5,   // 70% at h1/h5 — strong signal, keep
+      vwap:      3.5,   // ★ REDUCED: Pyth oracle prices less exchange-anchored; keep strong but not dominant
+      fisher:    2.8,   // ★ BOOST 2026-05-05: precise oracle prices → cleaner price extremes detection
       rsi:       3.5,   // ★ INCREASED FROM 2.0 (80-100% at h1/h10 - massive underweight!)
       obv:       1.5,   // volume direction confirm
       williamsR: 1.2,   // moderate keep
@@ -280,6 +279,8 @@
       momentum: 0.01,   // 28% worst (further reduced)
       vwma:     0.05,   // 31% worst
       hma:      0.05,   // 31% worst
+      // XRP is news/regulatory driven; F&G less predictive
+      fearGreed: 0.7,
     },
     HYPE: {
       // h15 best: williamsR 79%, fisher 77%, cci 75%, bands 78% (h1/h5)
@@ -302,6 +303,8 @@
       // Demote previously assumed dominant but unproven at h15
       volume:   0.3,   // was 4.5 — not in h15 best list
       mfi:      0.3,   // was 3.5 — not in h15 best list
+      // HYPE is highly speculative; F&G is a strong macro driver
+      fearGreed: 1.8,
     },
     DOGE: {
       // h15 best: obv 68%, volume 61%, cmf 60%
@@ -318,6 +321,8 @@
       stochrsi: 0.05,  // 36% worst — was 1.7
       momentum: 0.05,  // 42% worst — was 0.25
       vwma:     0.05,  // 43% worst — was 1.5
+      // DOGE re-enabled 2026-05-05 via Pyth Lazer ID 10; meme coin = maximum F&G sensitivity
+      fearGreed: 2.0,
     },
     BNB: {
       // h15 best: sma 92%, mfi 91%, ema 86% (NOTE: only 14 signals — high noise)
@@ -339,15 +344,17 @@
       bands:      0.05,  // prior research: 30-43% — confirmed bad
       rsi:        0.05,  // prior research: 34-43% — confirmed bad
       stochrsi:   0.05,  // aligned with kill-mean-reversion theme
+      // BNB ecosystem-driven; F&G less predictive than for BTC/DOGE
+      fearGreed:  0.8,
     },
   };
 
   // Expose for adaptive retuner (live mutations propagate to next prediction run)
   window.PER_COIN_INDICATOR_BIAS = PER_COIN_INDICATOR_BIAS;
 
-  // SOL re-tuned2026-04-30: 14d walk-forward, 78 signals, 55.1% WR, PF 1.99 — maxScore 0.55 cap
-  // DOGE stays disabled — needs Dexscreener meme volume feed
-  const SIGNAL_DISABLED_COINS = new Set(['DOGE']);
+  // SOL re-tuned 2026-04-30: 14d walk-forward, 78 signals, 55.1% WR, PF 1.99 — maxScore 0.55 cap
+  // DOGE re-enabled 2026-05-05: Pyth Lazer feed ID 10 + History API provide official OHLC candles
+  const SIGNAL_DISABLED_COINS = new Set();
 
   // Session multipliers removed — crypto trades 24/7; model adjusts naturally.
   // _sessMult is hardwired to 1.0 at the score computation line below.
@@ -415,10 +422,10 @@
       medAgreement:  0.78,
     },
     DOGE: {
-      minAbsScore:   0.28,
-      minAgreement:  0.58,
-      minConfidence: 60,    // ↑ RETUNED: lower floor for scalp opportunities (1% → 8-10% allocation)
-      medAbsScore:   0.35,
+      minAbsScore:   0.24,  // ★ LOWERED 2026-05-05: Pyth ID 10 + History API = better data quality
+      minAgreement:  0.56,
+      minConfidence: 55,    // ↑ RETUNED: lower floor for scalp opportunities
+      medAbsScore:   0.32,
       medAgreement:  0.62,
     },
     HYPE: {
@@ -2075,15 +2082,11 @@
     return defaultShortFilter(horizonMin);
   }
 
-  function orbitalProfileKey(sym) {
-    if (['BTC', 'ETH', 'BNB', 'XRP'].includes(sym)) return 'core';
-    if (['SOL', 'HYPE'].includes(sym)) return 'momentum';
-    if (['DOGE'].includes(sym)) return 'highBeta';
-    return 'core';
-  }
-
   function getOrbitalRouterProfile(sym) {
-    const key = orbitalProfileKey(sym);
+    let key;
+    if (['BTC', 'ETH', 'BNB', 'XRP'].includes(sym)) key = 'core';
+    else if (['DOGE', 'HYPE'].includes(sym)) key = 'highBeta';
+    else key = 'momentum';  // SOL + unknown coins
     return { key, ...ORBITAL_ROUTER_PROFILES[key] };
   }
 
@@ -3281,7 +3284,7 @@
     const momSig = clamp(mom / 2, -1, 1);
 
     // DIAGNOSTIC: RTI dampening analysis for weak coins
-    const isWeakCoin = options.sym && ['HYPE', 'DOGE', 'BNB'].includes(options.sym.toUpperCase());
+    const isWeakCoin = options.sym && ['DOGE', 'BNB'].includes(options.sym.toUpperCase());
     if (isWeakCoin && candles && candles.length > 0) {
       const rawClose = candles[candles.length - 1].c;
       // RTI dampening analysis (rtiCandles not currently available in this context)
@@ -4895,13 +4898,12 @@
       const data = await fetchGeckoJSON('/derivatives?include_tickers=unexpired', { minGapMs: 1800, retries: 4 }).catch(() => null);
       if (!Array.isArray(data)) return;
       const symMap = { BTCUSDT:'BTC', ETHUSDT:'ETH', SOLUSDT:'SOL', XRPUSDT:'XRP', DOGEUSDT:'DOGE', BNBUSDT:'BNB', HYPEUSDT:'HYPE' };
-      const seen = new Set();
       data.forEach(d => {
         const sym = symMap[d.symbol];
-        if (sym && !seen.has(sym)) {
-          seen.add(sym);
+        if (!sym) return;
+        if (d.last) {
           derivCache[sym] = {
-            funding: parseFloat(d.funding_rate || 0) * 100,
+            funding: parseFloat(d.funding_rate || 0),
             oi: parseFloat(d.open_interest || 0),
             basis: parseFloat(d.basis || 0) * 100,
             spread: parseFloat(d.bid_ask_spread || 0),
