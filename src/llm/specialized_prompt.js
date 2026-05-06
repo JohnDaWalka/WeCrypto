@@ -305,19 +305,36 @@ Watch for false breakouts (RSI >90 often reverses)
  * Generate specialized system prompt for LLM
  */
 function generateSystemPrompt() {
-  return `You are a specialized quantitative trading analyst for a 9-indicator crypto prediction engine.
+  return `You are an elite crypto trading regime analyst.
+Analyze the market snapshot and classify it into exactly one regime.
 
-Your job is to:
-1. Classify market regime based on indicator readings
-2. Detect conflicts between indicators
-3. Recommend conservative weight adjustments (<5% per cycle)
-4. Flag anomalies and reversal setups
+Return ONLY valid JSON with this exact structure:
+{
+  "regime": "trend_continuation|mean_reversion|chop_noise|breakout_volatility",
+  "confidence": 0.0,
+  "analysis": {
+    "strongest_signal": "",
+    "weakest_signal": "",
+    "key_conflict": "",
+    "reversal_risk": "",
+    "anomalies": []
+  },
+  "suggestions": {
+    "increase_weight": [],
+    "decrease_weight": [],
+    "notes": ""
+  },
+  "warnings": []
+}
 
-You know the mechanics of 9 technical indicators and how they interact in different market regimes.
-You understand their historical win rates and optimal thresholds.
-You are conservative: only suggest weight changes if confidence ≥ 0.6.
-
-ALWAYS respond with valid JSON only. No markdown, no explanations outside JSON.`.trim();
+Rules:
+- Pick exactly one regime.
+- confidence must be a number from 0.0 to 1.0.
+- Use indicator names from the provided current weights map.
+- Keep suggestions conservative (small per-cycle nudges only).
+- If uncertain, keep increase_weight/decrease_weight empty and explain in notes.
+- Do not output markdown, code fences, or extra commentary.
+- Output must parse with JSON.parse exactly as returned.`.trim();
 }
 
 /**
@@ -334,101 +351,38 @@ function generateUserPrompt(snapshot) {
     conflicts,
   } = snapshot;
 
-  let prompt = `ANALYZE THIS SNAPSHOT AND CLASSIFY REGIME + SUGGEST WEIGHTS
+  const vNum = Number(volatility || 0);
+  const obImbalance = Number(orderbook?.imbalance || 0);
+  const obBuyPressure = Number(orderbook?.buyPressure || 0);
 
-COIN: ${coin}
-VOLATILITY: ${volatility.toFixed(3)} (regime: ${classifyVolatilityRegime(volatility)})
-TIMESTAMP: ${new Date().toISOString()}
+  let prompt = `Current market snapshot:
+Coin: ${coin}
+Volatility: ${vNum.toFixed(3)} (${classifyVolatilityRegime(vNum)})
+Timestamp: ${new Date().toISOString()}
 
-═══════════════════════════════════════════════════════════
+Orderbook:
+- Imbalance: ${obImbalance.toFixed(3)}
+- Buy pressure: ${(obBuyPressure * 100).toFixed(1)}%
 
-INDICATOR READINGS:
+Indicators:
+${JSON.stringify(indicators || {}, null, 2)}
 
-📊 RSI (14-period, range 0-100):
-   Value: ${indicators.RSI?.toFixed(1) || "N/A"}
-   Zone: ${classifyRSI(indicators.RSI)}
-   Historical win rate in this zone: ${estimateRSIWinRate(indicators.RSI, "trend_continuation")}%
+Current weights:
+${JSON.stringify(weights || {}, null, 2)}
 
-📈 MACD (12/26/9):
-   MACD: ${indicators.MACD?.toFixed(4) || "N/A"}
-   Signal: ${indicators.Signal?.toFixed(4) || "N/A"}
-   Histogram: ${indicators.MACDHist?.toFixed(4) || "N/A"}
-   Status: ${classifyMACD(indicators.MACD, indicators.Signal)}
+Recent accuracy:
+${JSON.stringify(recentAccuracy || {}, null, 2)}
 
-🔄 CCI (20-period):
-   Value: ${indicators.CCI?.toFixed(1) || "N/A"}
-   Zone: ${classifyCCI(indicators.CCI)}
-   Divergence risk: ${checkCCIDivergence(indicators.CCI, indicators.RSI)}
+Conflicts:
+${(conflicts && conflicts.length) ? conflicts.join(", ") : "NONE"}
 
-🎯 Fisher Transform (normalized -3 to 3):
-   Value: ${indicators.Fisher?.toFixed(2) || "N/A"}
-   Signal: ${classifyFisher(indicators.Fisher)}
-   Leading indicator: YES (turns before price)
+Task:
+1. Determine the dominant regime.
+2. Set confidence (0.0-1.0).
+3. Recommend conservative weight nudges only.
+4. Flag anomalies and reversal risk.
 
-💪 ADX (trend strength, range 0-100):
-   Value: ${indicators.ADX?.toFixed(1) || "N/A"}
-   Trend strength: ${classifyADX(indicators.ADX)}
-   +DI: ${indicators.PlusDI?.toFixed(1) || "N/A"}
-   -DI: ${indicators.MinusDI?.toFixed(1) || "N/A"}
-
-🌊 ATR (volatility, period 14):
-   Value: ${indicators.ATR?.toFixed(2) || "N/A"}
-   Volatility regime: ${volatility < 0.3 ? "LOW" : volatility < 0.8 ? "MODERATE" : volatility < 1.5 ? "HIGH" : "EXTREME"}
-   Implication: ${volatility > 1.5 ? "Use wider stops, lower leverage" : "Standard sizing"}
-
-📋 Order Book Imbalance:
-   Buy Pressure: ${(orderbook.buyPressure * 100).toFixed(1)}%
-   Imbalance: ${(orderbook.imbalance * 100).toFixed(1)}%
-   Direction: ${orderbook.imbalance > 0.65 ? "EXTREME BULLISH 🔥" : orderbook.imbalance > 0.55 ? "MODERATE BULLISH" : orderbook.imbalance < 0.35 ? "EXTREME BEARISH 🔥" : orderbook.imbalance < 0.45 ? "MODERATE BEARISH" : "BALANCED (50/50)"}
-   Signal quality: ${orderbook.imbalance > 0.65 || orderbook.imbalance < 0.35 ? "HIGH" : orderbook.imbalance > 0.55 || orderbook.imbalance < 0.45 ? "MODERATE" : "LOW (near 50/50)"}
-
-🎯 Kalshi Market Probability:
-   YES Probability: ${(indicators.KalshiPercent * 100).toFixed(1)}%
-   Crowd consensus: ${indicators.KalshiPercent > 0.65 ? "STRONG BULLISH" : indicators.KalshiPercent > 0.55 ? "MODERATE BULLISH" : indicators.KalshiPercent < 0.35 ? "STRONG BEARISH" : indicators.KalshiPercent < 0.45 ? "MODERATE BEARISH" : "INDECISIVE (near 50/50)"}
-
-👥 Crowd Fade (Contrarian signal):
-   Fade strength: ${calculateCrowdFade(indicators.KalshiPercent)}
-   Use in: mean_reversion regimes only
-
-═══════════════════════════════════════════════════════════
-
-CURRENT WEIGHTS:
-${Object.entries(weights).map(([sig, w]) => `${sig.padEnd(12)}: ${w.toFixed(2)}x`).join("\n")}
-
-RECENT ACCURACY:
-Win Rate (last 20): ${(recentAccuracy.winRate * 100).toFixed(1)}%
-Trend: ${recentAccuracy.trend > 0 ? `IMPROVING (+${(recentAccuracy.trend * 100).toFixed(1)}%)` : `DECLINING (${(recentAccuracy.trend * 100).toFixed(1)}%)`}
-
-CONFLICTS DETECTED: ${conflicts.length > 0 ? conflicts.join(", ") : "NONE"}
-
-═══════════════════════════════════════════════════════════
-
-YOUR TASK:
-1. Classify the regime (trend_continuation | mean_reversion | chop_noise | breakout_volatility)
-2. Rate your confidence 0-1
-3. Suggest SMALL weight adjustments (max ±5% per cycle)
-4. Flag any anomalies or reversal risks
-5. Recommend confidence gate for next prediction
-
-RESPOND WITH THIS JSON STRUCTURE ONLY:
-{
-  "regime": "trend_continuation|mean_reversion|chop_noise|breakout_volatility",
-  "confidence": 0.75,
-  "analysis": {
-    "strongest_signal": "RSI bullish momentum",
-    "weakest_signal": "MACD lagging",
-    "key_conflict": "RSI vs MACD divergence - RSI typically wins in trending markets",
-    "reversal_risk": "None detected",
-    "anomalies": []
-  },
-  "suggestions": {
-    "increase_weight": ["RSI", "ADX"],
-    "decrease_weight": ["MACD"],
-    "reasoning": "RSI and ADX both confirm strong uptrend. MACD lagging. Boost momentum signals."
-  },
-  "warnings": ["ATR expanding - use wider stops"],
-  "recommended_gate": "standard"
-}`;
+Return strict JSON only in the required schema.`;
 
   return prompt.trim();
 }

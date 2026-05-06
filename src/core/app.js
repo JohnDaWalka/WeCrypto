@@ -176,6 +176,46 @@
     }
   })();
 
+  // ── Initialize Proxy Orchestrator ────────────────────────────────────────
+  // Coordinates rate-limiting, request deduplication, fallback chains, and multi-layer caching
+  (function initProxyOrchestrator() {
+    try {
+      if (typeof window.ProxyOrchestrator === 'undefined') {
+        console.warn('[ProxyOrchestrator] Not loaded yet — will retry on demand');
+        return;
+      }
+
+      // Create global ProxyOrchestrator instance with production config
+      window._proxyOrchestrator = new window.ProxyOrchestrator({
+        backoff_start: 2000,
+        backoff_max: 32000,
+      });
+
+      // Register known sources for fallback routing
+      window._proxyOrchestrator.fallback.registerSource('kalshi', {
+        endpoint: 'kalshi',
+      });
+      window._proxyOrchestrator.fallback.registerSource('polymarket', {
+        endpoint: 'polymarket',
+      });
+      window._proxyOrchestrator.fallback.registerSource('cmc', {
+        endpoint: 'cmc',
+      });
+      window._proxyOrchestrator.fallback.registerSource('pyth', {
+        endpoint: 'pyth',
+      });
+      window._proxyOrchestrator.fallback.registerSource('cache', {
+        endpoint: 'cache',
+      });
+
+      console.log('[ProxyOrchestrator] ✓ Initialized successfully');
+      console.log('[ProxyOrchestrator] Health:', window._proxyOrchestrator.getHealthStatus());
+    } catch (e) {
+      console.warn('[ProxyOrchestrator] Initialization failed:', e.message);
+      // Graceful degradation — app continues to work with direct fetch
+    }
+  })();
+
   function savePredLog()      { try { localStorage.setItem(PRED_LOG_STORE,    JSON.stringify(window._predLog.slice(-200)));       } catch(e) {} }
   function saveKalshiLog()    { try { localStorage.setItem(KALSHI_LOG_STORE,  JSON.stringify(window._kalshiLog.slice(-500)));     } catch(e) {} }
   function saveLastPred()     { try { localStorage.setItem(LAST_PRED_STORE,   JSON.stringify(window._lastPrediction));            } catch(e) {} }
@@ -1885,6 +1925,28 @@
       }
     } finally {
       _fetchAttempted = true;
+      
+      // ── ACTIVATE CMC POLLING ON FIRST APP STARTUP ────────────────
+      if (window._cmcProFeed && typeof window._cmcProFeed.startPolling === 'function' && !window._cmcPollingStarted) {
+        try {
+          window._cmcProFeed.startPolling(['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'], 60000);
+          window._cmcPollingStarted = true;
+          console.log('[App] ✅ CMC polling activated (60-second interval)');
+        } catch (cmcErr) {
+          console.warn('[App] Failed to start CMC polling:', cmcErr.message);
+        }
+      }
+      
+      // ── ACTIVATE PYTH CLIENT ON FIRST APP STARTUP ──────────────────
+      if (window.PythClient && typeof window.PythClient.startPolling === 'function' && !window._pythClientStarted) {
+        try {
+          window.PythClient.startPolling();
+          window._pythClientStarted = true;
+          console.log('[App] ✅ PYTH price feed activated');
+        } catch (pythErr) {
+          console.warn('[App] Failed to start PYTH client:', pythErr.message);
+        }
+      }
     }
 
     if (refreshBtn) refreshBtn.classList.remove('spinning');

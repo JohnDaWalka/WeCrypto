@@ -27,7 +27,7 @@
   const POLY_GAMMA     = 'https://gamma-api.polymarket.com';
   const CB_BASE        = 'https://api.exchange.coinbase.com';
 
-  // Coinbase product IDs — CF Benchmarks uses Coinbase prices for Kalshi settlement
+  // Coinbase product IDs — used for post-settlement divergence diagnostics.
   const CB_PRODUCTS = {
     BTC: 'BTC-USD', ETH: 'ETH-USD', SOL: 'SOL-USD',
     XRP: 'XRP-USD', DOGE: 'DOGE-USD', BNB: 'BNB-USD', HYPE: 'HYPE-USD',
@@ -68,6 +68,24 @@
     window._contractAuditLog.push({ ticker, event, ts: Date.now(), tsIso: new Date().toISOString(), ...data });
     if (window._contractAuditLog.length > AUDIT_MAX) window._contractAuditLog.shift();
     saveAudit();
+  }
+
+  function getRtiDiagnostics(sym, closeTimeMs = null) {
+    const r = window._rtiPrices?.[sym];
+    if (!r) return null;
+    const now = Date.now();
+    return {
+      price: r.price ?? null,
+      openAvg: r.openAvg ?? null,
+      closeAvg: r.closeAvg ?? null,
+      delta: r.delta ?? null,
+      deltaDir: r.deltaDir ?? null,
+      stale: !!r.stale,
+      sampleTs: r.ts ?? null,
+      sampleAgeSec: Number.isFinite(r.ts) ? Math.round((now - r.ts) / 1000) : null,
+      closeLagSec: Number.isFinite(closeTimeMs) && Number.isFinite(r.ts) ? Math.round((r.ts - closeTimeMs) / 1000) : null,
+      meta: r.meta ?? null,
+    };
   }
 
   // ── Fetch helpers ────────────────────────────────────────────────
@@ -228,7 +246,12 @@
     for (const entry of expired) {
       const secsPast = Math.round((now - entry.closeTimeMs) / 1000);
       console.log(`[Resolver] ⏳ polling ${entry.sym} ${entry.ticker} (${secsPast}s past close)`);
-      addAudit(entry.ticker, 'poll_attempt', { sym: entry.sym, secsPast });
+      addAudit(entry.ticker, 'poll_attempt', {
+        sym: entry.sym,
+        secsPast,
+        closeTimeMs: entry.closeTimeMs,
+        rti: getRtiDiagnostics(entry.sym, entry.closeTimeMs),
+      });
 
       const settled = await resolveKalshiMarket(entry);
       if (settled) {
@@ -248,16 +271,77 @@
 
   // ── 3. KALSHI SETTLEMENT FETCH ───────────────────────────────────
   // Returns a resolution record or null if not yet settled.
+  // Routes through ProxyOrchestrator for:
+  //   - Rate limiting with fallback to Polymarket if Kalshi 429s
+  //   - Deduplication of identical settlement queries
+  //   - 3 automatic retries with exponential backoff before giving up
 
   async function resolveKalshiMarket(entry) {
     const url = `${KALSHI_BASE}/markets/${entry.ticker}`;
-    const d   = await kalshiFetch(url);
+    
+    // Try ProxyOrchestrator if available
+    if (typeof window.ProxyOrchestrator !== 'undefined' && window._proxyOrchestrator) {
+      try {
+        const d = await window._proxyOrchestrator.fetch(url, {
+          endpoint: 'kalshi-settlement',
+          cacheType: 'settlement',
+          retries: 3,
+          fallbackChain: ['kalshi', 'polymarket', 'cache'],
+        });
+        
+        if (d && d.market) {
+          addAudit(entry.ticker, 'proxy_fetch_success', { 
+            sym: entry.sym,
+            via: 'proxyOrchestrator',
+          });
+          return processKalshiSettlement(d, entry);
+        }
+      } catch (err) {
+        console.warn(`[Resolver] ProxyOrchestrator failed for ${entry.ticker}:`, err.message);
+        addAudit(entry.ticker, 'proxy_fetch_failed', {
+          sym: entry.sym,
+          error: err.message,
+        });
+      }
+    }
 
+    // Legacy fallback: exponential backoff retry
+    const retryDelays = [2000, 4000, 8000];
+    let d = null;
+    let lastError = null;
+    
+    for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+      d = await kalshiFetch(url);
+      
+      if (d) {
+        if (attempt > 0) {
+          console.log(`[Resolver] ✅ Retry succeeded on attempt ${attempt + 1} for ${entry.sym} ${entry.ticker}`);
+          addAudit(entry.ticker, 'retry_success', { sym: entry.sym, attempt: attempt + 1 });
+        }
+        break;
+      }
+      
+      lastError = new Error(`Fetch returned null (network/rate-limit?)`);
+      
+      if (attempt < retryDelays.length) {
+        const delay = retryDelays[attempt];
+        console.warn(`[Resolver] ⚠️ Retry attempt ${attempt + 1} for ${entry.sym} ${entry.ticker} — waiting ${delay}ms before retry`);
+        addAudit(entry.ticker, 'fetch_retry', { sym: entry.sym, attempt: attempt + 1, nextDelayMs: delay });
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    
     if (!d) {
-      console.error(`[Resolver] ❌ ${entry.sym} ${entry.ticker} — fetch returned null (network/rate-limit?)`);
-      addAudit(entry.ticker, 'fetch_failed', { sym: entry.sym, url });
+      console.error(`[Resolver] ❌ ${entry.sym} ${entry.ticker} — fetch failed after ${retryDelays.length + 1} attempts (network/rate-limit?)`);
+      addAudit(entry.ticker, 'fetch_failed_all_retries', { sym: entry.sym, url, attempts: retryDelays.length + 1 });
       return null;
     }
+    
+    return processKalshiSettlement(d, entry);
+  }
+
+  // ── Helper: Process Kalshi settlement response ───────────────────
+  function processKalshiSettlement(d, entry) {
     const m = d?.market;
     if (!m) {
       console.error(`[Resolver] ❌ ${entry.sym} ${entry.ticker} — no 'market' key in response`, Object.keys(d));
@@ -266,6 +350,15 @@
     }
     if (m.status !== 'settled') {
       console.log(`[Resolver] ⏳ ${entry.sym} ${entry.ticker} status='${m.status}' result='${m.result}' — not settled yet`);
+      addAudit(entry.ticker, 'awaiting_settlement', {
+        sym: entry.sym,
+        status: m.status,
+        result: m.result ?? null,
+        closeTimeMs: entry.closeTimeMs,
+        nowMs: Date.now(),
+        secsPastClose: Math.round((Date.now() - entry.closeTimeMs) / 1000),
+        rti: getRtiDiagnostics(entry.sym, entry.closeTimeMs),
+      });
       return null;
     }
     if (!m.result) {
@@ -274,7 +367,7 @@
       return null;
     }
 
-    // ── Authoritative contract details from Kalshi API ─────────────────────
+    // ── Authoritative contract details from Kalshi API─────────────────────
     // Use the actual structured fields — floor_price, strike_type, result.
     // strikeDir determines which side of floor_price makes YES win:
     //   'above' (default for KXBTC15M): YES = close >= floor_price → UP
@@ -317,6 +410,7 @@
     const marketCorrect = marketDir === actualOutcome;
 
     // Full contract audit — raw Kalshi API fields + derived values
+    const rtiDiagnostics = getRtiDiagnostics(entry.sym, entry.closeTimeMs);
     addAudit(entry.ticker, 'contract_settled', {
       sym:           entry.sym,
       // Raw Kalshi API fields
@@ -341,6 +435,7 @@
       // Proxy cross-check — what did the bucket-close proxy call?
       proxyOutcome:  entry.proxyOutcome ?? null,
       proxyMismatch: entry.proxyOutcome ? entry.proxyOutcome !== actualOutcome : null,
+      rtiDiagnostics,
     });
 
     console.log(
@@ -364,6 +459,41 @@
       }
     }
 
+    // ── PYTH Backup Verification ─────────────────────────────────────────
+    // Check if PYTH price exists for this coin
+    const pythData = window._pythPrices ? window._pythPrices[entry.sym] : null;
+    if (pythData && refPrice != null) {
+      const pythPrice = pythData.price;
+      const divergence = Math.abs((pythPrice - refPrice) / refPrice);
+      const pythSide = pythPrice >= refPrice ? 'UP' : 'DOWN';
+      
+      if (divergence > 0.005) { // 0.5% threshold
+        console.warn(
+          `[Resolver] ⚠️ PRICE_DIVERGENCE: ${entry.sym} ${entry.ticker} | ` +
+          `PYTH=${pythPrice} vs Kalshi=${refPrice} (${(divergence*100).toFixed(2)}% diff) → PYTH=${pythSide} vs Kalshi=${actualOutcome}`
+        );
+        addAudit(entry.ticker, 'pyth_divergence', {
+          sym: entry.sym,
+          pythPrice,
+          kalshiRefPrice: refPrice,
+          divergencePct: divergence * 100,
+          pythSide,
+          kalshiResult: actualOutcome,
+          mismatch: pythSide !== actualOutcome,
+        });
+      } else {
+        addAudit(entry.ticker, 'pyth_verified', {
+          sym: entry.sym,
+          pythPrice,
+          kalshiRefPrice: refPrice,
+          divergencePct: divergence * 100,
+          pythSide,
+          kalshiResult: actualOutcome,
+          match: pythSide === actualOutcome,
+        });
+      }
+    }
+
     return {
       sym:           entry.sym,
       ticker:        entry.ticker,
@@ -382,6 +512,7 @@
       strikeType:    apiStrikeType,
       confidence,                       // 92 = structured floor_price, 65 = fallback
       cbSettlePrice,
+      rtiAtResolve:  rtiDiagnostics,
       proxyOutcome:  entry.proxyOutcome ?? null,  // what bucket-close proxy called
       modelDir:      modelDir ?? null,
       modelCorrect,
@@ -444,6 +575,7 @@
           floorPrice:    res.floorPrice,
           strikeDir:     res.strikeDir,
           cbSettlePrice: res.cbSettlePrice,
+          rtiAtResolve:  res.rtiAtResolve,
         },
       }));
     } catch (_) {}

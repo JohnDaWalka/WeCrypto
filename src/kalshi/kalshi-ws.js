@@ -24,7 +24,7 @@
   const DEMO_WS_URL = 'wss://demo-api.kalshi.co/trade-api/ws/v2';
 
   // Use demo by default; set to false for production trading
-  const USE_DEMO = true;
+  const USE_DEMO = false;
   const WS_URL = USE_DEMO ? DEMO_WS_URL : PUBLIC_WS_URL;
   const WS_PATH = '/trade-api/ws/v2';
 

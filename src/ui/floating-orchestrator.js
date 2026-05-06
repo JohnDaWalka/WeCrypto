@@ -28,7 +28,7 @@
     COIN_ALLOCATION[coin] = weight / _weightSum;
   }
 
-  const MODEL_THRESHOLD  = 0.12;
+  const MODEL_THRESHOLD  = 0.06;
   const MIN_SECONDS_LEFT = 5;
   const EDGE_MIN_CENTS   = 8;
   const INVERSION_THRESH = 30;

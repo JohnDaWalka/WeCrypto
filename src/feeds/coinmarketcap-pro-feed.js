@@ -58,6 +58,39 @@
     try {
       // Trial uses /trial-pro-api/v1/... vs Pro uses /v1/... (both same path)
       const url = `${baseUrl}${CMC_QUOTES_PATH}?symbol=${encodeURIComponent(symbolStr)}&convert=USD`;
+      
+      // Try ProxyOrchestrator if available for deduplication and caching
+      if (typeof window.ProxyOrchestrator !== 'undefined' && window._proxyOrchestrator) {
+        try {
+          const result = await window._proxyOrchestrator.fetch(url, {
+            endpoint: 'cmc',
+            cacheType: 'price-quotes',
+            retries: 2,
+            fallbackChain: ['cmc', 'pyth', 'cache'],
+          });
+          
+          // Cache result in local cache for backwards compatibility
+          if (result && result.data) {
+            Object.entries(result.data).forEach(([sym, data]) => {
+              const usd = data.quote?.USD || {};
+              cache[sym] = {
+                price: usd.price || 0,
+                marketCap: usd.market_cap || 0,
+                volume24h: usd.volume_24h || 0,
+                change24h: usd.percent_change_24h || 0,
+                ts: Date.now()
+              };
+            });
+          }
+          
+          console.info(`[CMC ${isProMode ? 'Pro' : 'Trial'}] Quotes via proxy: ${Object.keys(result?.data || {}).length} coins ✓`);
+          return result?.data || {};
+        } catch (err) {
+          console.warn(`[CMC] ProxyOrchestrator failed, falling back:`, err.message);
+        }
+      }
+
+      // Fallback: direct fetch with rate limiting
       const headers = { 'Accept': 'application/json' };
       if (isProMode) headers['X-CMC_PRO_API_KEY'] = apiKey;
 

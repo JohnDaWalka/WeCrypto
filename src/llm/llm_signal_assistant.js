@@ -304,19 +304,29 @@ Use this recall only as context, and prioritize current market snapshot data if 
     const regime = this.validateRegime(raw.regime);
     const confidence = Math.max(0, Math.min(1, Number(raw.confidence) || 0));
 
+    const increaseWeight = Array.isArray(raw.suggestions?.increase_weight)
+      ? raw.suggestions.increase_weight
+      : Array.isArray(raw.suggestions?.increase)
+        ? raw.suggestions.increase
+        : [];
+    const decreaseWeight = Array.isArray(raw.suggestions?.decrease_weight)
+      ? raw.suggestions.decrease_weight
+      : Array.isArray(raw.suggestions?.decrease)
+        ? raw.suggestions.decrease
+        : [];
+
     const suggestions = {
-      increase_weight: Array.isArray(raw.suggestions?.increase_weight)
-        ? raw.suggestions.increase_weight.filter(s => typeof s === 'string')
-        : [],
-      decrease_weight: Array.isArray(raw.suggestions?.decrease_weight)
-        ? raw.suggestions.decrease_weight.filter(s => typeof s === 'string')
-        : [],
-      notes: typeof raw.suggestions?.notes === 'string' ? raw.suggestions.notes : 
-             typeof raw.suggestions?.reasoning === 'string' ? raw.suggestions.reasoning : "",
+      increase_weight: increaseWeight.filter(s => typeof s === 'string'),
+      decrease_weight: decreaseWeight.filter(s => typeof s === 'string'),
+      notes: typeof raw.suggestions?.notes === 'string' ? raw.suggestions.notes :
+             typeof raw.suggestions?.reasoning === 'string' ? raw.suggestions.reasoning :
+             typeof raw.suggestions?.summary === 'string' ? raw.suggestions.summary : "",
     };
 
     const warnings = Array.isArray(raw.warnings)
       ? raw.warnings.map(String).filter(w => w.length > 0)
+      : Array.isArray(raw.suggestions?.issues)
+        ? raw.suggestions.issues.map(String).filter(w => w.length > 0)
       : [];
 
     return {

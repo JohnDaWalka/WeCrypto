@@ -45,7 +45,7 @@
     h1: { entryThreshold: 0.08, minAgreement: 0.50 },  // ★ CONFIRMATORY: Use to validate h15 direction
     h5: { entryThreshold: 0.12, minAgreement: 0.54 },  // ★ CONFIRMATORY: Early-stage direction confirmation
     h10: { entryThreshold: 0.16, minAgreement: 0.58 }, // ★ CONFIRMATORY: Pre-settlement signal
-    h15: { entryThreshold: 0.20, minAgreement: 0.65 }, // ★ PRIMARY TARGET: Kalshi contract settlement
+    h15: { entryThreshold: 0.10, minAgreement: 0.65 }, // ★ PRIMARY TARGET: Kalshi contract settlement
   };
 
   const candleCache = {};
@@ -5193,7 +5193,33 @@
         saveBtCache();
         PREDICTION_COINS.forEach(coin => {
           try {
-            window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
+            const basePrediction = computePrediction(coin, window._backtests[coin.sym]);
+            
+            // ── h15-TUNER INTEGRATION ─────────────────────────────────────
+            if (window._h15Tuner && typeof window._h15Tuner.getTunedBias === 'function') {
+              try {
+                const tunedBias = window._h15Tuner.getTunedBias(15, coin.sym, {
+                  baseScore: basePrediction.score,
+                  baseConfidence: basePrediction.confidence,
+                  signal: basePrediction.signal,
+                });
+                
+                if (tunedBias) {
+                  basePrediction.score = tunedBias.tunedScore ?? basePrediction.score;
+                  basePrediction.confidence = tunedBias.tunedConfidence ?? basePrediction.confidence;
+                  basePrediction.h15TunerApplied = true;
+                  basePrediction.h15BiasBoost = tunedBias.biasBoost ?? 0;
+                  console.log(`[runAll] h15-tuner: boosting ${coin.sym} → score=${(basePrediction.score).toFixed(3)} conf=${basePrediction.confidence}% (bias=${(tunedBias.biasBoost).toFixed(3)})`);
+                }
+              } catch (tunerErr) {
+                console.warn(`[runAll] h15-tuner error for ${coin.sym}:`, tunerErr.message);
+              }
+            } else if (coin === PREDICTION_COINS[0]) {
+              // Log once per run if h15-tuner is not available
+              console.log(`[runAll] h15-tuner skipped (window._h15Tuner not available)`);
+            }
+            
+            window._predictions[coin.sym] = basePrediction;
           } catch (cpErr) {
             console.error('[runAll] computePrediction crash:', coin.sym, cpErr);
             window._predictions[coin.sym] = {

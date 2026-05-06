@@ -92,10 +92,30 @@
   }
 
   // ---- Rate-limit-aware Kalshi fetch helper --------------------------
-  // Retries up to 3 times with exponential backoff on 429/503.
-  // After 3 consecutive 429s across any coin, backs off the whole module for 60s.
+  // Routes through ProxyOrchestrator for:
+  //   - Per-endpoint rate limiting
+  //   - Deduplication (coalesce identical requests within 500ms)
+  //   - Fallback chains (Kalshi → Polymarket → Cache)
+  //   - Multi-layer caching (memory → localStorage)
+  //
+  // Fallback to direct fetch if ProxyOrchestrator not initialized.
 
   async function kalshiFetch(url, attempt = 0) {
+    // Try ProxyOrchestrator if available
+    if (typeof window.ProxyOrchestrator !== 'undefined' && window._proxyOrchestrator) {
+      try {
+        return await window._proxyOrchestrator.fetch(url, {
+          endpoint: 'kalshi-markets-legacy',
+          cacheType: 'market-data',
+          fallbackChain: ['kalshi', 'polymarket', 'cache'],
+        });
+      } catch (err) {
+        // If proxy fails, fall through to legacy logic
+        console.warn(`[PredictionMarkets] ProxyOrchestrator failed:`, err.message);
+      }
+    }
+
+    // Legacy fallback: direct fetch with rate limiting
     if (_rateLimitUntil > Date.now()) return null; // global back-off active
     try {
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
