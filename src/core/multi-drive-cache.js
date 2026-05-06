@@ -22,25 +22,25 @@
   class MultiDriveCache {
     constructor() {
       this.cacheFile = 'contract-cache-2h.json';
-      this.isElectron = typeof window !== 'undefined' && window.require;
-      this.fs = this.isElectron ? window.require('fs') : null;
-      this.path = this.isElectron ? window.require('path') : null;
+
+      // Detect Electron via contextBridge (works with contextIsolation:true + nodeIntegration:false)
+      this.isElectron = typeof window !== 'undefined' && window.desktopApp?.isElectron === true;
 
       // Drive paths (Windows)
       this.drivePaths = [
-        'Z:\\WE-CRYPTO-CACHE',           // Network primary
-        'D:\\WE-CRYPTO-CACHE',           // Local backup
-        'F:\\WE-CRYPTO-CACHE',           // Secondary backup
-        'D:\\Users\\admin\\WE-CRYPTO-CACHE',  // Secondary network
-        'C:\\Users\\user\\AppData\\Local\\WE-CRYPTO-CACHE',  // Local cache
+        'Z:\\WE-CRYPTO-CACHE',
+        'D:\\WE-CRYPTO-CACHE',
+        'F:\\WE-CRYPTO-CACHE',
+        'D:\\Users\\admin\\WE-CRYPTO-CACHE',
+        'C:\\Users\\user\\AppData\\Local\\WE-CRYPTO-CACHE',
       ];
 
-      // OneDrive paths (personal + org profiles)
-      this.onedriveFolders = this._getOnedriveFolders();
-      this.onedriveFolder = this.onedriveFolders[0] || null; // backward-compatible alias
-      this.googleDriveFolder = this._getGoogleDriveFolder();
+      // Cloud folders discovered async during _initAsync
+      this.onedriveFolders = [];
+      this.onedriveFolder  = null;
+      this.googleDriveFolder = null;
 
-      // In-memory cache (same structure as ContractCacheManager)
+      // In-memory cache
       this.data = {
         predictions: [],
         settlements: [],
@@ -53,100 +53,72 @@
         lastSyncTime: Date.now(),
       };
 
-      this._ensureDirectories();
-      this._loadFromDrives();
+      // Kick off async init (discover cloud folders, ensure dirs, load from drives)
+      if (this.isElectron) {
+        this._initAsync().catch(e => console.warn('[MultiDriveCache] Async init error:', e.message));
+      }
 
-      console.log('[MultiDriveCache] Initialized with', this.drivePaths.length, 'base drive targets');
+      console.log('[MultiDriveCache] Initialized — isElectron:', this.isElectron);
     }
 
-    /**
-     * Get OneDrive folder paths (Windows 10/11)
-     */
-    _getOnedriveFolders() {
-      if (!this.isElectron || !this.path || !this.fs) return [];
+    // Simple cross-platform path joiner (replaces require('path').join)
+    _join(...parts) {
+      return parts.join('\\').replace(/\\{2,}/g, '\\');
+    }
 
-      const username = process.env.USERNAME || 'user';
-      const home = process.env.USERPROFILE || `C:\\Users\\${username}`;
-      const candidates = [
-        process.env.OneDriveConsumer || '',
-        process.env.OneDriveCommercial || '',
-        process.env.ONEDRIVE || '',
-        process.env.ONEDRIVE_BUSINESS || '',
-        this.path.join(home, 'OneDrive'),
-        this.path.join(home, 'OneDrive - Personal'),
-        this.path.join(home, 'OneDrive - ctstate.edu'),
-        this.path.join(home, 'OneDrive - Azure ctstate.edu'),
-      ].filter(Boolean);
+    async _initAsync() {
+      await this._discoverCloudFolders();
+      await this._ensureDirectories();
+      await this._loadFromDrives();
+    }
 
-      // Capture any additional OneDrive profile folder under C:\Users\user\
+    async _discoverCloudFolders() {
+      if (!this.isElectron || !window.dataStore?.listDir) return;
       try {
-        if (home && this.fs.existsSync(home)) {
-          for (const name of this.fs.readdirSync(home)) {
-            if (name.startsWith('OneDrive')) {
-              candidates.push(this.path.join(home, name));
+        // Discover OneDrive folders under common user home paths
+        const homeCandidates = ['C:\\Users\\user', 'C:\\Users\\admin', 'C:\\Users\\Public'];
+        for (const home of homeCandidates) {
+          const res = await window.dataStore.listDir(home);
+          if (!res?.ok) continue;
+          for (const entry of (res.entries || [])) {
+            if (entry.startsWith('OneDrive')) {
+              this.onedriveFolders.push(this._join(home, entry, 'WE-CRYPTO-CACHE'));
             }
           }
         }
-      } catch (_) {}
-
-      const unique = Array.from(new Set(candidates));
-      return unique
-        .filter(folder => {
-          try { return this.fs.existsSync(folder); } catch (_) { return false; }
-        })
-        .map(folder => this.path.join(folder, 'WE-CRYPTO-CACHE'));
-    }
-
-    /**
-     * Get Google Drive folder path (Windows)
-     */
-    _getGoogleDriveFolder() {
-      if (!this.isElectron || !this.path || !this.fs) return null;
-
-      const username = process.env.USERNAME || 'user';
-      const home = process.env.USERPROFILE || `C:\\Users\\${username}`;
-      const candidates = [
-        `Z:\\`,
-        `Z:\\My Drive`,
-        process.env.GOOGLE_DRIVE_PATH || '',
-        process.env.GOOGLEDRIVEPATH || '',
-        `G:\\My Drive`,
-        this.path.join(home, 'Google Drive'),
-        this.path.join(home, 'My Drive'),
-      ].filter(Boolean);
-
-      for (const candidate of candidates) {
-        try {
-          if (this.fs.existsSync(candidate)) {
-            return this.path.join(candidate, 'WE-CRYPTO-CACHE');
-          }
-        } catch (_) {}
-      }
-
-      return null;
-    }
-
-    /**
-     * Ensure all target directories exist
-     */
-    _ensureDirectories() {
-      if (!this.isElectron || !this.fs) return;
-
-      const allPaths = [...this.drivePaths];
-      if (this.onedriveFolders.length) allPaths.push(...this.onedriveFolders);
-      if (this.googleDriveFolder) allPaths.push(this.googleDriveFolder);
-
-      allPaths.forEach(dirPath => {
-        try {
-          if (!this.fs.existsSync(dirPath)) {
-            this.fs.mkdirSync(dirPath, { recursive: true });
-            console.log(`[MultiDriveCache] Created directory: ${dirPath}`);
-          }
-        } catch (e) {
-          console.warn(`[MultiDriveCache] Could not create directory ${dirPath}:`, e.message);
+        if (this.onedriveFolders.length) {
+          this.onedriveFolder = this.onedriveFolders[0];
         }
-      });
+
+        // Google Drive — check common mount points
+        for (const candidate of ['G:\\My Drive', 'Z:\\My Drive', 'G:\\']) {
+          const res = await window.dataStore.listDir(candidate);
+          if (res?.ok) {
+            this.googleDriveFolder = this._join(candidate, 'WE-CRYPTO-CACHE');
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn('[MultiDriveCache] Cloud folder discovery error:', e.message);
+      }
     }
+
+    async _ensureDirectories() {
+      if (!this.isElectron || !window.dataStore?.ensureDir) return;
+      const allPaths = [...this.drivePaths, ...this.onedriveFolders];
+      if (this.googleDriveFolder) allPaths.push(this.googleDriveFolder);
+      await Promise.allSettled(allPaths.map(p => window.dataStore.ensureDir(p)));
+    }
+
+    /**
+     * Get OneDrive folder paths — sync stub kept for back-compat, populated async
+     */
+    _getOnedriveFolders() { return []; }
+
+    /**
+     * Get Google Drive folder — sync stub kept for back-compat, populated async
+     */
+    _getGoogleDriveFolder() { return null; }
 
     /**
      * Record prediction and write INSTANTLY to all drives
@@ -305,62 +277,25 @@
     }
 
     /**
-     * SYNC ALL DRIVES - SYNCHRONOUS, NO ASYNC
-     * Writes current cache to all target drives
+     * Write current cache to all target drives (fire-and-forget async)
      */
     _syncAllDrives() {
-      if (!this.isElectron || !this.fs) {
-        console.warn('[MultiDriveCache] Electron/fs not available, skipping drive sync');
-        return;
-      }
+      if (!this.isElectron || !window.dataStore?.writeFile) return;
 
       const cacheJson = JSON.stringify(this.data, null, 2);
-      let successCount = 0;
-
-      this.drivePaths.forEach(dirPath => {
-        try {
-          const filePath = this.path.join(dirPath, this.cacheFile);
-
-          // Synchronous write — BLOCKS until complete
-          this.fs.writeFileSync(filePath, cacheJson, 'utf8');
-          successCount++;
-        } catch (e) {
-          console.warn(`[MultiDriveCache] Write to ${dirPath} failed:`, e.message);
-        }
-      });
-
-      // OneDrive (all discovered profiles)
-      this.onedriveFolders.forEach(onedriveFolder => {
-        try {
-          const filePath = this.path.join(onedriveFolder, this.cacheFile);
-          this.fs.writeFileSync(filePath, cacheJson, 'utf8');
-          successCount++;
-        } catch (e) {
-          console.warn(`[MultiDriveCache] Write to OneDrive failed (${onedriveFolder}):`, e.message);
-        }
-      });
-
-      // Google Drive
-      if (this.googleDriveFolder) {
-        try {
-          const filePath = this.path.join(this.googleDriveFolder, this.cacheFile);
-          this.fs.writeFileSync(filePath, cacheJson, 'utf8');
-          successCount++;
-        } catch (e) {
-          console.warn(`[MultiDriveCache] Write to Google Drive failed:`, e.message);
-        }
-      }
+      const allPaths = [
+        ...this.drivePaths,
+        ...this.onedriveFolders,
+        ...(this.googleDriveFolder ? [this.googleDriveFolder] : []),
+      ];
 
       this.data.lastSyncTime = Date.now();
-      const targetCount = this.drivePaths.length
-        + this.onedriveFolders.length
-        + (this.googleDriveFolder ? 1 : 0);
 
-      if (successCount === 0) {
-        console.error('[MultiDriveCache] Failed to write to all drives!');
-      } else if (successCount < targetCount) {
-        console.warn(`[MultiDriveCache] Partial write: ${successCount}/${targetCount} targets`);
-      }
+      // Fire-and-forget: each write is independent
+      allPaths.forEach(dirPath => {
+        const filePath = this._join(dirPath, this.cacheFile);
+        window.dataStore.writeFile(filePath, cacheJson).catch(() => {});
+      });
     }
 
     /**
@@ -371,46 +306,38 @@
     }
 
     /**
-     * Load cache from drives (priority order)
+     * Load cache from drives (priority order) — async, called from _initAsync
      */
-    _loadFromDrives() {
-      if (!this.isElectron || !this.fs) return;
+    async _loadFromDrives() {
+      if (!this.isElectron || !window.dataStore?.readFile) return;
 
-      const allPaths = [...this.drivePaths];
-      if (this.onedriveFolders.length) allPaths.push(...this.onedriveFolders);
-      if (this.googleDriveFolder) allPaths.push(this.googleDriveFolder);
+      const allPaths = [
+        ...this.drivePaths,
+        ...this.onedriveFolders,
+        ...(this.googleDriveFolder ? [this.googleDriveFolder] : []),
+      ];
 
       for (const dirPath of allPaths) {
         try {
-          const filePath = this.path.join(dirPath, this.cacheFile);
+          const filePath = this._join(dirPath, this.cacheFile);
+          const res = await window.dataStore.readFile(filePath);
+          if (!res?.ok || !res.content) continue;
 
-          if (this.fs.existsSync(filePath)) {
-            const content = this.fs.readFileSync(filePath, 'utf8');
-            const loaded = JSON.parse(content);
+          const loaded = JSON.parse(res.content);
+          const now = Date.now();
+          const maxAge = 2 * 60 * 60 * 1000;
 
-            // Restore and filter old data
-            const now = Date.now();
-            const maxAge = 2 * 60 * 60 * 1000;  // 2 hours
+          this.data.predictions    = (loaded.predictions    || []).filter(p => now - p.timestamp < maxAge);
+          this.data.settlements    = (loaded.settlements    || []).filter(s => now - s.timestamp < maxAge);
+          this.data.candles        = (loaded.candles        || []).filter(c => now - c.timestamp < maxAge);
+          this.data.orders         = (loaded.orders         || []).filter(o => now - o.timestamp < maxAge);
+          this.data.errors         = (loaded.errors         || []).slice(-500);
+          this.data.correlations   = (loaded.correlations   || []).filter(c => now - c.timestamp < maxAge);
+          this.data.marketContexts = (loaded.marketContexts || loaded.contexts   || []).filter(c => now - c.timestamp < maxAge);
+          this.data.inferences     = (loaded.inferences     || loaded.inference  || []).filter(i => now - i.timestamp < maxAge);
 
-            this.data.predictions = (loaded.predictions || [])
-              .filter(p => now - p.timestamp < maxAge);
-            this.data.settlements = (loaded.settlements || [])
-              .filter(s => now - s.timestamp < maxAge);
-            this.data.candles = (loaded.candles || [])
-              .filter(c => now - c.timestamp < maxAge);
-            this.data.orders = (loaded.orders || [])
-              .filter(o => now - o.timestamp < maxAge);
-            this.data.errors = (loaded.errors || []).slice(-500);
-            this.data.correlations = (loaded.correlations || [])
-              .filter(c => now - c.timestamp < maxAge);
-            this.data.marketContexts = (loaded.marketContexts || loaded.contexts || [])
-              .filter(c => now - c.timestamp < maxAge);
-            this.data.inferences = (loaded.inferences || loaded.inference || [])
-              .filter(i => now - i.timestamp < maxAge);
-
-            console.log(`[MultiDriveCache] Loaded from ${dirPath}: ${this.data.predictions.length} predictions, ${this.data.settlements.length} settlements`);
-            return;  // Loaded successfully, stop looking
-          }
+          console.log(`[MultiDriveCache] Loaded from ${dirPath}: ${this.data.predictions.length} predictions`);
+          return; // First successful drive wins
         } catch (e) {
           console.warn(`[MultiDriveCache] Load from ${dirPath} failed:`, e.message);
         }

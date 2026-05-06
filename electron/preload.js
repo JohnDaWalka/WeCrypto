@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('dataStore', {
   appendLine: (filePath, line)    => ipcRenderer.invoke('data:appendLine', filePath, line),
   writeFile:  (filePath, content) => ipcRenderer.invoke('data:writeFile',  filePath, content),
   ensureDir:  (dirPath)           => ipcRenderer.invoke('data:ensureDir',  dirPath),
+  readFile:   (filePath)          => ipcRenderer.invoke('data:readFile',   filePath),
+  listDir:    (dirPath)           => ipcRenderer.invoke('data:listDir',    dirPath),
 });
 
 contextBridge.exposeInMainWorld('auditAPI', {

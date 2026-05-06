@@ -343,6 +343,20 @@ ipcMain.handle('data:writeFile', async (_, filePath, content) => {
   } catch (e) { return false; }
 });
 
+ipcMain.handle('data:readFile', async (_, filePath) => {
+  try {
+    if (!fs.existsSync(filePath)) return { ok: false, notFound: true };
+    return { ok: true, content: fs.readFileSync(filePath, 'utf8') };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('data:listDir', async (_, dirPath) => {
+  try {
+    if (!fs.existsSync(dirPath)) return { ok: false, notFound: true };
+    return { ok: true, entries: fs.readdirSync(dirPath) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ── IPC: Log network errors to COPILOT_DEBUG ──────────────────────────────────
 ipcMain.handle('network:logError', async (_, errorType, details) => {
   try {
