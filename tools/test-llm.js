@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// Load .env from repo root
+require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") });
+
 /**
  * CLI Test Harness for LLM Signal Assistant
  * 

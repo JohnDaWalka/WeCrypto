@@ -11,7 +11,7 @@ class TuningApplier {
   constructor() {
     this.changes = [];
     this.errors = [];
-    this.projectRoot = 'F:\\WECRYP';
+    this.projectRoot = path.join(__dirname);
   }
 
   run() {
