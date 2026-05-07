@@ -4997,8 +4997,8 @@
       return {
         sym: coin.sym, name: coin.name, color: coin.color, icon: coin.icon,
         price: cache?.ticker?.usd || 0,
-        signal: 'neutral', confidence: 0, score: 0,
-        source: 'loading', candleCount: 0, updatedAt: '–',
+        signal: 'neutral', confidence: 15, score: 0,
+        source: 'loading', candleCount: cache?.candles?.length || 0, updatedAt: '–',
         error: 'Insufficient data',
         indicators: {}, diagnostics: {}, volatility: { label: 'Unknown', atrPct: 0 },
         projections: {}, reversalFlags: [], scalpSetups: [],
@@ -5271,8 +5271,8 @@
             window._predictions[coin.sym] = {
               sym: coin.sym, name: coin.name, color: coin.color, icon: coin.icon,
               price: candleCache?.[coin.sym]?.ticker?.usd || 0,
-              signal: 'neutral', confidence: 0, score: 0,
-              source: 'error', candleCount: 0, updatedAt: new Date().toLocaleTimeString(),
+              signal: 'neutral', confidence: 10, score: 0,
+              source: 'error', candleCount: candleCache?.[coin.sym]?.candles?.length || 0, updatedAt: new Date().toLocaleTimeString(),
               error: cpErr.message || 'Compute error',
               indicators: {}, diagnostics: {}, volatility: { label: 'Unknown', atrPct: 0 },
               projections: {}, reversalFlags: [], scalpSetups: [],
