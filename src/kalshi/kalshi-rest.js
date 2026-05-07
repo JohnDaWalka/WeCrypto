@@ -10,7 +10,9 @@
  *   const portfolio = await client.getPortfolio();
  */
 
-const { Configuration, PortfolioApi, OrdersApi } = require('kalshi-typescript');
+// SafeGuard: kalshi-typescript is a Node.js module, only available in Electron/Node context
+const kalshiTypeScript = (typeof require !== 'undefined') ? require('kalshi-typescript') : null;
+const { Configuration, PortfolioApi, OrdersApi } = kalshiTypeScript || {};
 
 class KalshiRestClient {
   constructor(apiKeyId, privateKeyPem, environment = 'production') {

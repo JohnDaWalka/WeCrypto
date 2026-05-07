@@ -19,6 +19,7 @@
 (function() {
   'use strict';
 
+  // SafeGuard: Check if in browser (no Node.js requires needed here - it's a browser module)
   class MultiDriveCache {
     constructor() {
       this.cacheFile = 'contract-cache-2h.json';

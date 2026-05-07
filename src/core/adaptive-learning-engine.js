@@ -6,10 +6,11 @@
  * ================================================================
  */
 
-const AdaptiveTuner = require('./adaptive-tuner');
-const KalshiDebugLogParser = require('./kalshi-debug-parser');
-const SnapshotTuner = require('./snapshot-tuner');
-const RealTimeTuner = require('./realtime-tuner');
+// SafeGuard: These are Node.js modules, only load in Node.js environment
+const AdaptiveTuner = (typeof require !== 'undefined') ? require('./adaptive-tuner') : null;
+const KalshiDebugLogParser = (typeof require !== 'undefined') ? require('./kalshi-debug-parser') : null;
+const SnapshotTuner = (typeof require !== 'undefined') ? require('./snapshot-tuner') : null;
+const RealTimeTuner = (typeof require !== 'undefined') ? require('./realtime-tuner') : null;
 
 class AdaptiveLearningEngine {
   constructor() {

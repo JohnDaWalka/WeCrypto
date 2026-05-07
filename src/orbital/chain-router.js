@@ -82,20 +82,17 @@
     return 'NEUTRAL';
   }
 
-  // ── BTC: mempool.space (primary) → blockchain.info (fallback) ───
+  // ── BTC: mempool.space (primary, v1 endpoints deprecated) ───
 
   async function btcMempool() {
     const [mR, fR, hR] = await Promise.allSettled([
       getJsonAny([
         'https://mempool.space/api/mempool',
-        'https://mempool.space/api/v1/mempool',
       ]),
       getJsonAny([
-        'https://mempool.space/api/v1/fees/recommended',
         'https://mempool.space/api/fees/recommended',
       ]),
       getJsonAny([
-        'https://mempool.space/api/v1/blocks/tip/height',
         'https://mempool.space/api/blocks/tip/height',
       ]),
     ]);
@@ -126,27 +123,8 @@
   }
 
   async function btcBlockchain() {
-    const [ucR, hR] = await Promise.allSettled([
-      getText('https://blockchain.info/q/unconfirmedcount'),
-      getText('https://blockchain.info/q/getblockcount'),
-    ]);
-    const uc = ucR.status === 'fulfilled' ? parseInt(ucR.value) || 0 : 0;
-    const h  = hR.status  === 'fulfilled' ? parseInt(hR.value)  || 0 : 0;
-    if (!uc && !h) throw new Error('blockchain.info empty');
-    const score = uc > 50000 ? 0.4 : uc > 20000 ? 0.2 : 0;
-    return {
-      sym: 'BTC', label: 'Bitcoin', chain: 'Bitcoin Network',
-      source: 'blockchain.info', explorerUrl: 'https://blockchain.info',
-      metrics: [
-        { k: 'Unconfirmed',  v: uc.toLocaleString() },
-        { k: 'Block Height', v: h.toLocaleString() },
-        { k: 'Fee Fast', v: '—' }, { k: 'Fee Med', v: '—' },
-        { k: 'Fee Slow', v: '—' }, { k: 'Mempool Size', v: '—' },
-      ],
-      congestion: uc > 30000 ? 'HIGH' : uc > 10000 ? 'MED' : 'LOW',
-      score, signal: scoreLabel(score), ts: Date.now(),
-      raw: { feeFast: 0, feeMed: 0, feeSlow: 0, vsize: 0, txCount: uc },
-    };
+    console.warn('[ChainRouter] blockchain.info endpoints deprecated; mempool.space only');
+    throw new Error('blockchain.info no longer available — use mempool.space');
   }
 
   // ── ETH: Blockscout (primary) → Etherscan proxy/free (fallback) ──

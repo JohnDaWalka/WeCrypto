@@ -114,15 +114,15 @@
   // ── Fetch BTC mempool with failover ──
   async function fetchBTCMempool() {
     try {
-      // Primary: mempool.space
+      // Primary: mempool.space (v1 deprecated, use /api/mempool)
       const mempool = await Promise.race([
-        fetch('https://mempool.space/api/v1/mempool', { signal: AbortSignal.timeout(8000) })
+        fetch('https://mempool.space/api/mempool', { signal: AbortSignal.timeout(8000) })
           .then(r => r.json()),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
       ]).catch(() => null);
 
       if (mempool?.vsize && mempool?.count) {
-        const fees = await fetch('https://mempool.space/api/v1/fees/recommended', 
+        const fees = await fetch('https://mempool.space/api/fees/recommended', 
           { signal: AbortSignal.timeout(5000) })
           .then(r => r.json())
           .catch(() => null);
@@ -135,20 +135,7 @@
         };
       }
 
-      // Fallback: blockchain.info
-      const blockchainInfo = await Promise.race([
-        fetch('https://blockchain.info/q/mempooltxcount', { signal: AbortSignal.timeout(8000) })
-          .then(r => r.text()),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
-      ]).catch(() => null);
-
-      if (blockchainInfo) {
-        return {
-          mempoolTxCount: parseInt(blockchainInfo),
-          source: 'blockchain.info'
-        };
-      }
-
+      console.warn('[NetCongestion] mempool.space failed, no fallback available');
       return null;
     } catch (e) {
       console.warn('[NetCongestion] BTC mempool fetch failed:', e.message);

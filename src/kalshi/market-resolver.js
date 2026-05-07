@@ -337,11 +337,11 @@
       return null;
     }
     
-    return processKalshiSettlement(d, entry);
+    return await processKalshiSettlement(d, entry);
   }
 
   // ── Helper: Process Kalshi settlement response ───────────────────
-  function processKalshiSettlement(d, entry) {
+  async function processKalshiSettlement(d, entry) {
     const m = d?.market;
     if (!m) {
       console.error(`[Resolver] ❌ ${entry.sym} ${entry.ticker} — no 'market' key in response`, Object.keys(d));

@@ -66,7 +66,8 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
   // Authentication (RSA signature for HTTP header during WS upgrade)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  const crypto = require('crypto');
+  // Use crypto from preload (Electron context) or fallback gracefully
+  const crypto = (typeof window !== 'undefined' && window.desktopApp) ? window.desktopApp.crypto : null;
 
   /**
    * Generate RSA signature for Kalshi auth header
@@ -132,7 +133,9 @@ N0uSfQxKmjGjqHSuaUN0OLaQAXHckEFsnOTBnSvwBRCei3N4C/36
     return new Promise((resolve, reject) => {
       try {
         console.log('[KalshiWS] Connecting to', WS_URL);
-        ws = new (require('ws'))(WS_URL);
+        // Use WebSocket from preload (Electron context) or native browser WebSocket
+        const WebSocketClass = (typeof window !== 'undefined' && window.desktopApp?.ws) ? window.desktopApp.ws : WebSocket;
+        ws = new WebSocketClass(WS_URL);
 
         ws.on('open', onOpen);
         ws.on('message', onMessage);

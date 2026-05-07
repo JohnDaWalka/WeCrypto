@@ -87,14 +87,11 @@
       const [mR, fR, hR] = await Promise.allSettled([
         safeJsonAny([
           'https://mempool.space/api/mempool',
-          'https://mempool.space/api/v1/mempool',
         ]),
         safeJsonAny([
-          'https://mempool.space/api/v1/fees/recommended',
           'https://mempool.space/api/fees/recommended',
         ]),
         safeJsonAny([
-          'https://mempool.space/api/v1/blocks/tip/height',
           'https://mempool.space/api/blocks/tip/height',
         ]),
       ]);
@@ -159,49 +156,64 @@
     }
   }
 
-  // ── SOL — Solana mainnet JSON-RPC (Ankr public endpoint) ─────────────────
-  const SOL_RPC = 'https://rpc.ankr.com/solana';
+  // ── SOL — Solana mainnet JSON-RPC (multiple fallbacks) ─────────────────
+  const SOL_RPC_NODES = [
+    'https://api.mainnet-beta.solana.com',      // Public, no auth
+    'https://rpc.ankr.com/solana',               // Ankr (may require auth)
+    'https://solana-api.projectserum.com',       // Project Serum (public)
+  ];
+
   async function fetchSOL() {
-    try {
-      const [perfR, epochR] = await Promise.allSettled([
-        safeJson(SOL_RPC, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getRecentPerformanceSamples', params: [10] }),
-        }),
-        safeJson(SOL_RPC, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'getEpochInfo', params: [] }),
-        }),
-      ]);
-      const samples = perfR.status === 'fulfilled' ? (perfR.value.result || []) : [];
-      const epoch   = epochR.status === 'fulfilled' ? (epochR.value.result || {}) : {};
-      const avgTPS  = samples.length
-        ? Math.round(samples.reduce((s, x) => s + (x.numTransactions / (x.samplePeriodSecs || 60)), 0) / samples.length)
-        : 0;
-      const peakTPS = samples.length
-        ? Math.round(Math.max(...samples.map(x => x.numTransactions / (x.samplePeriodSecs || 60))))
-        : 0;
-      const score = avgTPS > 3000 ? 0.5 : avgTPS > 1500 ? 0.2 : avgTPS < 500 ? -0.2 : 0;
-      return {
-        sym: 'SOL', label: 'Solana', chain: 'Solana Mainnet',
-        source: 'Solana RPC', explorerUrl: 'https://solscan.io',
-        metrics: [
-          { k: 'Avg TPS',      v: avgTPS.toLocaleString() },
-          { k: 'Peak TPS',     v: peakTPS.toLocaleString() },
-          { k: 'Epoch',        v: epoch.epoch != null ? epoch.epoch.toLocaleString() : '—' },
-          { k: 'Slot Height',  v: epoch.absoluteSlot != null ? epoch.absoluteSlot.toLocaleString() : '—' },
-          { k: 'Slot Index',   v: epoch.slotIndex != null ? epoch.slotIndex.toLocaleString() : '—' },
-          { k: 'Samples',      v: samples.length ? `${samples.length} blocks` : '—' },
-        ],
-        congestion: avgTPS > 3000 ? 'HIGH' : avgTPS > 1500 ? 'MED' : 'LOW',
-        score, signal: scoreLabel(score), ts: Date.now(),
-      };
-    } catch (e) {
-      console.debug('[BlockchainScan] SOL fetch error:', e.message);
-      return { sym: 'SOL', label: 'Solana', chain: 'Solana Mainnet', error: e.message, metrics: [], score: 0 };
+    for (const SOL_RPC of SOL_RPC_NODES) {
+      try {
+        const [perfR, epochR] = await Promise.allSettled([
+          safeJson(SOL_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getRecentPerformanceSamples', params: [10] }),
+          }),
+          safeJson(SOL_RPC, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'getEpochInfo', params: [] }),
+          }),
+        ]);
+        const samples = perfR.status === 'fulfilled' ? (perfR.value.result || []) : [];
+        const epoch   = epochR.status === 'fulfilled' ? (epochR.value.result || {}) : {};
+        
+        // Skip this RPC if both calls failed
+        if (!samples.length && !epoch.epoch) continue;
+        
+        const avgTPS  = samples.length
+          ? Math.round(samples.reduce((s, x) => s + (x.numTransactions / (x.samplePeriodSecs || 60)), 0) / samples.length)
+          : 0;
+        const peakTPS = samples.length
+          ? Math.round(Math.max(...samples.map(x => x.numTransactions / (x.samplePeriodSecs || 60))))
+          : 0;
+        const score = avgTPS > 3000 ? 0.5 : avgTPS > 1500 ? 0.2 : avgTPS < 500 ? -0.2 : 0;
+        return {
+          sym: 'SOL', label: 'Solana', chain: 'Solana Mainnet',
+          source: `Solana RPC (${SOL_RPC.includes('ankr') ? 'Ankr' : 'Public'})`, explorerUrl: 'https://solscan.io',
+          metrics: [
+            { k: 'Avg TPS',      v: avgTPS.toLocaleString() },
+            { k: 'Peak TPS',     v: peakTPS.toLocaleString() },
+            { k: 'Epoch',        v: epoch.epoch != null ? epoch.epoch.toLocaleString() : '—' },
+            { k: 'Slot Height',  v: epoch.absoluteSlot != null ? epoch.absoluteSlot.toLocaleString() : '—' },
+            { k: 'Slot Index',   v: epoch.slotIndex != null ? epoch.slotIndex.toLocaleString() : '—' },
+            { k: 'Samples',      v: samples.length ? `${samples.length} blocks` : '—' },
+          ],
+          congestion: avgTPS > 3000 ? 'HIGH' : avgTPS > 1500 ? 'MED' : 'LOW',
+          score, signal: scoreLabel(score), ts: Date.now(),
+        };
+      } catch (e) {
+        console.debug(`[BlockchainScan] SOL RPC ${SOL_RPC} failed:`, e.message);
+        continue;  // Try next RPC
+      }
     }
+    
+    // All RPC nodes failed
+    console.warn('[BlockchainScan] SOL: All RPC nodes failed');
+    return { sym: 'SOL', label: 'Solana', chain: 'Solana Mainnet', error: 'All RPC nodes failed', metrics: [], score: 0 };
   }
 
   // ── XRP — XRPL public JSON-RPC (s1 primary, s2 fallback) ─────────────────

@@ -164,35 +164,46 @@
 
   // ── Fear & Greed Index ────────────────────────────────────────────────────
   async function getFearGreedIndex() {
-    const baseUrl = getBaseUrl();
-    const isProMode = hasApiKey();
-    const apiKey = getApiKey();
-
     try {
-      // Both trial and pro use /fear-and-greed/latest
-      const url = `${baseUrl}${CMC_FEAR_INDEX_PATH}`;
-      const headers = { 'Accept': 'application/json' };
-      if (isProMode) headers['X-CMC_PRO_API_KEY'] = apiKey;
+      // Primary: CoinMarketCap (if available)
+      const cmcUrl = `${getBaseUrl()}${CMC_FEAR_INDEX_PATH}`;
+      const cmcHeaders = { 'Accept': 'application/json' };
+      if (hasApiKey()) cmcHeaders['X-CMC_PRO_API_KEY'] = getApiKey();
 
-      const resp = await _rateLimitedFetch(url, { method: 'GET', headers });
+      try {
+        const resp = await _rateLimitedFetch(cmcUrl, { method: 'GET', headers: cmcHeaders });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.data) {
+            const data = Array.isArray(json.data) ? json.data[0] : json.data;
+            fearGreed.value = data.value || null;
+            fearGreed.label = data.value_classification || 'N/A';
+            fearGreed.ts = Date.now();
+            console.info(`[CMC] F&G: ${fearGreed.value} (${fearGreed.label}) ✓`);
+            return fearGreed;
+          }
+        }
+      } catch (cmcErr) {
+        console.debug('[CMC] F&G failed, trying Alternative.me:', cmcErr.message);
+      }
 
-      if (!resp.ok) {
-        console.warn(`[CMC ${isProMode ? 'Pro' : 'Trial'}] F&G (${resp.status})`);
+      // Fallback: Alternative.me (free, no auth required)
+      const altUrl = 'https://api.alternative.me/fng/';
+      const altResp = await fetch(altUrl, { signal: AbortSignal.timeout(5000) });
+      if (altResp.ok) {
+        const json = await altResp.json();
+        const data = json.data?.[0] || json;
+        fearGreed.value = parseInt(data.value, 10);
+        fearGreed.label = data.value_classification || 'NEUTRAL';
+        fearGreed.ts = Date.now();
+        console.info(`[Alternative.me] F&G: ${fearGreed.value} (${fearGreed.label}) ✓`);
         return fearGreed;
       }
 
-      const json = await resp.json();
-      if (!json.data) return fearGreed;
-
-      const data = Array.isArray(json.data) ? json.data[0] : json.data;
-      fearGreed.value = data.value || null;
-      fearGreed.label = data.value_classification || 'N/A';
-      fearGreed.ts = Date.now();
-
-      console.info(`[CMC ${isProMode ? 'Pro' : 'Trial'}] F&G: ${fearGreed.value} (${fearGreed.label}) ✓`);
+      console.warn('[F&G] Both CMC and Alternative.me failed');
       return fearGreed;
     } catch (e) {
-      console.warn(`[CMC ${isProMode ? 'Pro' : 'Trial'}] F&G error:`, e.message);
+      console.warn('[F&G] Error:', e.message);
       return fearGreed;
     }
   }

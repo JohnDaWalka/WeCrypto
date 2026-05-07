@@ -1484,15 +1484,16 @@
 
       const { days, bucketMs } = cfg;
       let lastErr;
+      
+      // Try CoinGecko first
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           const res = await fetch(`${GECKO_BASE}/coins/${geckoId}/market_chart?vs_currency=usd&days=${days}`);
           if (res.status === 429) {
-            // Back off and retry
             await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
             continue;
           }
-          if (!res.ok) throw new Error(`CoinGecko candles ${res.status}`);
+          if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
           const json = await res.json();
           const prices  = Array.isArray(json.prices)         ? json.prices         : [];
           const volumes = Array.isArray(json.total_volumes)  ? json.total_volumes  : [];
@@ -1524,7 +1525,43 @@
           lastErr = e;
         }
       }
-      throw lastErr || new Error(`CoinGecko candles failed for ${instrument}`);
+      
+      // Fallback: CoinCap API (free, no auth)
+      console.warn(`[Chart] CoinGecko failed (${lastErr?.message}); trying CoinCap...`);
+      try {
+        const coincapId = geckoId; // CoinCap uses similar IDs (bitcoin, ethereum, etc)
+        const res = await fetch(`https://api.coincap.io/v2/assets/${coincapId}/history?interval=d1`, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(`CoinCap ${res.status}`);
+        const json = await res.json();
+        const data = Array.isArray(json.data) ? json.data : [];
+        if (!data.length) throw new Error(`No CoinCap data for ${coincapId}`);
+
+        const buckets = new Map();
+        data.forEach(point => {
+          const ts = Number(point.time);
+          const priceVal = parseFloat(point.priceUsd);
+          if (!Number.isFinite(ts) || !Number.isFinite(priceVal) || priceVal <= 0) return;
+          const bucketStart = Math.floor(ts / bucketMs) * bucketMs;
+          const bucket = buckets.get(bucketStart) || {
+            t: bucketStart, o: priceVal, h: priceVal, l: priceVal, c: priceVal, v: 0, samples: 0,
+          };
+          bucket.h = Math.max(bucket.h, priceVal);
+          bucket.l = Math.min(bucket.l, priceVal);
+          bucket.c = priceVal;
+          bucket.samples++;
+          buckets.set(bucketStart, bucket);
+        });
+
+        const result = Array.from(buckets.values())
+          .sort((a, b) => a.t - b.t)
+          .map(b => [b.t, b.o, b.h, b.l, b.c, 0]); // CoinCap doesn't provide volume
+        if (!result.length) throw new Error('No usable CoinCap data');
+        console.info(`[Chart] CoinCap fallback success for ${instrument}`);
+        return result;
+      } catch (coinCapErr) {
+        console.error('[Chart] CoinCap fallback also failed:', coinCapErr.message);
+        throw new Error(`Both CoinGecko and CoinCap failed for ${instrument}`);
+      }
     }));
     return result;
   }

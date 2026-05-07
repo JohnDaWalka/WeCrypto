@@ -12,7 +12,12 @@
 (function () {
   'use strict';
 
-  const { ipcRenderer } = require('electron');
+  // Guard: ipcRenderer only available in Electron renderer process
+  const ipcRenderer = (typeof require !== 'undefined') ? require('electron').ipcRenderer : null;
+  if (!ipcRenderer) {
+    console.warn('[settlement-multi-drive-logger] ipcRenderer not available - module disabled');
+    return;
+  }
 
   const SYNC_TARGETS = {
     network_drives: [

@@ -1111,24 +1111,39 @@
   }
 
   async function fetchGeckoCandles(geckoId, tf = '5m') {
-    const days = tf === '1h' ? 7 : 1;
-    const bucketMs = geckoBucketMs(tf);
-    const json = await fetchGeckoJSON(`/coins/${geckoId}/market_chart?vs_currency=usd&days=${days}`);
-    const prices = Array.isArray(json.prices) ? json.prices : [];
-    const volumes = Array.isArray(json.total_volumes) ? json.total_volumes : [];
-    return bucketGeckoSeries(prices, volumes, bucketMs);
+    try {
+      const days = tf === '1h' ? 7 : 1;
+      const bucketMs = geckoBucketMs(tf);
+      const json = await fetchGeckoJSON(`/coins/${geckoId}/market_chart?vs_currency=usd&days=${days}`);
+      const prices = Array.isArray(json.prices) ? json.prices : [];
+      const volumes = Array.isArray(json.total_volumes) ? json.total_volumes : [];
+      return bucketGeckoSeries(prices, volumes, bucketMs);
+    } catch (e) {
+      console.warn(`[Gecko] market_chart failed for ${geckoId}:`, e.message);
+      return [];  // Return empty candles instead of failing
+    }
   }
 
   async function fetchGeckoTicker(geckoId) {
-    const json = await fetchGeckoJSON(`/simple/price?ids=${geckoId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`);
-    return json[geckoId];
+    try {
+      const json = await fetchGeckoJSON(`/simple/price?ids=${geckoId}&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true`);
+      return json[geckoId];
+    } catch (e) {
+      console.warn(`[Gecko] simple/price failed for ${geckoId}:`, e.message);
+      return null;
+    }
   }
 
   async function fetchGeckoMaxHistory(geckoId) {
-    const json = await fetchGeckoJSON(`/coins/${geckoId}/market_chart?vs_currency=usd&days=max`, { minGapMs: 1400, retries: 3 });
-    const prices = Array.isArray(json.prices) ? json.prices : [];
-    const volumes = Array.isArray(json.total_volumes) ? json.total_volumes : [];
-    return bucketGeckoSeries(prices, volumes, 24 * 60 * 60 * 1000);
+    try {
+      const json = await fetchGeckoJSON(`/coins/${geckoId}/market_chart?vs_currency=usd&days=max`, { minGapMs: 1400, retries: 3 });
+      const prices = Array.isArray(json.prices) ? json.prices : [];
+      const volumes = Array.isArray(json.total_volumes) ? json.total_volumes : [];
+      return bucketGeckoSeries(prices, volumes, 24 * 60 * 60 * 1000);
+    } catch (e) {
+      console.warn(`[Gecko] market_chart?days=max failed for ${geckoId}:`, e.message);
+      return [];  // Return empty history instead of failing
+    }
   }
 
   async function fetchBINCandles(sym, interval = '1m', limit = 180) {
@@ -3586,7 +3601,28 @@
       return aligns ? (1 + strength * maxEffect) : (1 - strength * maxEffect * 0.65);
     })();
     const _sessMult = 1.0; // session multipliers removed — crypto is 24/7
-    const score = clamp(rawComposite * 1.6 * adxGate * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult, -1, 1);
+    
+    // CRITICAL FIX 2026-05-06: Detect bearish divergence (uptrend + negative momentum = reversal imminent)
+    // Signal: price trending up but momentum falling = exhaustion = reverse is coming
+    // Use REAL-TIME CFM momentum (from window._cfm) not stale 6-bar ROC — CFM has live tick momentum
+    // SAFE: Fallback to candle ROC if CFM not available (prevents crashes if CFM loads late)
+    let liveRealtimeMomentum = mom;  // Start with candle ROC as safe default
+    try {
+      const cfmData = window._cfm?.[options.sym?.toUpperCase()];
+      if (cfmData && typeof cfmData.momentum === 'number') {
+        liveRealtimeMomentum = cfmData.momentum;  // Override with real-time CFM only if valid
+      }
+    } catch (e) {
+      // Silently fall back to mom if CFM access fails — don't crash
+    }
+    
+    const bullishSignal = rawComposite > 0.05;  // Model says UP
+    const bearishMomentum = liveRealtimeMomentum < -0.02;  // But momentum is falling
+    const bearishDivergence = bullishSignal && bearishMomentum;
+    
+    const divergenceSuppression = bearishDivergence ? 0.15 : 1.0;  // Kill 85% of signal if divergence detected
+    
+    const score = clamp(rawComposite * 1.6 * adxGate * divergenceSuppression * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult, -1, 1);
     const agreement = summarizeAgreement(Object.fromEntries(activeKeys.map(key => [key, signalVector[key]])));
     const coreAgreement = summarizeAgreement(Object.fromEntries(CORE_SIGNAL_KEYS.map(key => [key, signalVector[key]])));
 
@@ -4965,6 +5001,7 @@
       includeSetups: true,
       sym: coin.sym,
       candles1m: cache.candles1m || null,  // PATCH1.11: wall absorption needs 1m data
+      horizon: 15,  // ★ H15 TUNING: Apply h15-specific indicator weights (2026-05-06)
     });
     const calibrated = applyLiveCalibration(baseModel, backtest);
     const fastTiming = buildFastTimingModel(cache.candles1m, coin.sym);

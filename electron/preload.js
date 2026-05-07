@@ -1,7 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const crypto = require('crypto');
+const ws = require('ws');
 
 contextBridge.exposeInMainWorld('desktopApp', {
   isElectron: true,
+  // ✅ Expose Node.js modules to renderer safely
+  crypto: crypto,
+  ws: ws,
   proxyPort:             () => ipcRenderer.invoke('proxy:port'),
   loadKalshiCredentials: () => ipcRenderer.invoke('kalshi:loadCredentials'),
   loadBirdeyeApiKey:     () => ipcRenderer.invoke('birdeye:loadApiKey'),

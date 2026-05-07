@@ -96,13 +96,26 @@
   }
 
   /**
-   * Main entry decision: CFM + Sustenance filter
+   * Main entry decision: CFM + Sustenance filter + MODEL SCORE GATE
    * 
    * @param {object} signal - from analyzeDivergence()
    * @param {object} recommendation - from KalshiSustenance.getRecommendation()
+   * @param {number} modelConfidence - model's confidence (0-100) — MUST be >=20 to trade
    * @returns {object} decision
    */
-  function makeEntryDecision(signal, recommendation) {
+  function makeEntryDecision(signal, recommendation, modelConfidence = 0) {
+    // CRITICAL FIX 2026-05-06: Reject if model confidence too low, regardless of edge
+    // (prevents Kalshi odds from overriding weak model signals)
+    const MIN_MODEL_CONFIDENCE = 20; // 20% — only trade if model has ANY conviction
+    if (modelConfidence < MIN_MODEL_CONFIDENCE) {
+      return {
+        trade: false,
+        reason: `model_confidence_too_low: ${modelConfidence}% (need >=${MIN_MODEL_CONFIDENCE}%)`,
+        modelConfidence,
+        edge: signal.edge
+      };
+    }
+    
     // Reject if no divergence
     if (!signal.shouldExecute) {
       return {
