@@ -267,6 +267,63 @@ function waitForProxy(maxMs = 5000, pollMs = 150) {
 // ── IPC: proxy port discovery ─────────────────────────────────────────────
 ipcMain.handle('proxy:port', () => proxyPort);
 
+// ── IPC: Pyth Lazer handlers ──────────────────────────────────────────────
+ipcMain.handle('pyth:getCandles', async (_, { symbol, resolution, from, to }) => {
+  try {
+    if (!pythLazerClient) {
+      return { success: false, error: 'Pyth Lazer client not initialized' };
+    }
+    
+    // Use Pyth History API to fetch candles
+    const historyUrl = `https://api.dourolabs.app/v1/ohlc?instrument_name=${symbol}&resolution=${resolution}&start_time=${from}&end_time=${to}`;
+    const response = await fetch(historyUrl);
+    
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+    
+    const data = await response.json();
+    const candles = data.ohlc || [];
+    
+    return {
+      success: true,
+      candles: candles.map(c => ({
+        t: c.timestamp,
+        o: c.open,
+        h: c.high,
+        l: c.low,
+        c: c.close,
+        v: c.volume,
+      }))
+    };
+  } catch (e) {
+    console.warn('[PythLazer] getCandles failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('pyth:getProxyLatest', async (_, feedIds) => {
+  try {
+    // Use Pyth Lazer proxy REST (no-auth) for latest prices
+    const url = `https://pyth-lazer-proxy-0.dourolabs.app/v1/latest_price?price_feed_ids=${feedIds.join(',')}`;
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+    
+    const data = await response.json();
+    
+    return {
+      success: true,
+      prices: data.prices || []
+    };
+  } catch (e) {
+    console.warn('[PythLazer] getProxyLatest failed:', e.message);
+    return { success: false, error: e.message };
+  }
+});
+
 // ── IPC: Kalshi credentials loader ─────────────────────────────────────────
 ipcMain.handle('kalshi:loadCredentials', async () => {
   try {

@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('auditAPI', {
 });
 
 contextBridge.exposeInMainWorld('pythLazer', {
-  onTickers:  (cb) => ipcRenderer.on('pyth:tickers', (_e, data) => cb(data)),
-  offTickers: ()   => ipcRenderer.removeAllListeners('pyth:tickers'),
+  onTickers:    (cb) => ipcRenderer.on('pyth:tickers', (_e, data) => cb(data)),
+  offTickers:   ()   => ipcRenderer.removeAllListeners('pyth:tickers'),
+  getCandles:   (opts) => ipcRenderer.invoke('pyth:getCandles', opts),
+  getProxyLatest: (feedIds) => ipcRenderer.invoke('pyth:getProxyLatest', feedIds),
 });

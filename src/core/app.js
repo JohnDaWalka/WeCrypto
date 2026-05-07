@@ -1251,6 +1251,50 @@
 
   // ---- Pyth Network — decentralized oracle, 33 coins, sub-second, no geo-block ----
   async function fetchPythTickers() {
+    // ★ NEW: Try Pyth Lazer WS stream first (sub-100ms, from IPC)
+    if (window.pythLazer?.onTickers) {
+      try {
+        let received = false;
+        return await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            if (!received) reject(new Error('Pyth Lazer WS timeout'));
+          }, 3000);
+          
+          window.pythLazer.onTickers((prices) => {
+            clearTimeout(timeout);
+            received = true;
+            const result = [];
+            for (const [instr, data] of Object.entries(prices)) {
+              result.push({
+                instrument_name: instr,
+                last: data.last,
+                best_bid: data.best_bid,
+                best_ask: data.best_ask,
+                high: data.last,
+                low: data.last,
+                change: 0,
+                volume: 0,
+                volume_value: 0,
+                timestamp: data.timestamp || Date.now(),
+                source: 'pyth-lazer',
+              });
+            }
+            resolve(result);
+          });
+        });
+      } catch (e) {
+        console.warn('[PythTickers] WS stream failed:', e.message);
+      }
+    }
+    
+    // ★ FALLBACK 1: Try Lazer proxy REST (no-auth, faster than Hermes)
+    try {
+      return await fetchPythLazerProxyTickers();
+    } catch (e) {
+      console.warn('[PythTickers] Lazer proxy failed:', e.message);
+    }
+    
+    // ★ FALLBACK 2: Pyth Hermes (standard, wider coin coverage)
     const feedIds = Object.values(PYTH_FEEDS);
     const params = feedIds.map(id => `ids[]=${id}`).join('&');
     const res = await fetchWithTimeout(`${PYTH_HERMES}/v2/updates/price/latest?${params}`, 8000);
@@ -1631,6 +1675,32 @@
     const d    = await r.json();
     if (d.s !== 'ok' || !d.c?.length) throw new Error(`Pyth History no data (s=${d.s})`);
     return d.t.map((ts, i) => [ts * 1000, +d.o[i], +d.h[i], +d.l[i], +d.c[i], +(d.v?.[i] ?? 0)]);
+  }
+
+  // ---- Pyth Lazer candles via IPC (sub-100ms latency, official OHLC) ----
+  async function fetchPythCandles(symbol, resolution, from, to) {
+    try {
+      if (!window.pythLazer?.getCandles) {
+        throw new Error('Pyth Lazer IPC not available');
+      }
+      
+      const result = await window.pythLazer.getCandles({
+        symbol,
+        resolution,
+        from: Math.floor(from / 1000),  // convert ms to seconds
+        to: Math.floor(to / 1000),
+      });
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Pyth Lazer failed');
+      }
+      
+      // Transform to [timestamp, o, h, l, c, v] format
+      return result.candles.map(c => [c.t * 1000, c.o, c.h, c.l, c.c, c.v || 0]);
+    } catch (e) {
+      console.warn(`[PythLazer] fetchPythCandles failed for ${symbol}:`, e.message);
+      throw e;
+    }
   }
 
   // ================================================================
