@@ -12,16 +12,30 @@
 (function () {
   'use strict';
 
-  const ALCHEMY_BASE = 'https://api.alchemy.com/v2';
   const ALCHEMY_KEY = localStorage.getItem('alchemyApiKey') ||
                       window._env?.ALCHEMY_KEY ||
-                      '';
+                      'UNcUYppLXPl4s0jAkQe_J';
 
-  // Multi-chain support
+  // Multi-chain Alchemy endpoints (mainnet + devnet/testnet options)
+  const ALCHEMY_ENDPOINTS = {
+    ETH: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    ETH_SEPOLIA: `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    SOL: `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    SOL_DEVNET: `https://solana-devnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    BNB: `https://bnb-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    BASE: `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    BASE_SEPOLIA: `https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+    HYPE: `https://hyperliquid-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+  };
+
+  // Multi-chain support with configurable endpoints
   const CHAINS = {
-    ETH: { name: 'ethereum', net: 'eth-mainnet' },
-    BNB: { name: 'bsc', net: 'bnb-mainnet' },
-    BTC: { name: 'bitcoin', net: null }, // BTC uses different APIs
+    ETH: { name: 'ethereum', endpoint: ALCHEMY_ENDPOINTS.ETH, devnet: ALCHEMY_ENDPOINTS.ETH_SEPOLIA },
+    SOL: { name: 'solana', endpoint: ALCHEMY_ENDPOINTS.SOL, devnet: ALCHEMY_ENDPOINTS.SOL_DEVNET },
+    BNB: { name: 'bsc', endpoint: ALCHEMY_ENDPOINTS.BNB },
+    BASE: { name: 'base', endpoint: ALCHEMY_ENDPOINTS.BASE, devnet: ALCHEMY_ENDPOINTS.BASE_SEPOLIA },
+    HYPE: { name: 'hyperliquid', endpoint: ALCHEMY_ENDPOINTS.HYPE },
+    BTC: { name: 'bitcoin', endpoint: null }, // BTC uses different APIs
   };
 
   // ── In-memory tracking ────────────────────────────────────────
@@ -51,14 +65,20 @@
 
   // ── Fetch wallet portfolio via Alchemy ──────────────────────
 
-  async function _fetchPortfolioAlchemy(addr, chainNet) {
-    if (!ALCHEMY_KEY || !chainNet) return null;
+  async function _fetchPortfolioAlchemy(addr, chain, useDevnet = false) {
+    const chainConfig = CHAINS[chain];
+    if (!chainConfig) return null;
+
+    // Select endpoint (mainnet or devnet)
+    const endpoint = useDevnet && chainConfig.devnet 
+      ? chainConfig.devnet 
+      : chainConfig.endpoint;
+
+    if (!endpoint) return null;
 
     try {
-      const url = `${ALCHEMY_BASE}/${ALCHEMY_KEY}/`;
-
       // Get token balances
-      const balRes = await fetch(`${url}getTokenBalances`, {
+      const balRes = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -79,7 +99,7 @@
       _markOk('alchemy');
 
       // Get transaction history
-      const txRes = await fetch(`${url}getAssetTransfers`, {
+      const txRes = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -100,11 +120,12 @@
         balances: balData.result?.tokenBalances || [],
         transfers: txData.result?.transfers || [],
         source: 'alchemy',
+        network: useDevnet ? 'devnet' : 'mainnet',
       };
 
     } catch (err) {
       _markFail('alchemy');
-      console.error(`[PortfolioIntel] Alchemy fetch failed:`, err.message);
+      console.error(`[PortfolioIntel] Alchemy fetch (${chain} ${useDevnet ? 'devnet' : 'mainnet'}) failed:`, err.message);
       return null;
     }
   }
