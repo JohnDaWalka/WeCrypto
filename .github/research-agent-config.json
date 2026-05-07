@@ -1,0 +1,101 @@
+{
+  "agent": {
+    "name": "blockchain-research-engine",
+    "description": "Continuous cutting-edge research for Kalshi 15m contracts",
+    "version": "1.0.0",
+    "mode": "background",
+    "updateInterval": 300000
+  },
+  "research_topics": [
+    {
+      "category": "on-chain-data",
+      "focus": ["MEV detection", "transaction flow analysis", "whale movements", "smart contract interactions"],
+      "sources": [
+        "https://eigenphi.io/",
+        "https://www.nansen.ai/",
+        "https://www.glassnode.com/",
+        "https://dune.com/home"
+      ],
+      "frequency": "realtime"
+    },
+    {
+      "category": "prediction-models",
+      "focus": ["emerging ML techniques", "transformer models for price prediction", "reinforcement learning strategies", "ensemble methods"],
+      "sources": [
+        "https://arxiv.org/list/q-fin/recent",
+        "https://github.com/topics/machine-learning-trading",
+        "https://paperswithcode.com/task/time-series-prediction"
+      ],
+      "frequency": "daily"
+    },
+    {
+      "category": "kalshi-contracts",
+      "focus": ["contract patterns", "settlement mechanisms", "market dynamics", "hidden liquidity"],
+      "sources": [
+        "https://kalshi.com/blog",
+        "https://docs.kalshi.com/",
+        "https://forum.kalshi.com/"
+      ],
+      "frequency": "hourly"
+    },
+    {
+      "category": "blockchain-infrastructure",
+      "focus": ["network upgrades", "chain health metrics", "new L2s", "interoperability", "staking/validator dynamics"],
+      "sources": [
+        "https://ethereum.org/en/upgrades/",
+        "https://chain.link/blog",
+        "https://mirror.xyz/",
+        "https://messari.io/",
+        "https://blog.lido.fi/"
+      ],
+      "frequency": "hourly"
+    },
+    {
+      "category": "market-microstructure",
+      "focus": ["volatility surface changes", "order book dynamics", "spread analysis", "liquidity pools"],
+      "sources": [
+        "https://www.theblock.co/research",
+        "https://santiment.net/",
+        "https://api.coingecko.com/",
+        "https://api.covalenthq.com/"
+      ],
+      "frequency": "realtime"
+    }
+  ],
+  "beta_features": [
+    "pyth-lazer-oracles",
+    "hermes-mev-events",
+    "solana-raydium-amm",
+    "ethereum-mempool-inspection",
+    "binance-futures-macro",
+    "hyperliquid-perpetuals-sentiment",
+    "drift-protocol-flows",
+    "jupiter-routing-optimization"
+  ],
+  "output_integration": {
+    "feeds": [
+      "src/feeds/wallet-cache.js",
+      "src/feeds/network-congestion-engine.js",
+      "src/feeds/coinmarketcap-pro-feed.js"
+    ],
+    "prediction_engine": "src/core/predictions.js",
+    "app_core": "src/core/app.js",
+    "storage": "src/core/multi-drive-cache.js"
+  },
+  "security": {
+    "use_env_vars": true,
+    "no_hardcoded_credentials": true,
+    "api_key_env_names": [
+      "GEMINI_API_KEY",
+      "OPENAI_API_KEY",
+      "KALSHI_API_KEY",
+      "PYTH_API_KEY"
+    ]
+  },
+  "output_format": {
+    "insights": "JSON",
+    "metrics": "realtime-stream",
+    "recommendations": "actionable-code-suggestions",
+    "frequency": "every-5-minutes"
+  }
+}
