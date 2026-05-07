@@ -672,6 +672,77 @@
     //     ]
     //   });
     chain: ChainCache,
+
+    // ── Whale & DEX integration ──────────────────────────────
+    /**
+     * Get whale transactions for a wallet/chain.
+     * Requires whale-alert-monitor.js loaded.
+     */
+    async getWhales(wallet, chain = 'ETH') {
+      if (!window.WhaleAlertMonitor) {
+        throw new Error('WhaleAlertMonitor not loaded');
+      }
+      const result = await window.WhaleAlertMonitor.getWhaleTransactions(chain);
+      return result.txs.filter(t => 
+        (t.from?.toLowerCase?.() === wallet.toLowerCase()) ||
+        (t.to?.toLowerCase?.() === wallet.toLowerCase())
+      );
+    },
+
+    /**
+     * Get DEX swaps for a wallet.
+     * Requires dex-activity-monitor.js loaded.
+     */
+    async getSwaps(wallet, chain = 'ETH') {
+      if (!window.DexActivityMonitor) {
+        throw new Error('DexActivityMonitor not loaded');
+      }
+      const result = await window.DexActivityMonitor.getSwaps(chain);
+      return result.swaps.filter(s =>
+        s.user?.toLowerCase?.() === wallet.toLowerCase()
+      );
+    },
+
+    /**
+     * Get full portfolio analysis for a wallet.
+     * Requires portfolio-intel.js loaded.
+     */
+    async analyzePortfolio(wallet, chains = ['ETH', 'BNB']) {
+      if (!window.PortfolioIntel) {
+        throw new Error('PortfolioIntel not loaded');
+      }
+      return window.PortfolioIntel.analyze([wallet], { chains });
+    },
+
+    /**
+     * Start real-time monitoring of a wallet across all intel sources.
+     */
+    trackPortfolio(wallet, callback, chains = ['ETH', 'BNB']) {
+      if (!window.PortfolioIntel) {
+        throw new Error('PortfolioIntel not loaded');
+      }
+      return window.PortfolioIntel.trackWallet(wallet, callback, chains);
+    },
+
+    /**
+     * Stop tracking a wallet.
+     */
+    stopTracking(wallet) {
+      if (window.PortfolioIntel) {
+        window.PortfolioIntel.untrackWallet(wallet);
+      }
+    },
+
+    /**
+     * Combined stats across all intel sources.
+     */
+    statsIntel() {
+      return {
+        whales: window.WhaleAlertMonitor?.stats?.() || {},
+        dex: window.DexActivityMonitor?.stats?.() || {},
+        portfolio: window.PortfolioIntel?.stats?.() || {},
+      };
+    },
   };
 
   window.WalletCache = WalletCache;
