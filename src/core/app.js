@@ -2273,7 +2273,7 @@
   // before accepting a direction change. A single wick candle is ignored.
   if (!window._predLock) window._predLock = {};
   const _BUCKET_MS    = 15 * 60 * 1000;
-  const MIN_FLIP_STREAK = 3; // 3 × 15s refresh = 45s of sustained opposing signal required
+  const MIN_FLIP_STREAK = 5; // 5 × 15s refresh = 75s of sustained opposing signal required (no fast-path)
 
   // Call after every PredictionEngine.runAll() to capture the current signal per coin
   function snapshotPredictions() {
@@ -2508,10 +2508,9 @@
       }
     });
 
-    // ── MACRO MARKET CONSENSUS EXIT ─────────────────────────────────────────
-    // When the whole market moves together (3+ coins in the same direction),
-    // fire exit alerts immediately for any locked predictions that oppose the
-    // macro move — don't wait for MIN_FLIP_STREAK.
+    // ── MACRO MARKET CONSENSUS EXIT (DISABLED) ──────────────────────────────────
+    // Was firing too early, killing trades. Re-enable after tuning thresholds.
+    /*
     try {
       const marketDirs = PREDICTION_COINS.map(c => {
         const p = preds[c.sym];
@@ -2547,6 +2546,7 @@
         });
       }
     } catch (_macroErr) { /* non-critical */ }
+    */
 
     if (window._contractCache?.flushSync) {
       try { window._contractCache.flushSync(); } catch (_) {}
@@ -9391,11 +9391,16 @@
   }
 
   // ── CFM Early Exit Toast ────────────────────────────────────────
+  // DISABLED: cfm:earlyExit listener
+  // Early exit toasts were firing too frequently (flips + macro moves in last 2-4 min)
+  // Re-enable after stabilizing MIN_FLIP_STREAK and macro consensus thresholds
+  /*
   window.addEventListener('cfm:earlyExit', (e) => {
     const { sym, reason, strength, prediction, type } = e.detail || {};
     if (!sym) return;
     showEarlyExitToast(sym, prediction, reason, strength, type, e.detail || {});
   });
+  */
 
   // ── Shell Router Veto Toasts ────────────────────────────────────
   window.addEventListener('shell:vetoConfirmed', (e) => {
