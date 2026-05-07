@@ -18,6 +18,7 @@
 
   // Multi-chain Alchemy endpoints (mainnet + devnet/testnet options)
   const ALCHEMY_ENDPOINTS = {
+    BTC: `https://bitcoin-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
     ETH: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
     ETH_SEPOLIA: `https://eth-sepolia.g.alchemy.com/v2/${ALCHEMY_KEY}`,
     SOL: `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
@@ -30,12 +31,12 @@
 
   // Multi-chain support with configurable endpoints
   const CHAINS = {
+    BTC: { name: 'bitcoin', endpoint: ALCHEMY_ENDPOINTS.BTC },
     ETH: { name: 'ethereum', endpoint: ALCHEMY_ENDPOINTS.ETH, devnet: ALCHEMY_ENDPOINTS.ETH_SEPOLIA },
     SOL: { name: 'solana', endpoint: ALCHEMY_ENDPOINTS.SOL, devnet: ALCHEMY_ENDPOINTS.SOL_DEVNET },
     BNB: { name: 'bsc', endpoint: ALCHEMY_ENDPOINTS.BNB },
     BASE: { name: 'base', endpoint: ALCHEMY_ENDPOINTS.BASE, devnet: ALCHEMY_ENDPOINTS.BASE_SEPOLIA },
     HYPE: { name: 'hyperliquid', endpoint: ALCHEMY_ENDPOINTS.HYPE },
-    BTC: { name: 'bitcoin', endpoint: null }, // BTC uses different APIs
   };
 
   // ── In-memory tracking ────────────────────────────────────────
