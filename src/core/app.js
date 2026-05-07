@@ -1726,7 +1726,7 @@
   // 15M contract on their API. This fires PredictionMarkets.fetchAll() every 15s
   // for up to 5 minutes and stops the moment all 7 coins have a live ticker.
   // Without this, the UI can lag 4-6 minutes waiting on the normal 30s poll.
-  const _CONTRACT_SYMS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
+  const _CONTRACT_SYMS = ['BTC', 'ETH', 'XRP', 'DOGE', 'BNB'];  // ★ REMOVED HYPE (48%) and SOL (52%) per backtest
   // Delays (seconds) between each successive retry attempt after the boundary pulse
   const _CONTRACT_RETRY_DELAYS = [15, 15, 15, 15, 30, 30, 30, 60, 60]; // ~T+4.5 min total
 
@@ -1966,7 +1966,7 @@
       // ── ACTIVATE CMC POLLING ON FIRST APP STARTUP ────────────────
       if (window._cmcProFeed && typeof window._cmcProFeed.startPolling === 'function' && !window._cmcPollingStarted) {
         try {
-          window._cmcProFeed.startPolling(['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'], 60000);
+          window._cmcProFeed.startPolling(['BTC', 'ETH', 'XRP', 'DOGE', 'BNB'], 60000);  // ★ REMOVED HYPE and SOL per backtest
           window._cmcPollingStarted = true;
           console.log('[App] ✅ CMC polling activated (60-second interval)');
         } catch (cmcErr) {
@@ -3337,7 +3337,7 @@
     const pm     = window.PredictionMarkets?.getAll() || {};
     const pred   = window.PredictionEngine?.getAll() || {};
     const snipes = window.PredictionMarkets?.getSnipes?.() || [];
-    const COINS_5M = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
+    const COINS_5M = ['BTC', 'ETH', 'XRP', 'DOGE', 'BNB'];  // ★ REMOVED HYPE (48%) and SOL (52%)
 
     function _pct(v) {
       if (v == null) return '—';

@@ -137,8 +137,8 @@
     const s = sR.status === 'fulfilled' ? sR.value : null;
     const g = gR.status === 'fulfilled' ? gR.value : null;
     
-    // Validate responses aren't null
-    if (!s || !g || (!s.transactions_today && !g.average && !g.medium)) {
+    // Validate responses aren't both null OR both missing critical fields
+    if ((!s && !g) || (!s && !g.average && !g.medium) || (!g && !s.transactions_today)) {
       throw new Error('Blockscout ETH empty');
     }
     
@@ -274,7 +274,7 @@
     const g = gR.status === 'fulfilled' ? gR.value : {};
     
     // Validate we have actual data, not just empty objects
-    if (!s || !g || (!s.transactions_today && !g.average && !g.medium)) {
+    if ((!s || !Object.keys(s).length) && (!g || !Object.keys(g).length)) {
       throw new Error('Blockscout BSC empty');
     }
     

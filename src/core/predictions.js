@@ -42,9 +42,9 @@
   const DEFAULT_SHORT_HORIZON_MIN = 15;  // Primary target: next 15-min candle session (Kalshi contracts)
   const SHORT_HORIZON_WEIGHTS = { 1: 0.60, 5: 0.80, 10: 0.90, 15: 1.40 };
   const SHORT_HORIZON_FILTERS = {
-    h1: { entryThreshold: 0.08, minAgreement: 0.50 },  // ★ CONFIRMATORY: Use to validate h15 direction
-    h5: { entryThreshold: 0.12, minAgreement: 0.54 },  // ★ CONFIRMATORY: Early-stage direction confirmation
-    h10: { entryThreshold: 0.16, minAgreement: 0.58 }, // ★ CONFIRMATORY: Pre-settlement signal
+    h1: { entryThreshold: 0.16, minAgreement: 0.62 },  // ★ RAISED: Filter out noise at 1min (was 0.08)
+    h5: { entryThreshold: 0.18, minAgreement: 0.64 },  // ★ RAISED: Filter out noise at 5min (was 0.12)
+    h10: { entryThreshold: 0.16, minAgreement: 0.58 }, // ★ Pre-settlement signal
     h15: { entryThreshold: 0.10, minAgreement: 0.65 }, // ★ PRIMARY TARGET: Kalshi contract settlement
   };
 
