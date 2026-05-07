@@ -116,7 +116,10 @@
     }
 
     // Legacy fallback: direct fetch with rate limiting
-    if (_rateLimitUntil > Date.now()) return null; // global back-off active
+    if (_rateLimitUntil > Date.now()) {
+      console.warn(`[PredictionMarkets] Rate limited until ${new Date(_rateLimitUntil).toISOString()}`);
+      return null; // global back-off active
+    }
     try {
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       if (res.status === 429 || res.status === 503) {
@@ -131,9 +134,15 @@
         return attempt < 2 ? kalshiFetch(url, attempt + 1) : null;
       }
       _consecutive429 = 0; // reset on success
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.error(`[PredictionMarkets] Fetch failed HTTP ${res.status} for ${url}`);
+        return null;
+      }
       return res.json();
-    } catch { return null; }
+    } catch (err) {
+      console.error(`[PredictionMarkets] Fetch error for ${url}:`, err.message);
+      return null;
+    }
   }
 
   // ---- Generic Kalshi series fetch ------------------------------------
@@ -142,11 +151,18 @@
   async function fetchKalshiSeriesForSym(series) {
     // Fetch up to 5 open markets, pick the one closing soonest (nearest-expiry signal)
     let d = await kalshiFetch(`${KALSHI_BASE}/markets?series_ticker=${series}&status=open&limit=5`);
+    if (!d) {
+      console.warn(`[PredictionMarkets] No data returned from Kalshi for series ${series}`);
+      return null;
+    }
     const now = Date.now();
     let m = (d?.markets || [])
       .filter(mk => { const t = new Date(mk.close_time).getTime(); return Number.isFinite(t) && t > now + 30_000; })
       .sort((a, b) => new Date(a.close_time) - new Date(b.close_time))[0] || null;
-    if (!m) return null;
+    if (!m) {
+      console.warn(`[PredictionMarkets] No open markets found for series ${series}. Markets available: ${d?.markets?.length || 0}`);
+      return null;
+    }
 
     const yesAsk = parseFloat(m.yes_ask_dollars  || 0);
     const yesBid = parseFloat(m.yes_bid_dollars  || 0);
@@ -538,6 +554,15 @@
     if (fetch5M) {
       const k5m = await fetchKalshi5M();
       if (Object.keys(k5m).length > 0) _k5mCache = k5m;
+    }
+
+    // Debug: log what we got from Kalshi 15M
+    const k15Coins = Object.entries(kalshi15m).filter(([sym, data]) => data !== null).map(([sym]) => sym);
+    const k15Empty = Object.entries(kalshi15m).filter(([sym, data]) => data === null).map(([sym]) => sym);
+    if (k15Coins.length === 0) {
+      console.error(`[PredictionMarkets] CRITICAL: No Kalshi 15M contracts loaded. Empty coins: ${k15Empty.join(', ')}`);
+    } else {
+      console.log(`[PredictionMarkets] Loaded Kalshi 15M for: ${k15Coins.join(', ')} (failed: ${k15Empty.join(', ')})`);
     }
 
     const next = {};
