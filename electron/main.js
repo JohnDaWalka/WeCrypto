@@ -46,77 +46,109 @@ async function startPythLazerService(win) {
     console.warn('[PythLazer] PYTH_LAZER_TOKEN not set — Lazer WS disabled');
     return;
   }
-  try {
-    const { PythLazerClient } = require('@pythnetwork/pyth-lazer-sdk');
-    pythLazerClient = await PythLazerClient.create({
-      token,
-      webSocketPoolConfig: {
-        urls: [
-          'wss://pyth-lazer-0.dourolabs.app/v1/stream',
-          'wss://pyth-lazer-1.dourolabs.app/v1/stream',
-          'wss://pyth-lazer-2.dourolabs.app/v1/stream',
-        ],
-      },
-    });
 
-    pythLazerClient.subscribe({
-      type:               'subscribe',
-      subscriptionId:     1,
-      priceFeedIds:       LAZER_FEED_IDS,
-      properties:         ['price','bestBidPrice','bestAskPrice','confidence','exponent',
-                           'publisherCount','feedUpdateTimestamp','marketSession',
-                           'fundingRate','fundingTimestamp','fundingRateInterval'],
-      formats:            ['solana','leUnsigned','leEcdsa','evm'],
-      channel:            'real_time',
-      deliveryFormat:     'json',
-      jsonBinaryEncoding: 'hex',
-      parsed:             true,
-      ignoreInvalidFeeds: true,
-    });
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY_MS = 2000;
+  let retries = 0;
 
-    let lastPush = 0;
-    pythLazerClient.addMessageListener((message) => {
-      if (message.type !== 'json') return;
-      const feeds = message.value?.parsed?.priceFeeds;
-      if (!feeds?.length) return;
-      const now = Date.now();
-      if (now - lastPush < 800) return;    // ~1 push/sec max
-      lastPush = now;
+  async function createClientWithRetry() {
+    try {
+      retries++;
+      console.log(`[PythLazer] Connecting (attempt ${retries}/${MAX_RETRIES})...`);
 
-      const prices = {};
-      for (const f of feeds) {
-        const instr = LAZER_ID_MAP[f.priceFeedId];
-        if (!instr) continue;              // skip unmapped feeds (13, 110)
-        const exp   = f.exponent ?? -8;
-        const scale = Math.pow(10, exp);
-        const px    = Number(f.price) * scale;
-        if (!px || px <= 0 || isNaN(px)) continue;
-        prices[instr] = {
-          instrument_name:     instr,
-          last:                px,
-          best_bid:            f.bestBidPrice   != null ? Number(f.bestBidPrice)   * scale : null,
-          best_ask:            f.bestAskPrice   != null ? Number(f.bestAskPrice)   * scale : null,
-          confidence:          f.confidence     != null ? Number(f.confidence)     * scale : null,
-          publisherCount:      f.publisherCount,
-          marketSession:       f.marketSession,
-          feedUpdateTimestamp: f.feedUpdateTimestamp,
-          source:              'pyth-lazer',
-          timestamp:           now,
-        };
+      const { PythLazerClient } = require('@pythnetwork/pyth-lazer-sdk');
+      pythLazerClient = await PythLazerClient.create({
+        token,
+        webSocketPoolConfig: {
+          urls: [
+            'wss://pyth-lazer-0.dourolabs.app/v1/stream',
+            'wss://pyth-lazer-1.dourolabs.app/v1/stream',
+            'wss://pyth-lazer-2.dourolabs.app/v1/stream',
+          ],
+        },
+      });
+
+      pythLazerClient.subscribe({
+        type:               'subscribe',
+        subscriptionId:     1,
+        priceFeedIds:       LAZER_FEED_IDS,
+        properties:         ['price','bestBidPrice','bestAskPrice','confidence','exponent',
+                             'publisherCount','feedUpdateTimestamp','marketSession',
+                             'fundingRate','fundingTimestamp','fundingRateInterval'],
+        formats:            ['solana','leUnsigned','leEcdsa','evm'],
+        channel:            'real_time',
+        deliveryFormat:     'json',
+        jsonBinaryEncoding: 'hex',
+        parsed:             true,
+        ignoreInvalidFeeds: true,
+      });
+
+      let lastPush = 0;
+      pythLazerClient.addMessageListener((message) => {
+        if (message.type !== 'json') return;
+        const feeds = message.value?.parsed?.priceFeeds;
+        if (!feeds?.length) return;
+        const now = Date.now();
+        if (now - lastPush < 800) return;    // ~1 push/sec max
+        lastPush = now;
+
+        const prices = {};
+        for (const f of feeds) {
+          const instr = LAZER_ID_MAP[f.priceFeedId];
+          if (!instr) continue;              // skip unmapped feeds (13, 110)
+          const exp   = f.exponent ?? -8;
+          const scale = Math.pow(10, exp);
+          const px    = Number(f.price) * scale;
+          if (!px || px <= 0 || isNaN(px)) continue;
+          prices[instr] = {
+            instrument_name:     instr,
+            last:                px,
+            best_bid:            f.bestBidPrice   != null ? Number(f.bestBidPrice)   * scale : null,
+            best_ask:            f.bestAskPrice   != null ? Number(f.bestAskPrice)   * scale : null,
+            confidence:          f.confidence     != null ? Number(f.confidence)     * scale : null,
+            publisherCount:      f.publisherCount,
+            marketSession:       f.marketSession,
+            feedUpdateTimestamp: f.feedUpdateTimestamp,
+            source:              'pyth-lazer',
+            timestamp:           now,
+          };
+        }
+        if (Object.keys(prices).length && !win.isDestroyed()) {
+          win.webContents.send('pyth:tickers', prices);
+        }
+      });
+
+      pythLazerClient.addAllConnectionsDownListener(() => {
+        console.error('[PythLazer] ⚠️ All WebSocket connections down — auto-reconnect triggered');
+        // Renderer will gracefully degrade to other data sources
+        if (!win.isDestroyed()) {
+          win.webContents.send('pyth:connection-lost', { reason: 'all_connections_down' });
+        }
+      });
+
+      console.log('[PythLazer] ✅ Client started — feeds:', LAZER_FEED_IDS.join(','));
+      return true;
+
+    } catch (e) {
+      const errorMsg = e.message || String(e);
+      console.error(`[PythLazer] Connection failed: ${errorMsg}`);
+
+      if (retries < MAX_RETRIES) {
+        console.log(`[PythLazer] Retrying in ${RETRY_DELAY_MS}ms... (${retries}/${MAX_RETRIES})`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+        return createClientWithRetry();
+      } else {
+        console.error(`[PythLazer] ❌ Max retries (${MAX_RETRIES}) reached. Pyth Lazer disabled.`);
+        console.error('[PythLazer] → Renderer will use alternative price feeds (Crypto.com, CoinGecko, etc.)');
+        if (!win.isDestroyed()) {
+          win.webContents.send('pyth:connection-failed', { retries: MAX_RETRIES, error: errorMsg });
+        }
+        return false;
       }
-      if (Object.keys(prices).length && !win.isDestroyed()) {
-        win.webContents.send('pyth:tickers', prices);
-      }
-    });
-
-    pythLazerClient.addAllConnectionsDownListener(() => {
-      console.error('[PythLazer] All WebSocket connections are down — will auto-reconnect');
-    });
-
-    console.log('[PythLazer] ✓ Client started — feeds:', LAZER_FEED_IDS.join(','));
-  } catch (e) {
-    console.error('[PythLazer] Failed to start:', e.message);
+    }
   }
+
+  return createClientWithRetry();
 }
 
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
@@ -863,7 +895,16 @@ app.whenReady().then(async () => {
   console.log('[Main] Web service started on https://localhost:3443');
   
   createWindow();
-  startPythLazerService(mainWin).catch(e => console.error('[PythLazer] init error:', e.message));
+  
+  // Start Pyth Lazer with proper error handling
+  (async () => {
+    const pythSuccess = await startPythLazerService(mainWin);
+    if (pythSuccess) {
+      console.log('[Main] Pyth Lazer service initialized successfully');
+    } else {
+      console.warn('[Main] Pyth Lazer unavailable — renderer will use alternative feeds');
+    }
+  })();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

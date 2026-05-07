@@ -94,11 +94,22 @@
       const headers = { 'Accept': 'application/json' };
       if (isProMode) headers['X-CMC_PRO_API_KEY'] = apiKey;
 
+      // Add rate limiter call before fetch
+      if (window.ApiRateLimiter) {
+        const limiter = window.ApiRateLimiter.getLimiter('coinmarketcap');
+        await limiter.acquire();
+      }
+
       const resp = await _rateLimitedFetch(url, { method: 'GET', headers });
 
       if (!resp.ok) {
         const err = await resp.text().catch(() => '');
-        console.warn(`[CMC ${isProMode ? 'Pro' : 'Trial'}] Quotes (${resp.status}):`, err.slice(0, 100));
+        if (resp.status === 401) {
+          console.error('[CMC] 401 Unauthorized - Invalid or missing API key');
+          console.info('[CMC] Falling back to trial mode...');
+        } else {
+          console.warn(`[CMC ${isProMode ? 'Pro' : 'Trial'}] Quotes (${resp.status}):`, err.slice(0, 100));
+        }
         return {};
       }
 
@@ -173,6 +184,12 @@
       try {
         const resp = await _rateLimitedFetch(cmcUrl, { method: 'GET', headers: cmcHeaders });
         if (resp.ok) {
+          // Add rate limiter call before processing response
+          if (window.ApiRateLimiter) {
+            const limiter = window.ApiRateLimiter.getLimiter('coinmarketcap');
+            await limiter.acquire();
+          }
+          
           const json = await resp.json();
           if (json.data) {
             const data = Array.isArray(json.data) ? json.data[0] : json.data;
@@ -182,6 +199,9 @@
             console.info(`[CMC] F&G: ${fearGreed.value} (${fearGreed.label}) ✓`);
             return fearGreed;
           }
+        } else if (resp.status === 401) {
+          console.error('[CMC] 401 Unauthorized - Invalid or missing API key');
+          console.info('[CMC] Falling back to trial mode...');
         }
       } catch (cmcErr) {
         console.debug('[CMC] F&G failed, trying Alternative.me:', cmcErr.message);
