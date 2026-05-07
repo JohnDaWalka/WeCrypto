@@ -2273,7 +2273,7 @@
   // before accepting a direction change. A single wick candle is ignored.
   if (!window._predLock) window._predLock = {};
   const _BUCKET_MS    = 15 * 60 * 1000;
-  const MIN_FLIP_STREAK = 5; // 5 × 15s refresh = 75s of sustained opposing signal required (no fast-path)
+  const MIN_FLIP_STREAK = 7; // 7 × 15s refresh = 105s of sustained opposing signal required (no fast-path, STRICT)
 
   // Call after every PredictionEngine.runAll() to capture the current signal per coin
   function snapshotPredictions() {
@@ -9391,16 +9391,11 @@
   }
 
   // ── CFM Early Exit Toast ────────────────────────────────────────
-  // DISABLED: cfm:earlyExit listener
-  // Early exit toasts were firing too frequently (flips + macro moves in last 2-4 min)
-  // Re-enable after stabilizing MIN_FLIP_STREAK and macro consensus thresholds
-  /*
   window.addEventListener('cfm:earlyExit', (e) => {
     const { sym, reason, strength, prediction, type } = e.detail || {};
     if (!sym) return;
     showEarlyExitToast(sym, prediction, reason, strength, type, e.detail || {});
   });
-  */
 
   // ── Shell Router Veto Toasts ────────────────────────────────────
   window.addEventListener('shell:vetoConfirmed', (e) => {
