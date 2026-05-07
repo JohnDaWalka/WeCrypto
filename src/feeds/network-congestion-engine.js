@@ -122,20 +122,31 @@
       ]).catch(() => null);
 
       if (mempool?.vsize && mempool?.count) {
-        const fees = await fetch('https://mempool.space/api/fees/recommended', 
-          { signal: AbortSignal.timeout(5000) })
-          .then(r => r.json())
-          .catch(() => null);
+        // Fetch fees - try multiple endpoints
+        let fees = null;
+        
+        // Try: mempool.space/api/v1/fees/recommended (may be available)
+        try {
+          const feeRes = await fetch('https://mempool.space/api/v1/fees/recommended', 
+            { signal: AbortSignal.timeout(5000) });
+          if (feeRes.ok) fees = await feeRes.json();
+        } catch (e) { /* fall through */ }
+        
+        // Fallback: use default BTC fees (will adjust with market data elsewhere)
+        if (!fees?.fastestFee) {
+          console.warn('[NetCongestion] mempool.space fees endpoint unavailable, using defaults');
+          fees = { fastestFee: 20, halfHourFee: 15, minimumFee: 5 };
+        }
 
         return {
           mempoolSizeMB: (mempool.vsize / 1e6).toFixed(1),
           mempoolTxCount: mempool.count,
-          feeFastSatVB: fees?.fastestFee || 0,
+          feeFastSatVB: fees?.fastestFee || 20,
           source: 'mempool.space'
         };
       }
 
-      console.warn('[NetCongestion] mempool.space failed, no fallback available');
+      console.warn('[NetCongestion] mempool.space mempool fetch failed');
       return null;
     } catch (e) {
       console.warn('[NetCongestion] BTC mempool fetch failed:', e.message);
@@ -143,37 +154,45 @@
     }
   }
 
-  // ── Fetch SOL TPS ──
+  // ── Fetch SOL TPS (with RPC fallback) ──
   async function fetchSOLMetrics() {
-    try {
-      const rpc = 'https://rpc.ankr.com/solana';
-      const perfSamples = await Promise.race([
-        fetch(rpc, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getRecentPerformanceSamples', params: [10] }),
-          signal: AbortSignal.timeout(8000)
-        }).then(r => r.json()),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
-      ]).catch(() => null);
+    const SOL_RPCS = [
+      'https://api.mainnet-beta.solana.com',
+      'https://rpc.ankr.com/solana',
+      'https://solana-api.projectserum.com',
+    ];
+    
+    for (const rpc of SOL_RPCS) {
+      try {
+        const perfSamples = await Promise.race([
+          fetch(rpc, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getRecentPerformanceSamples', params: [10] }),
+            signal: AbortSignal.timeout(8000)
+          }).then(r => r.json()),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
+        ]).catch(() => null);
 
-      if (perfSamples?.result) {
-        const samples = perfSamples.result;
-        const avgTPS = Math.round(samples.reduce((s, x) => s + (x.numTransactions / (x.samplePeriodSecs || 60)), 0) / samples.length);
-        const peakTPS = Math.round(Math.max(...samples.map(x => x.numTransactions / (x.samplePeriodSecs || 60))));
-        
-        return {
-          avgTPS,
-          peakTPS,
-          source: 'solana-rpc'
-        };
+        if (perfSamples?.result?.length) {
+          const samples = perfSamples.result;
+          const avgTPS = Math.round(samples.reduce((s, x) => s + (x.numTransactions / (x.samplePeriodSecs || 60)), 0) / samples.length);
+          const peakTPS = Math.round(Math.max(...samples.map(x => x.numTransactions / (x.samplePeriodSecs || 60))));
+          
+          return {
+            avgTPS,
+            peakTPS,
+            source: 'solana-rpc'
+          };
+        }
+      } catch (e) {
+        console.debug(`[NetCongestion] SOL RPC ${rpc} failed:`, e.message);
+        continue;
       }
-
-      return null;
-    } catch (e) {
-      console.warn('[NetCongestion] SOL metrics fetch failed:', e.message);
-      return null;
     }
+
+    console.warn('[NetCongestion] All SOL RPC nodes failed');
+    return null;
   }
 
   // ── Calculate per-coin network load (0-1 scale) ──

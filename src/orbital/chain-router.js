@@ -134,9 +134,14 @@
       getJson('https://eth.blockscout.com/api/v2/stats'),
       getJson('https://eth.blockscout.com/api/v2/gas-price-oracle'),
     ]);
-    const s = sR.status === 'fulfilled' ? sR.value : {};
-    const g = gR.status === 'fulfilled' ? gR.value : {};
-    if (!Object.keys(s).length && !Object.keys(g).length) throw new Error('Blockscout ETH empty');
+    const s = sR.status === 'fulfilled' ? sR.value : null;
+    const g = gR.status === 'fulfilled' ? gR.value : null;
+    
+    // Validate responses aren't null
+    if (!s || !g || (!s.transactions_today && !g.average && !g.medium)) {
+      throw new Error('Blockscout ETH empty');
+    }
+    
     const gasAvg  = parseFloat(g.average || g.medium || 0);
     const gasFast = parseFloat(g.fast    || g.high   || 0);
     const gasSlow = parseFloat(g.slow    || g.low    || 0);
@@ -163,8 +168,14 @@
       getJson('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber'),
       getJson('https://api.etherscan.io/api?module=proxy&action=eth_gasPrice'),
     ]);
-    const block   = bR.status === 'fulfilled' ? parseInt(bR.value?.result, 16) || 0 : 0;
-    const gasWei  = gR.status === 'fulfilled' ? parseInt(gR.value?.result, 16) || 0 : 0;
+    const bRes = bR.status === 'fulfilled' ? bR.value : null;
+    const gRes = gR.status === 'fulfilled' ? gR.value : null;
+    
+    // Validate responses aren't null
+    if (!bRes || !gRes) throw new Error('Etherscan proxy empty');
+    
+    const block   = bRes?.result ? parseInt(bRes.result, 16) || 0 : 0;
+    const gasWei  = gRes?.result ? parseInt(gRes.result, 16) || 0 : 0;
     const gasGwei = gasWei / 1e9;
     if (!block && !gasGwei) throw new Error('Etherscan proxy empty');
     const score = gasGwei > 60 ? 0.50 : gasGwei > 25 ? 0.20 : gasGwei < 5 ? -0.15 : 0;
@@ -261,7 +272,12 @@
     ]);
     const s = sR.status === 'fulfilled' ? sR.value : {};
     const g = gR.status === 'fulfilled' ? gR.value : {};
-    if (!Object.keys(s).length && !Object.keys(g).length) throw new Error('Blockscout BSC empty');
+    
+    // Validate we have actual data, not just empty objects
+    if (!s || !g || (!s.transactions_today && !g.average && !g.medium)) {
+      throw new Error('Blockscout BSC empty');
+    }
+    
     const gasAvg  = parseFloat(g.average || g.medium || 0);
     const gasFast = parseFloat(g.fast    || g.high   || 0);
     const gasSlow = parseFloat(g.slow    || g.low    || 0);
@@ -288,8 +304,14 @@
       getJson('https://api.bscscan.com/api?module=proxy&action=eth_blockNumber'),
       getJson('https://api.bscscan.com/api?module=proxy&action=eth_gasPrice'),
     ]);
-    const block   = bR.status === 'fulfilled' ? parseInt(bR.value?.result, 16) || 0 : 0;
-    const gasWei  = gR.status === 'fulfilled' ? parseInt(gR.value?.result, 16) || 0 : 0;
+    const bRes = bR.status === 'fulfilled' ? bR.value : null;
+    const gRes = gR.status === 'fulfilled' ? gR.value : null;
+    
+    // Validate responses aren't null
+    if (!bRes || !gRes) throw new Error('BSCScan proxy empty');
+    
+    const block   = bRes?.result ? parseInt(bRes.result, 16) || 0 : 0;
+    const gasWei  = gRes?.result ? parseInt(gRes.result, 16) || 0 : 0;
     const gasGwei = gasWei / 1e9;
     if (!block && !gasGwei) throw new Error('BSCScan proxy empty');
     const score = gasGwei > 8 ? 0.40 : gasGwei > 3 ? 0.10 : 0;
@@ -394,10 +416,19 @@
       post({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
       post({ jsonrpc: '2.0', id: 2, method: 'eth_gasPrice',    params: [] }),
     ]);
-    const block   = bR.status === 'fulfilled' ? parseInt(bR.value?.result, 16) || 0 : 0;
-    const gasWei  = gR.status === 'fulfilled' ? parseInt(gR.value?.result, 16) || 0 : 0;
+    const bRes = bR.status === 'fulfilled' ? bR.value : null;
+    const gRes = gR.status === 'fulfilled' ? gR.value : null;
+    
+    // Validate JSON-RPC responses aren't null/undefined
+    if (!bRes || !gRes) throw new Error('Ankr BSC RPC empty');
+    
+    const block   = bRes?.result ? parseInt(bRes.result, 16) || 0 : 0;
+    const gasWei  = gRes?.result ? parseInt(gRes.result, 16) || 0 : 0;
     const gasGwei = gasWei / 1e9;
+    
+    // If both are zero or invalid, try fallback
     if (!block && !gasGwei) throw new Error('Ankr BSC RPC empty');
+    
     const score = gasGwei > 8 ? 0.40 : gasGwei > 3 ? 0.10 : 0;
     return {
       sym: 'BNB', label: 'BNB Chain', chain: 'BSC Mainnet',

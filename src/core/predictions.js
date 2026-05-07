@@ -1120,6 +1120,9 @@
       return bucketGeckoSeries(prices, volumes, bucketMs);
     } catch (e) {
       console.warn(`[Gecko] market_chart failed for ${geckoId}:`, e.message);
+      if (e.message.includes('429')) {
+        console.warn(`[Gecko] Rate limited (429) for ${geckoId}, skipping candles fallback`);
+      }
       return [];  // Return empty candles instead of failing
     }
   }
@@ -1130,6 +1133,9 @@
       return json[geckoId];
     } catch (e) {
       console.warn(`[Gecko] simple/price failed for ${geckoId}:`, e.message);
+      if (e.message.includes('429')) {
+        console.warn(`[Gecko] Rate limited (429) for ${geckoId}, skipping ticker fallback`);
+      }
       return null;
     }
   }
@@ -1142,6 +1148,9 @@
       return bucketGeckoSeries(prices, volumes, 24 * 60 * 60 * 1000);
     } catch (e) {
       console.warn(`[Gecko] market_chart?days=max failed for ${geckoId}:`, e.message);
+      if (e.message.includes('429')) {
+        console.warn(`[Gecko] Rate limited (429) for ${geckoId}, skipping history fallback`);
+      }
       return [];  // Return empty history instead of failing
     }
   }

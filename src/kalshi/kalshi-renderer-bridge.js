@@ -12,51 +12,62 @@
 window.Kalshi = {
   // Connection
   health: async () => {
-    return await window.ipcRenderer.invoke('kalshi:health');
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:health');
   },
 
   status: async () => {
-    return await window.ipcRenderer.invoke('kalshi:status');
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:status');
   },
 
   // Portfolio
   getBalance: async () => {
-    return await window.ipcRenderer.invoke('kalshi:balance');
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:balance');
   },
 
   getPositions: async () => {
-    return await window.ipcRenderer.invoke('kalshi:positions');
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:positions');
   },
 
   getOrders: async () => {
-    return await window.ipcRenderer.invoke('kalshi:orders');
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:orders');
   },
 
   // Market Data
   getMarkets: async (limit = 50) => {
-    return await window.ipcRenderer.invoke('kalshi:markets', { limit });
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:markets', { limit });
   },
 
   getEvents: async (ticker = null) => {
-    return await window.ipcRenderer.invoke('kalshi:events', { ticker });
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:events', { ticker });
   },
 
   // Orders
   placeOrder: async (order) => {
-    return await window.ipcRenderer.invoke('kalshi:placeOrder', order);
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:placeOrder', order);
   },
 
   cancelOrder: async (orderId) => {
-    return await window.ipcRenderer.invoke('kalshi:cancelOrder', orderId);
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:cancelOrder', orderId);
   },
 
   cancelAllOrders: async (filters = {}) => {
-    return await window.ipcRenderer.invoke('kalshi:cancelAllOrders', filters);
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:cancelAllOrders', filters);
   },
 
   // Market Details
   getTrades: async (marketId, filters = {}) => {
-    return await window.ipcRenderer.invoke('kalshi:getTrades', marketId, filters);
+    if (!window.electron?.invoke) throw new Error('Electron IPC not available');
+    return await window.electron.invoke('kalshi:getTrades', marketId, filters);
   }
 };
 
