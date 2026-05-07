@@ -9772,6 +9772,18 @@
     }
   })();
 
+  // ── Initialize Blockchain Research Agent ──────────────────────────
+  (async function initializeResearchAgent() {
+    try {
+      const ResearchAgentManager = require('../agents/research-agent-init');
+      window._researchAgentManager = new ResearchAgentManager();
+      await window._researchAgentManager.start();
+      console.log('[App] ResearchAgentManager initialized and running');
+    } catch (err) {
+      console.warn('[App] Failed to initialize research agent:', err.message);
+    }
+  })();
+
   // ── KalshiDebug console API ──────────────────────────────────────
   // Accessible from DevTools console for live inspection.
   window.KalshiDebug = {
