@@ -58,11 +58,16 @@
   <script src="../src/kalshi/settlement-multi-drive-logger.js" defer></script>
   <script src="../src/core/quarter-hour-validator.js"></script>
   <script src="../src/feeds/network-congestion-engine.js"></script>
-  <!-- TEMPORARILY DISABLED - syntax errors blocking app load -->
-  <script src="../src/kalshi/wecrypto-startup-loader.js"></script>
-  
-  <!-- Styles -->
-  <link rel="stylesheet" href="styles.css">
+   <!-- TEMPORARILY DISABLED - syntax errors blocking app load -->
+   <script src="../src/kalshi/wecrypto-startup-loader.js"></script>
+   
+   <!-- API Resilience Utilities (must load before app.js) -->
+   <script src="../src/feeds/api-rate-limiter.js"></script>
+   <script src="../src/feeds/api-circuit-breaker.js"></script>
+   <script src="../src/feeds/exchange-fallback-handler.js"></script>
+   
+   <!-- Styles -->
+   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="app">
