@@ -30,6 +30,14 @@ const { startWebService, updateState, broadcastUpdate } = require('./wecrypto-we
 let LLMSignalAssistant = null;
 try {
   LLMSignalAssistant = require('../src/llm/llm_signal_assistant');
+  const diagnostics = typeof LLMSignalAssistant.getDiagnostics === 'function'
+    ? LLMSignalAssistant.getDiagnostics()
+    : null;
+  if (diagnostics?.enabled) {
+    console.log(`[LLM] Assistant ready (provider=${diagnostics.provider}, model=${diagnostics.model})`);
+  } else {
+    console.warn('[LLM] Assistant loaded but disabled - check LLM_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY env vars');
+  }
 } catch (e) {
   console.warn('[LLM] Assistant module unavailable:', e.message);
 }
@@ -634,17 +642,48 @@ ipcMain.handle('kalshi:fetchHistoricalContracts', async (event, { limit = 100, s
   }
 });
 
-ipcMain.handle('storage:readContractCache', async () => {
-  const home = process.env.USERPROFILE || '';
-  
-  // Multi-drive cascade search order
-  const searchPaths = [
+const CONTRACT_CACHE_FILE_DISCOVERY_TTL_MS = 30 * 1000;
+let contractCacheDiscoveryMemo = {
+  expiresAt: 0,
+  directFiles: [],
+  directories: [],
+};
+
+function normalizeCachePath(input) {
+  if (!input || typeof input !== 'string') return '';
+  let normalized = input.trim();
+  if (!normalized) return '';
+  const isUNC = normalized.startsWith('\\\\');
+  normalized = normalized.replace(/^\\\\\?\\/, '');       // strip Windows extended prefix
+  normalized = normalized.replace(/[\\/]+/g, '\\');       // accept mixed / and \\ styles
+  if (/^[A-Za-z]:\\$/.test(normalized)) return normalized; // keep drive roots (e.g., C:\)
+  normalized = normalized.replace(/\\+$/, '');             // trim trailing slash
+  if (isUNC && !normalized.startsWith('\\\\')) normalized = `\\${normalized}`;
+  return normalized;
+}
+
+function dedupePaths(paths) {
+  const seen = new Set();
+  const unique = [];
+  for (const p of paths || []) {
+    const normalized = normalizeCachePath(p);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(normalized);
+  }
+  return unique;
+}
+
+function buildStaticContractCacheFiles(home) {
+  return dedupePaths([
     // Primary working drives
     'F:\\WECRYP\\data\\contract-cache.json',
     'F:\\WECRYP\\contract-cache.json',
     'D:\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
     'D:\\WECRYP\\data\\contract-cache.json',
-    
+
     // OneDrive locations
     `${home}\\OneDrive\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
     `${home}\\OneDrive\\WE-CRYPTO-CACHE\\contract-cache.json`,
@@ -662,7 +701,7 @@ ipcMain.handle('storage:readContractCache', async () => {
     `${home}\\OneDrive - ctstate.edu\\WECRYP\\contract-cache.json`,
     `${home}\\OneDrive - Azure ctstate.edu\\WECRYP\\contract-cache-2h.json`,
     `${home}\\OneDrive - Azure ctstate.edu\\WECRYP\\contract-cache.json`,
-    
+
     // Google Drive
     `${home}\\Google Drive\\WE-CRYPTO-CACHE\\contract-cache-2h.json`,
     `${home}\\Google Drive\\WE-CRYPTO-CACHE\\contract-cache.json`,
@@ -674,12 +713,12 @@ ipcMain.handle('storage:readContractCache', async () => {
     `${home}\\My Drive\\WECRYP\\contract-cache.json`,
     'G:\\My Drive\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
     'G:\\My Drive\\WE-CRYPTO-CACHE\\contract-cache.json',
-    
+
     // C: drive (OS/temp)
     'C:\\WE-CRYPTO-CACHE\\contract-cache.json',
     'C:\\WECRYP\\contract-cache.json',
     `${home}\\AppData\\Local\\WECRYP\\contract-cache.json`,
-    
+
     // Network drives (Z:, Y:, etc.)
     'Z:\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
     'Z:\\WE-CRYPTO-CACHE\\contract-cache.json',
@@ -687,35 +726,333 @@ ipcMain.handle('storage:readContractCache', async () => {
     'Z:\\WECRYP\\contract-cache.json',
     'Y:\\WE-CRYPTO-CACHE\\contract-cache-2h.json',
     'Y:\\WE-CRYPTO-CACHE\\contract-cache.json',
-  ];
+  ]);
+}
 
-  console.log('[IPC] Searching for contract cache across all drives...');
-  
-  for (const cacheFile of searchPaths) {
+function buildAutoDiscoveryDirectories(home) {
+  const dirs = [];
+  const rootCandidates = new Set();
+
+  // Cloud roots from env vars (machine-specific, robust when using 2+ machines)
+  [
+    process.env.OneDrive,
+    process.env.OneDriveCommercial,
+    process.env.OneDriveConsumer,
+    process.env.OneDriveBusiness,
+    process.env.HOMEDRIVE && process.env.HOMEPATH
+      ? `${process.env.HOMEDRIVE}${process.env.HOMEPATH}`
+      : null,
+    home,
+    `${home}\\Google Drive`,
+    `${home}\\My Drive`,
+    'G:\\My Drive',
+    'Z:\\My Drive',
+    'Y:\\My Drive',
+  ].forEach((p) => { if (p) rootCandidates.add(normalizeCachePath(p)); });
+
+  // Enumerate local/mapped drives C-Z and include root-level cache folders
+  for (let code = 67; code <= 90; code++) {
+    const letter = String.fromCharCode(code);
+    const root = normalizeCachePath(`${letter}:\\`);
     try {
-      if (fs.existsSync(cacheFile)) {
-        console.log(`[IPC] ✓ Found cache: ${cacheFile}`);
-        const content = fs.readFileSync(cacheFile, 'utf8');
-        const data = JSON.parse(content);
-        
-        // Extract settlements from cache
-        if (data.settlements && Array.isArray(data.settlements)) {
-          console.log(`[IPC] Loaded ${data.settlements.length} settlements from cache`);
-          return { 
-            success: true,
-            settlements: data.settlements,
-            source: cacheFile,
-            count: data.settlements.length
-          };
+      fs.accessSync(root, fs.constants.R_OK);
+      rootCandidates.add(root);
+      rootCandidates.add(`${root}\\My Drive`);
+    } catch (_) {}
+  }
+
+  // Discover OneDrive folder variants under home (e.g., OneDrive - org)
+  try {
+    if (home && fs.existsSync(home)) {
+      for (const entry of fs.readdirSync(home)) {
+        if (typeof entry === 'string' && entry.startsWith('OneDrive')) {
+          rootCandidates.add(normalizeCachePath(path.join(home, entry)));
         }
       }
-    } catch (e) {
-      // Continue to next path
+    }
+  } catch (_) {}
+
+  for (const root of rootCandidates) {
+    if (!root) continue;
+    const expanded = [
+      root,
+      `${root}\\WE-CRYPTO-CACHE`,
+      `${root}\\WECRYP`,
+      `${root}\\WECRYP\\data`,
+      `${root}\\WECRYP\\cache`,
+      `${root}\\WECRYP\\settlement-logs`,
+    ];
+    for (const dirPath of expanded) {
+      const normalized = normalizeCachePath(dirPath);
+      if (!normalized) continue;
+      try {
+        if (fs.existsSync(normalized)) dirs.push(normalized);
+      } catch (_) {}
     }
   }
 
-  console.warn('[IPC] Contract cache not found on any drive');
-  return { success: false, settlements: [], source: 'not_found', count: 0 };
+  return dedupePaths(dirs);
+}
+
+function getContractCacheDiscoveryTargets({ forceRefresh = false } = {}) {
+  const now = Date.now();
+  if (!forceRefresh && contractCacheDiscoveryMemo.expiresAt > now) {
+    return { ...contractCacheDiscoveryMemo, fromMemo: true };
+  }
+
+  const home = normalizeCachePath(process.env.USERPROFILE || process.env.HOME || '');
+  const staticFiles = buildStaticContractCacheFiles(home);
+  const staticDirs = staticFiles.map((p) => normalizeCachePath(path.dirname(p)));
+  const discoveredDirs = buildAutoDiscoveryDirectories(home);
+  const directories = dedupePaths([...staticDirs, ...discoveredDirs]);
+
+  contractCacheDiscoveryMemo = {
+    expiresAt: now + CONTRACT_CACHE_FILE_DISCOVERY_TTL_MS,
+    directFiles: staticFiles,
+    directories,
+  };
+  return { ...contractCacheDiscoveryMemo, fromMemo: false };
+}
+
+function gatherContractCacheCandidateFiles(targets) {
+  const files = [];
+  const pushFile = (filePath) => {
+    const normalized = normalizeCachePath(filePath);
+    if (!normalized) return;
+    if (!/^.*contract-cache.*\.json$/i.test(normalized)) return;
+    files.push(normalized);
+  };
+
+  (targets.directFiles || []).forEach(pushFile);
+
+  for (const dirPath of targets.directories || []) {
+    try {
+      if (!fs.existsSync(dirPath)) continue;
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry || !entry.isFile()) continue;
+        if (!/^contract-cache.*\.json$/i.test(entry.name)) continue;
+        pushFile(path.join(dirPath, entry.name));
+      }
+    } catch (_) {}
+  }
+
+  return dedupePaths(files);
+}
+
+function extractSettlementsFromContractPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+
+  const arrayCandidates = [
+    payload.settlements,
+    payload.data,
+    payload.contracts,
+    payload.records,
+    payload.cache && payload.cache.settlements,
+  ];
+
+  for (const candidate of arrayCandidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+  return [];
+}
+
+function toTimestampMs(value) {
+  if (Number.isFinite(value)) return value > 1e12 ? value : value * 1000;
+  if (typeof value !== 'string') return null;
+  const maybeNumber = Number(value);
+  if (Number.isFinite(maybeNumber)) return maybeNumber > 1e12 ? maybeNumber : maybeNumber * 1000;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeSettlementEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const tsFields = [
+    entry.timestamp,
+    entry.ts,
+    entry.settledTs,
+    entry.settleTime,
+    entry.createdAt,
+    entry.created_at,
+    entry.resolvedAt,
+    entry.resolved_at,
+    entry.date,
+  ];
+  let timestampMs = null;
+  for (const field of tsFields) {
+    const parsed = toTimestampMs(field);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      timestampMs = parsed;
+      break;
+    }
+  }
+
+  const inferredSymbol =
+    entry.symbol ||
+    entry.sym ||
+    entry.coin ||
+    (typeof entry.ticker === 'string' ? (entry.ticker.match(/KX([A-Z]{3,})/i) || [])[1] || null : null);
+
+  return {
+    ...entry,
+    symbol: inferredSymbol || null,
+    coin: entry.coin || inferredSymbol || null,
+    ts: Number.isFinite(entry.ts) ? entry.ts : timestampMs,
+    timestamp: Number.isFinite(entry.timestamp) ? entry.timestamp : timestampMs,
+    settledTs: Number.isFinite(entry.settledTs) ? entry.settledTs : timestampMs,
+  };
+}
+
+function settlementSortTimestamp(entry) {
+  return toTimestampMs(entry?.timestamp)
+    || toTimestampMs(entry?.ts)
+    || toTimestampMs(entry?.settledTs)
+    || 0;
+}
+
+function settlementDedupKey(entry) {
+  if (entry?.id) return `id:${entry.id}`;
+  if (entry?.ticker || entry?.symbol || entry?.coin) {
+    const token = entry.ticker || entry.symbol || entry.coin;
+    const ts = settlementSortTimestamp(entry);
+    const outcome = entry.outcome || entry.result || entry.actualOutcome || 'na';
+    return `tok:${token}|ts:${ts}|out:${outcome}`;
+  }
+  return `fallback:${JSON.stringify(entry)}`;
+}
+
+function parseContractCacheFile(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) return null;
+
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (!raw || !raw.trim()) return null;
+
+    const parsed = JSON.parse(raw);
+    const settlements = extractSettlementsFromContractPayload(parsed)
+      .map(normalizeSettlementEntry)
+      .filter(Boolean);
+
+    let newestSettlementMs = 0;
+    for (const settlement of settlements) {
+      const ts = settlementSortTimestamp(settlement);
+      if (ts > newestSettlementMs) newestSettlementMs = ts;
+    }
+
+    const freshnessMs = Math.max(stats.mtimeMs || 0, newestSettlementMs || 0);
+
+    return {
+      filePath: normalizeCachePath(filePath),
+      mtimeMs: stats.mtimeMs || 0,
+      sizeBytes: stats.size || 0,
+      settlementCount: settlements.length,
+      newestSettlementMs,
+      freshnessMs,
+      settlements,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function mergeRecentSettlements(cacheFiles, maxSources = 12, lookbackMs = 24 * 60 * 60 * 1000) {
+  if (!Array.isArray(cacheFiles) || cacheFiles.length === 0) {
+    return { merged: [], selectedSources: [] };
+  }
+
+  const sorted = [...cacheFiles].sort((a, b) => b.freshnessMs - a.freshnessMs);
+  const newestMs = sorted[0].freshnessMs || 0;
+
+  const selectedSources = sorted.filter((entry, idx) => {
+    if (idx < 3) return true; // always blend the 3 freshest sources
+    if (idx >= maxSources) return false;
+    return newestMs - entry.freshnessMs <= lookbackMs;
+  });
+
+  const mergedMap = new Map();
+  for (const source of selectedSources) {
+    for (const settlement of source.settlements || []) {
+      const key = settlementDedupKey(settlement);
+      const existing = mergedMap.get(key);
+      if (!existing || settlementSortTimestamp(settlement) > settlementSortTimestamp(existing)) {
+        mergedMap.set(key, settlement);
+      }
+    }
+  }
+
+  const merged = Array.from(mergedMap.values()).sort((a, b) => settlementSortTimestamp(b) - settlementSortTimestamp(a));
+  return { merged, selectedSources };
+}
+
+ipcMain.handle('storage:readContractCache', async (_event, options = {}) => {
+  const startedAt = Date.now();
+  const forceRefresh = !!options.forceRefresh;
+  const maxSources = Number.isFinite(options.maxSources) ? Math.max(1, options.maxSources) : 12;
+  const lookbackMs = Number.isFinite(options.lookbackMs) ? Math.max(0, options.lookbackMs) : 24 * 60 * 60 * 1000;
+
+  const discoveryTargets = getContractCacheDiscoveryTargets({ forceRefresh });
+  const candidateFiles = gatherContractCacheCandidateFiles(discoveryTargets);
+
+  console.log(
+    `[IPC] Contract cache discovery: ${candidateFiles.length} candidate files ` +
+    `across ${discoveryTargets.directories.length} directories ` +
+    `(memo=${discoveryTargets.fromMemo ? 'hit' : 'miss'})`
+  );
+
+  const parsedFiles = candidateFiles
+    .map(parseContractCacheFile)
+    .filter(Boolean);
+
+  if (parsedFiles.length === 0) {
+    console.warn('[IPC] Contract cache not found on any discovered path');
+    return {
+      success: false,
+      settlements: [],
+      data: [],
+      contracts: [],
+      source: 'not_found',
+      count: 0,
+      discoveredFiles: 0,
+      scanMs: Date.now() - startedAt,
+    };
+  }
+
+  const sortedByFreshness = [...parsedFiles].sort((a, b) => b.freshnessMs - a.freshnessMs);
+  const primary = sortedByFreshness[0];
+  const { merged, selectedSources } = mergeRecentSettlements(sortedByFreshness, maxSources, lookbackMs);
+
+  const sources = selectedSources.map((s) => ({
+    path: s.filePath,
+    count: s.settlementCount,
+    mtimeMs: s.mtimeMs,
+    newestSettlementMs: s.newestSettlementMs,
+    freshnessMs: s.freshnessMs,
+    sizeBytes: s.sizeBytes,
+  }));
+
+  console.log(
+    `[IPC] Loaded ${merged.length} merged settlements ` +
+    `from ${selectedSources.length}/${parsedFiles.length} discovered cache files ` +
+    `(primary=${primary.filePath})`
+  );
+
+  return {
+    success: true,
+    settlements: merged,
+    data: merged,       // back-compat for existing renderer callers
+    contracts: merged,  // back-compat alias
+    source: primary.filePath,
+    count: merged.length,
+    discoveredFiles: parsedFiles.length,
+    selectedSourceCount: selectedSources.length,
+    sources,
+    newestTimestamp: merged.length ? settlementSortTimestamp(merged[0]) : null,
+    scanMs: Date.now() - startedAt,
+    cacheDiscoveryMemoHit: !!discoveryTargets.fromMemo,
+  };
 });
 
 // ── IPC: Enumerate all available storage roots (local, network, cloud) ──────
@@ -800,6 +1137,37 @@ ipcMain.handle('llm:getDiagnostics', async () => {
   } catch (error) {
     return { success: false, error: error.message || 'LLM diagnostics failed' };
   }
+});
+
+ipcMain.handle('llm:envStatus', async () => {
+  const diagnostics = (LLMSignalAssistant && typeof LLMSignalAssistant.getDiagnostics === 'function')
+    ? LLMSignalAssistant.getDiagnostics()
+    : null;
+
+  const compatibleKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || '';
+  const googleKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '';
+  const model = process.env.LLM_MODEL || process.env.OPENAI_MODEL || process.env.GOOGLE_MODEL || process.env.GEMINI_MODEL || null;
+  const apiUrl = process.env.LLM_API_URL || process.env.OPENAI_BASE_URL || null;
+  const provider = process.env.LLM_PROVIDER || 'auto';
+
+  return {
+    success: true,
+    status: {
+      providerConfigured: provider,
+      selectedModel: model,
+      selectedApiUrl: apiUrl,
+      hasCompatibleKey: !!compatibleKey,
+      hasGoogleKey: !!googleKey,
+      hasDotenvPathOverride: !!process.env.LLM_ENV_PATH,
+      envPathOverride: process.env.LLM_ENV_PATH || null,
+      assistantLoaded: !!LLMSignalAssistant,
+      assistantEnabled: !!diagnostics?.enabled,
+      assistantProvider: diagnostics?.provider || null,
+      assistantModel: diagnostics?.model || null,
+      assistantEnv: diagnostics?.env || null,
+      checkedAt: Date.now(),
+    },
+  };
 });
 
 // ── IPC: Validator15m (15-min confidence calibration) ────────────────────────

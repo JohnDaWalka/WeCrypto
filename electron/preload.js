@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('electron', {
     loadCSVTrades: (browserStateJson) => ipcRenderer.invoke('kalshi:loadCSVTrades', browserStateJson),
     fetchHistoricalContracts: (opts) => ipcRenderer.invoke('kalshi:fetchHistoricalContracts', opts),
   },
+  llm: {
+    getDiagnostics: () => ipcRenderer.invoke('llm:getDiagnostics'),
+    envStatus: () => ipcRenderer.invoke('llm:envStatus'),
+  },
 });
 
 contextBridge.exposeInMainWorld('dataStore', {

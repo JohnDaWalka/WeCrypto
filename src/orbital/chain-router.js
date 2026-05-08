@@ -134,17 +134,24 @@
       getJson('https://eth.blockscout.com/api/v2/stats'),
       getJson('https://eth.blockscout.com/api/v2/gas-price-oracle'),
     ]);
-    const s = sR.status === 'fulfilled' ? sR.value : null;
-    const g = gR.status === 'fulfilled' ? gR.value : null;
-    
-    // Validate responses aren't both null OR both missing critical fields
-    if ((!s && !g) || (!s && !g.average && !g.medium) || (!g && !s.transactions_today)) {
+    const s = sR.status === 'fulfilled' && sR.value && typeof sR.value === 'object' ? sR.value : {};
+    const g = gR.status === 'fulfilled' && gR.value && typeof gR.value === 'object' ? gR.value : {};
+
+    const txsTodayRaw = s.transactions_today ?? s.transactionsToday ?? s.txs_today ?? 0;
+    const txsToday = parseInt(txsTodayRaw, 10) || 0;
+    const gasAvgRaw = g.average ?? g.standard ?? g.medium ?? 0;
+    const gasFastRaw = g.fast ?? g.high ?? gasAvgRaw ?? 0;
+    const gasSlowRaw = g.slow ?? g.low ?? gasAvgRaw ?? 0;
+
+    const gasAvg  = parseFloat(gasAvgRaw)  || 0;
+    const gasFast = parseFloat(gasFastRaw) || 0;
+    const gasSlow = parseFloat(gasSlowRaw) || 0;
+
+    // Require at least one meaningful signal from either stats or gas oracle.
+    if (!txsToday && !gasAvg && !gasFast && !gasSlow) {
       throw new Error('Blockscout ETH empty');
     }
-    
-    const gasAvg  = parseFloat(g.average || g.medium || 0);
-    const gasFast = parseFloat(g.fast    || g.high   || 0);
-    const gasSlow = parseFloat(g.slow    || g.low    || 0);
+
     const score   = gasAvg > 60 ? 0.50 : gasAvg > 25 ? 0.20 : gasAvg < 5 ? -0.15 : 0;
     return {
       sym: 'ETH', label: 'Ethereum', chain: 'Ethereum Mainnet',
@@ -153,13 +160,13 @@
         { k: 'Gas Avg',      v: gasAvg  ? `${gasAvg.toFixed(1)} Gwei`  : '—' },
         { k: 'Gas Fast',     v: gasFast ? `${gasFast.toFixed(1)} Gwei` : '—' },
         { k: 'Gas Slow',     v: gasSlow ? `${gasSlow.toFixed(1)} Gwei` : '—' },
-        { k: 'Txs Today',    v: s.transactions_today ? parseInt(s.transactions_today).toLocaleString() : '—' },
+        { k: 'Txs Today',    v: txsToday ? txsToday.toLocaleString() : '—' },
         { k: 'Total Addrs',  v: s.total_addresses    ? parseInt(s.total_addresses).toLocaleString()    : '—' },
         { k: 'Total Txs',    v: s.total_transactions ? parseInt(s.total_transactions).toLocaleString() : '—' },
       ],
       congestion: gasAvg > 50 ? 'HIGH' : gasAvg > 20 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
-      raw: { gasAvg, gasFast, gasSlow, txsToday: parseInt(s.transactions_today || 0) },
+      raw: { gasAvg, gasFast, gasSlow, txsToday },
     };
   }
 

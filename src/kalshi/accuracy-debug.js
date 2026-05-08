@@ -212,24 +212,39 @@
       if (typeof window !== 'undefined' && window.electron && window.electron.invoke) {
         try {
           const contractData = await window.electron.invoke('storage:readContractCache');
-          if (contractData && Array.isArray(contractData)) {
-            console.log(`[KalshiAccuracyDebug] Loaded ${contractData.length} contracts from drive cache`);
-            
-            // Merge into _15mResolutionLog (avoiding duplicates by timestamp)
-            const existing = new Set((window._15mResolutionLog || []).map(e => e.ts));
-            const newContracts = contractData.filter(c => !existing.has(c.ts));
-            
+          const settlements = Array.isArray(contractData)
+            ? contractData
+            : (contractData?.settlements || contractData?.data || contractData?.contracts || []);
+
+          if (Array.isArray(settlements) && settlements.length > 0) {
+            console.log(
+              `[KalshiAccuracyDebug] Loaded ${settlements.length} contracts from drive cache ` +
+              `(source: ${contractData?.source || 'unknown'})`
+            );
+
+            const existing = new Set(
+              (window._15mResolutionLog || []).map((e) => (
+                e.id ||
+                `${e.sym || e.symbol || e.coin || 'UNK'}-${e.ts || e.timestamp || e.settledTs || 0}`
+              ))
+            );
+            const newContracts = settlements.filter((c) => {
+              const key = c.id || `${c.sym || c.symbol || c.coin || 'UNK'}-${c.ts || c.timestamp || c.settledTs || 0}`;
+              return !existing.has(key);
+            });
+
             if (newContracts.length > 0) {
               window._15mResolutionLog = [...(window._15mResolutionLog || []), ...newContracts].slice(-300);
               console.log(`[KalshiAccuracyDebug] Added ${newContracts.length} new contracts to resolution log`);
-              
-              // Save back to localStorage to persist
+
               try {
                 localStorage.setItem('beta1_15m_resolution_log', JSON.stringify(window._15mResolutionLog.slice(-300)));
               } catch (_) {}
             } else {
               console.log('[KalshiAccuracyDebug] No new contracts to sync');
             }
+          } else {
+            console.log('[KalshiAccuracyDebug] No contracts found in drive cache response');
           }
         } catch (err) {
           console.warn('[KalshiAccuracyDebug] Drive sync failed:', err.message);

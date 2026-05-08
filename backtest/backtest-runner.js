@@ -43,14 +43,13 @@ const SHORT_HORIZON_FILTERS = {
   h15: { entryThreshold: 0.20, minAgreement: 0.65 },
 };
 const BACKTEST_FILTER_OVERRIDES = {
-  // Retuned 2026-04-27 via 30-day walk-forward optimization (Python engine v2.5.0).
-  // 7-day backtest 2026-04-28 Kalshi WR (W/L/S): BTC 52.1%, ETH 54.9%, XRP 60.2%
-  // SOL re-tuned 2026-04-30: mean-reversion profile, maxThreshold 0.55 cap — 55.1% WR (78 signals, PF 1.99)
+  // Retuned 2026-05-08 via 60-day walk-forward OOS calibration.
+  // Medians from rolling train/test splits to reduce overfit and normalize h15 trigger quality.
   // DISABLED (per backtest): BNB 33.3%, HYPE 39.3%, DOGE (no feed)
-  BTC:  { h1: { entryThreshold: 0.36, minAgreement: 0.56 }, h5: { entryThreshold: 0.36, minAgreement: 0.56 }, h10: { entryThreshold: 0.36, minAgreement: 0.57 }, h15: { entryThreshold: 0.36, minAgreement: 0.58 } },
-  ETH:  { h1: { entryThreshold: 0.42, minAgreement: 0.56 }, h5: { entryThreshold: 0.42, minAgreement: 0.56 }, h10: { entryThreshold: 0.40, minAgreement: 0.57 }, h15: { entryThreshold: 0.38, minAgreement: 0.58 } },
-  XRP:  { h1: { entryThreshold: 0.40, minAgreement: 0.54 }, h5: { entryThreshold: 0.40, minAgreement: 0.54 }, h10: { entryThreshold: 0.36, minAgreement: 0.56 }, h15: { entryThreshold: 0.32, minAgreement: 0.58 } },
-  SOL:  { h1: { entryThreshold: 0.45, minAgreement: 0.66 }, h5: { entryThreshold: 0.45, minAgreement: 0.66 }, h10: { entryThreshold: 0.40, minAgreement: 0.62 }, h15: { entryThreshold: 0.41, minAgreement: 0.64, maxThreshold: 0.55 } },
+  BTC:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
+  ETH:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.54 } },
+  XRP:  { h1: { entryThreshold: 0.30, minAgreement: 0.58 }, h5: { entryThreshold: 0.30, minAgreement: 0.58 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
+  SOL:  { h1: { entryThreshold: 0.35, minAgreement: 0.54 }, h5: { entryThreshold: 0.35, minAgreement: 0.54 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
   BNB:  { h1: { entryThreshold: 0.50, minAgreement: 0.72 }, h5: { entryThreshold: 0.50, minAgreement: 0.72 }, h10: { entryThreshold: 0.50, minAgreement: 0.72 }, h15: { entryThreshold: 0.50, minAgreement: 0.72 } },
   DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
   HYPE: { h1: { entryThreshold: 0.20, minAgreement: 0.56 }, h5: { entryThreshold: 0.25, minAgreement: 0.60 }, h10: { entryThreshold: 0.30, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },
@@ -106,13 +105,13 @@ const PER_COIN_INDICATOR_BIAS = {
     // Keep proven mean-reversion core
     bands:      2.5, williamsR: 2.0, structure: 1.4, fisher: 1.3, keltner: 1.6, cci: 1.2,
     cmf: 1.0, rsi: 0.8, macd: 0.6, persistence: 0.8, ema: 0.5, ichimoku: 0.3, adx: 0.3,
-    vwap: 0.2, sma: 0.2,
+    vwap: 0.2, sma: 0.185,
     // Kill worst performers
     momentum: 0.25,  // restored for regime-aware trending detection
-    obv:      0.1,   // 36% worst
-    hma:      0.1,   // 37% worst
+    obv:      0.12,  // outcome-retuned 2026-05-08 (180 windows)
+    hma:      0.121, // outcome-retuned 2026-05-08 (180 windows)
     mfi:      0.5,
-    supertrend: 0.4,
+    supertrend: 0.368,
     // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
     book:     0.26,  // NEW: Order book imbalance
     flow:     0.24,  // NEW: Trade flow signal
@@ -129,11 +128,11 @@ const PER_COIN_INDICATOR_BIAS = {
     bands:    2.5,   // Keep (proven mean-reversion core works across horizons)
     structure: 1.4, keltner: 1.2, cci: 0.9, fisher: 0.8, cmf: 0.6,
     volume: 0.9, persistence: 0.8, obv: 0.5, macd: 0.4,
-    ema: 0.35, sma: 0.1, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.3,
+    ema: 0.35, sma: 0.079, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.271,
     // Kill worst performers
-    mfi:      0.05,  // 38% worst — was 1.8
+    mfi:      0.055, // outcome-retuned 2026-05-08 (180 windows)
     momentum: 0.20,  // restored for regime-aware trending detection
-    hma:      0.05,  // 45% worst
+    hma:      0.07,  // outcome-retuned 2026-05-08 (180 windows)
   },
   SOL: {
     // ── Tuned 2026-04-30 & RETUNED 2026-05-04 for h1/h5 recovery ──────────────
@@ -159,7 +158,7 @@ const PER_COIN_INDICATOR_BIAS = {
     persistence: 0.05,  // consistently worst
     ema:       0.05,  // 36% worst
     cmf:       0.05,  // consistently bad
-    supertrend: 0.05,  // momentum hypothesis DISPROVEN for SOL h15
+    supertrend: 0.038, // outcome-retuned 2026-05-08 (180 windows)
     momentum:  0.50,  // restored for regime-aware trending detection
     mfi:       0.05,  // 21% worst
     stochrsi:  0.05,  // 27% worst
@@ -178,14 +177,14 @@ const PER_COIN_INDICATOR_BIAS = {
     rsi:       3.5,   // ★ INCREASED FROM 2.0 (80-100% at h1/h10 - massive underweight!)
     obv:       1.5,   // volume direction confirm
     williamsR: 1.2,   // moderate keep
-    bands:     0.8, supertrend: 0.5, cci: 0.5, cmf: 0.6, keltner: 0.4,
-    macd: 0.3, stochrsi: 0.8, persistence: 0.2, ema: 0.2, adx: 0.2, ichimoku: 0.2,
+    bands:     0.8, supertrend: 0.46, cci: 0.5, cmf: 0.6, keltner: 0.4,
+    macd: 0.3, stochrsi: 0.8, persistence: 0.176, ema: 0.19, adx: 0.2, ichimoku: 0.184,
     sma: 0.0,
-    mfi: 0.1,
+    mfi: 0.105,
     // Kill confirmed worst performers
-    momentum: 0.01,   // 28% worst (further reduced)
-    vwma:     0.05,   // 31% worst
-    hma:      0.05,   // 31% worst
+    momentum: 0.017,
+    vwma:     0.045,
+    hma:      0.066,
   },
   HYPE: {
     // h15 best: williamsR 79%, fisher 77%, cci 75%, bands 78% (h1/h5)

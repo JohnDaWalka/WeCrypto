@@ -136,14 +136,15 @@
   async function _getWalletActivityAggregated(addr, chain) {
     try {
       const normalized = addr.toLowerCase().trim();
+      const chainKey = String(chain || 'ETH').toUpperCase();
+      const cacheKey = `${normalized}:${chainKey}`;
 
       // Get base balances from cache or fetch
-      let portfolio = _portfolioCache.get(normalized);
+      let portfolio = _portfolioCache.get(cacheKey);
       if (!portfolio || Date.now() - portfolio.timestamp > 300000) { // 5m TTL
-        const chainNet = CHAINS[chain]?.net;
-        portfolio = await _fetchPortfolioAlchemy(normalized, chainNet);
+        portfolio = await _fetchPortfolioAlchemy(normalized, chainKey);
         if (portfolio) {
-          _portfolioCache.set(normalized, { ...portfolio, timestamp: Date.now() });
+          _portfolioCache.set(cacheKey, { ...portfolio, timestamp: Date.now() });
         }
       }
 
@@ -151,7 +152,7 @@
       let whales = [];
       if (window.WhaleAlertMonitor) {
         try {
-          const result = await window.WhaleAlertMonitor.getWhaleTransactions(chain);
+          const result = await window.WhaleAlertMonitor.getWhaleTransactions(chainKey);
           whales = result.txs.filter(t => 
             t.from === normalized || t.to === normalized
           );
@@ -160,9 +161,9 @@
 
       // Get DEX activity
       let swaps = [];
-      if (window.DexActivityMonitor && (chain === 'ETH' || chain === 'BNB')) {
+      if (window.DexActivityMonitor && (chainKey === 'ETH' || chainKey === 'BNB')) {
         try {
-          const result = await window.DexActivityMonitor.getSwaps(chain);
+          const result = await window.DexActivityMonitor.getSwaps(chainKey);
           swaps = result.swaps.filter(s => 
             s.user?.toLowerCase() === normalized
           );
@@ -171,7 +172,7 @@
 
       return {
         address: normalized,
-        chain,
+        chain: chainKey,
         portfolio,
         whales,
         swaps,

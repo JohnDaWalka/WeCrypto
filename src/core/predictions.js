@@ -199,13 +199,13 @@
       // Keep proven mean-reversion core — bands/williamsR/keltner boosted 2026-05-05 (Pyth oracle accuracy)
       bands:      2.8, williamsR: 2.2, structure: 1.4, fisher: 1.3, keltner: 1.8, cci: 1.2,
       cmf: 1.0, rsi: 0.8, macd: 0.6, persistence: 0.8, ema: 0.5, ichimoku: 0.3, adx: 0.3,
-      vwap: 0.2, sma: 0.2,
+      vwap: 0.2, sma: 0.185,
       // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
       momentum: 0.25,  // ★ RESTORED FROM 0.05 (2026-05-04 HOTFIX2) — regime gates amplify/suppress
-      obv:      0.1,   // 36% worst
-      hma:      0.1,   // 37% worst
+      obv:      0.12,  // outcome-retuned 2026-05-08 (180 windows)
+      hma:      0.121, // outcome-retuned 2026-05-08 (180 windows)
       mfi:      0.5,
-      supertrend: 0.4,
+      supertrend: 0.368,
       // Pyth oracle aggregate prices → F&G strongly correlated with BTC macro moves
       fearGreed: 1.2,
       // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
@@ -226,11 +226,11 @@
       bands:    2.8,   // ★ BOOST: Pyth oracle prices → cleaner band touches at exact levels
       structure: 1.4, keltner: 1.4, cci: 0.9, fisher: 0.9, cmf: 0.6,
       volume: 0.9, persistence: 0.8, obv: 0.5, macd: 0.4,
-      ema: 0.35, sma: 0.1, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.3,
+      ema: 0.35, sma: 0.079, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.271,
       // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
       momentum: 0.20,  // ★ RESTORED FROM 0.01 (2026-05-04 HOTFIX2) — regime gates amplify/suppress
-      mfi:      0.05,  // 38% worst — was 1.8
-      hma:      0.05,  // 45% worst
+      mfi:      0.055, // outcome-retuned 2026-05-08 (180 windows)
+      hma:      0.07,  // outcome-retuned 2026-05-08 (180 windows)
       // ETH moderately correlated with F&G (less than BTC)
       fearGreed: 1.1,
     },
@@ -253,7 +253,7 @@
       persistence: 0.0,
       ema:       0.0,
       cmf:       0.0,
-      supertrend: 0.05,
+      supertrend: 0.038, // outcome-retuned 2026-05-08 (180 windows)
       momentum:  0.0,
       mfi:       0.0,
       stochrsi:  0.0,
@@ -273,14 +273,14 @@
       rsi:       3.5,   // ★ INCREASED FROM 2.0 (80-100% at h1/h10 - massive underweight!)
       obv:       1.5,   // volume direction confirm
       williamsR: 1.2,   // moderate keep
-      bands:     0.8, supertrend: 0.5, cci: 0.5, cmf: 0.6, keltner: 0.4,
-      macd: 0.3, stochrsi: 0.8, persistence: 0.2, ema: 0.2, adx: 0.2, ichimoku: 0.2,
+      bands:     0.8, supertrend: 0.46, cci: 0.5, cmf: 0.6, keltner: 0.4,
+      macd: 0.3, stochrsi: 0.8, persistence: 0.176, ema: 0.19, adx: 0.2, ichimoku: 0.184,
       sma: 0.0,
-      mfi: 0.1,
+      mfi: 0.105,
       // Kill confirmed worst performers
-      momentum: 0.01,   // 28% worst (further reduced)
-      vwma:     0.05,   // 31% worst
-      hma:      0.05,   // 31% worst
+      momentum: 0.017,
+      vwma:     0.045,
+      hma:      0.066,
       // XRP is news/regulatory driven; F&G less predictive
       fearGreed: 0.7,
     },
@@ -540,13 +540,12 @@
   const BACKTEST_THRESHOLD_GRID = [0.08, 0.10, 0.12, 0.16, 0.20];
   const BACKTEST_AGREEMENT_GRID = [0.50, 0.54, 0.58];
   const BACKTEST_FILTER_OVERRIDES = {
-    // Retuned 2026-05-04 via true walk-forward OOS backtest (70 folds, 14-day window).
-    // h15 OOS recent-10-fold accuracy: BTC 65%, ETH 57%, SOL 53%, XRP 65%.
-    // Thresholds lowered to match WF-calibrated medians — prior values were over-filtering.
-    BTC:  { h1: { entryThreshold: 0.35, minAgreement: 0.50 }, h5: { entryThreshold: 0.35, minAgreement: 0.50 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.50 } },
-    ETH:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.56 } },
-    XRP:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.50 } },
-    SOL:  { h1: { entryThreshold: 0.43, minAgreement: 0.54 }, h5: { entryThreshold: 0.43, minAgreement: 0.54 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },  // ★ FIXED 2026-05-06: WF-calibrated thresholds (removed maxScore cap + reduced h1/h5 from 0.43 → 0.43, h10/h15 → 0.35)
+    // Retuned 2026-05-08 via 60-day walk-forward OOS calibration.
+    // These medians reduced overfitting drift and normalized trigger frequency at h15.
+    BTC:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
+    ETH:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.54 } },
+    XRP:  { h1: { entryThreshold: 0.30, minAgreement: 0.58 }, h5: { entryThreshold: 0.30, minAgreement: 0.58 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
+    SOL:  { h1: { entryThreshold: 0.35, minAgreement: 0.54 }, h5: { entryThreshold: 0.35, minAgreement: 0.54 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
     BNB:  { h1: { entryThreshold: 0.50, minAgreement: 0.72 }, h5: { entryThreshold: 0.50, minAgreement: 0.72 }, h10: { entryThreshold: 0.50, minAgreement: 0.72 }, h15: { entryThreshold: 0.50, minAgreement: 0.72 } },
     DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
     HYPE: { h1: { entryThreshold: 0.20, minAgreement: 0.56 }, h5: { entryThreshold: 0.25, minAgreement: 0.60 }, h10: { entryThreshold: 0.30, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },

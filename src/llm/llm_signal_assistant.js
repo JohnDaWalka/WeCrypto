@@ -10,10 +10,37 @@ const fs = require("fs");
 const path = require("path");
 const { generateSystemPrompt, generateUserPrompt } = require("./specialized_prompt");
 
+function loadLLMEnv() {
+  const loadedPaths = [];
+
+  try {
+    const dotenv = require("dotenv");
+    const candidatePaths = [
+      process.env.LLM_ENV_PATH,
+      path.resolve(process.cwd(), ".env"),
+      path.resolve(__dirname, "../../.env"),
+      process.resourcesPath ? path.resolve(process.resourcesPath, "..", ".env") : null,
+      process.execPath ? path.resolve(path.dirname(process.execPath), ".env") : null,
+    ].filter(Boolean);
+
+    for (const envPath of candidatePaths) {
+      try {
+        if (!fs.existsSync(envPath)) continue;
+        const result = dotenv.config({ path: envPath });
+        if (!result.error) loadedPaths.push(envPath);
+      } catch (_) {}
+    }
+  } catch (_) {}
+
+  return loadedPaths;
+}
+
+const LLM_ENV_SOURCES = loadLLMEnv();
+
 // Configuration from environment
-const LLM_API_URL = process.env.LLM_API_URL || "https://api.openai.com/v1/chat/completions";
-const LLM_API_KEY = process.env.LLM_API_KEY;
-const LLM_MODEL = process.env.LLM_MODEL || "gpt-4-mini";
+const LLM_API_URL = process.env.LLM_API_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1/chat/completions";
+const LLM_API_KEY = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENAI_KEY;
+const LLM_MODEL = process.env.LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4-mini";
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
 const GOOGLE_MODEL = process.env.GOOGLE_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "auto").toLowerCase();
@@ -30,6 +57,13 @@ class LLMSignalAssistant {
     this.marketMemory = new Map();      // per-coin rolling recall memory
     this._googleClient = null;
     this._googleClientKind = null;
+    this.envDiagnostics = {
+      dotenvLoaded: LLM_ENV_SOURCES.length > 0,
+      dotenvSources: LLM_ENV_SOURCES,
+      hasCompatibleKey: !!LLM_API_KEY,
+      hasGoogleKey: !!GOOGLE_API_KEY,
+      providerOverride: process.env.LLM_PROVIDER || null,
+    };
 
     this.stats = {
       calls: 0,
@@ -43,6 +77,9 @@ class LLMSignalAssistant {
       `[LLMSignalAssistant] Initialized ${this.enabled ? "✓ ENABLED" : "⚠ DISABLED"} ` +
       `(provider=${this.provider}, model=${this.provider === "google" ? GOOGLE_MODEL : LLM_MODEL})`
     );
+    if (this.envDiagnostics.dotenvLoaded) {
+      console.log(`[LLMSignalAssistant] Loaded env from: ${this.envDiagnostics.dotenvSources.join(" | ")}`);
+    }
   }
 
   resolveProvider() {
@@ -449,6 +486,7 @@ Use this recall only as context, and prioritize current market snapshot data if 
         influence_count: this.stats.influenceCount,
         cache_hits: this.stats.cacheHits,
       },
+      env: this.envDiagnostics,
     };
   }
 }
