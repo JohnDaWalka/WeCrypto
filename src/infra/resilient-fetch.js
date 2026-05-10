@@ -20,13 +20,13 @@
       // Original
       url => url,
       // Fallback 1: Try Binance spot
-      url => url.replace(/api\.bybit\.com\/v5\/market\/recent-trade\?category=spot&symbol=(.+?)USDT/, 
-                        'api.binance.us/api/v3/trades?symbol=$1USDT'),
+      url => url.replace(/api\.bybit\.com\/v5\/market\/recent-trade\?category=spot&symbol=(.+?)USDT/,
+        'api.binance.us/api/v3/trades?symbol=$1USDT'),
     ],
     // Blockscout gas → fallback to etherscan
     'eth.blockscout.com/api/v2/gas-price-oracle': [
       url => url,
-      () => 'https://api.etherscan.io/api?module=gastracker&action=gasPriceOracle',
+      () => 'https://api.etherscan.io/api?module=proxy&action=eth_gasPrice',
     ],
     // Mempool → fallback to blockchain.info
     'mempool.space/api/fees/recommended': [

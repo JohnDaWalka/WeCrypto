@@ -14,14 +14,49 @@ const { spawn } = require('child_process');
 // Kalshi worker state
 let kalshiWorker = null;
 let kalshiWorkerUrl = 'http://127.0.0.1:3050';
+let readinessPollTimer = null;
+const kalshiWorkerState = {
+  bootStartedAt: 0,
+  ready: false,
+  readyLatencyMs: null,
+  lastHealthError: null,
+};
+
+async function probeWorkerHealth(timeoutMs = 800) {
+  try {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), timeoutMs);
+    const res = await fetch(`${kalshiWorkerUrl}/health`, { signal: ctrl.signal });
+    clearTimeout(timeout);
+    return !!res.ok;
+  } catch (_) {
+    return false;
+  }
+}
 
 /**
  * Start Kalshi worker as subprocess
  */
-async function startKalshiWorker() {
+async function startKalshiWorker(options = {}) {
+  const bootTimeoutMs = Number.isFinite(options.bootTimeoutMs) ? options.bootTimeoutMs : 12000;
+  const pollMs = Number.isFinite(options.pollMs) ? options.pollMs : 150;
+  const alreadyRunning = await probeWorkerHealth(900);
+  if (alreadyRunning) {
+    kalshiWorkerState.bootStartedAt = Date.now();
+    kalshiWorkerState.ready = true;
+    kalshiWorkerState.readyLatencyMs = 0;
+    kalshiWorkerState.lastHealthError = null;
+    console.log('[Main] Kalshi worker already running on http://127.0.0.1:3050 (reusing existing process)');
+    return true;
+  }
+
   return new Promise((resolve) => {
     console.log('[Main] Starting Kalshi worker...');
-    
+    kalshiWorkerState.bootStartedAt = Date.now();
+    kalshiWorkerState.ready = false;
+    kalshiWorkerState.readyLatencyMs = null;
+    kalshiWorkerState.lastHealthError = null;
+
     kalshiWorker = spawn('node', [
       path.join(__dirname, 'kalshi-worker.js'),
       '--port', '3050',
@@ -37,7 +72,18 @@ async function startKalshiWorker() {
       console.log('[Kalshi Worker]', data.toString().trim());
     });
     kalshiWorker.stderr?.on('data', (data) => {
-      console.error('[Kalshi Worker Error]', data.toString().trim());
+      const msg = data.toString().trim();
+      console.error('[Kalshi Worker Error]', msg);
+      if (msg.includes('EADDRINUSE') && msg.includes('127.0.0.1:3050')) {
+        // Another worker may already be serving this port.
+        probeWorkerHealth(1200).then((ok) => {
+          if (!ok) return;
+          kalshiWorkerState.ready = true;
+          kalshiWorkerState.readyLatencyMs = Date.now() - (kalshiWorkerState.bootStartedAt || Date.now());
+          kalshiWorkerState.lastHealthError = null;
+          console.log('[Main] Kalshi worker port already in use by a healthy instance (reusing existing service)');
+        });
+      }
     });
 
     kalshiWorker.on('error', (err) => {
@@ -48,34 +94,63 @@ async function startKalshiWorker() {
     kalshiWorker.on('exit', (code) => {
       console.log('[Main] Worker exited with code', code);
       kalshiWorker = null;
+      kalshiWorkerState.ready = false;
+      kalshiWorkerState.readyLatencyMs = null;
+      if (readinessPollTimer) {
+        clearTimeout(readinessPollTimer);
+        readinessPollTimer = null;
+      }
     });
 
     // Wait for worker to be ready (health check)
-    waitForWorkerReady(5000).then(resolve);
+    waitForWorkerReady(bootTimeoutMs, pollMs).then((ready) => {
+      if (!ready) {
+        scheduleLateReadinessCheck();
+      }
+      resolve(ready);
+    });
   });
 }
 
 /**
  * Wait for worker to be ready
  */
-async function waitForWorkerReady(maxMs = 5000) {
+async function waitForWorkerReady(maxMs = 12000, pollMs = 150) {
   const deadline = Date.now() + maxMs;
-  
+
   while (Date.now() < deadline) {
     try {
       const res = await fetch(`${kalshiWorkerUrl}/health`);
       if (res.ok) {
-        console.log('[Main] Kalshi worker ready');
+        kalshiWorkerState.ready = true;
+        kalshiWorkerState.readyLatencyMs = Date.now() - (kalshiWorkerState.bootStartedAt || Date.now());
+        kalshiWorkerState.lastHealthError = null;
+        console.log(`[Main] Kalshi worker ready (${kalshiWorkerState.readyLatencyMs}ms)`);
         return true;
       }
     } catch (e) {
-      // Not ready yet
+      kalshiWorkerState.lastHealthError = e.message || 'health probe failed';
     }
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, pollMs));
   }
-  
-  console.warn('[Main] Kalshi worker did not start in time');
+
+  console.warn(`[Main] Kalshi worker did not start in time (${maxMs}ms)`);
   return false;
+}
+
+function scheduleLateReadinessCheck() {
+  if (!kalshiWorker || readinessPollTimer) return;
+  const poll = async () => {
+    readinessPollTimer = null;
+    if (!kalshiWorker || kalshiWorkerState.ready) return;
+    const ready = await waitForWorkerReady(1200, 200);
+    if (ready) {
+      console.log('[Main] Kalshi worker became ready after initial timeout');
+      return;
+    }
+    readinessPollTimer = setTimeout(poll, 1000);
+  };
+  readinessPollTimer = setTimeout(poll, 1000);
 }
 
 /**
@@ -90,6 +165,12 @@ function stopKalshiWorker() {
       console.error('[Main] Error killing worker:', e.message);
     }
     kalshiWorker = null;
+  }
+  kalshiWorkerState.ready = false;
+  kalshiWorkerState.readyLatencyMs = null;
+  if (readinessPollTimer) {
+    clearTimeout(readinessPollTimer);
+    readinessPollTimer = null;
   }
 }
 
@@ -139,6 +220,19 @@ ipcMain.handle('kalshi:health', async () => {
  */
 ipcMain.handle('kalshi:status', async () => {
   return await proxyToWorker('GET', '/status');
+});
+
+/**
+ * kalshi:workerReadiness — Local startup readiness state
+ */
+ipcMain.handle('kalshi:workerReadiness', async () => {
+  return {
+    success: true,
+    data: {
+      running: !!kalshiWorker,
+      ...kalshiWorkerState,
+    },
+  };
 });
 
 /**
@@ -225,5 +319,6 @@ ipcMain.handle('kalshi:getTrades', async (event, marketId, filters = {}) => {
 module.exports = {
   startKalshiWorker,
   stopKalshiWorker,
-  getWorkerStatus: () => kalshiWorker ? 'running' : 'stopped'
+  getWorkerStatus: () => kalshiWorker ? 'running' : 'stopped',
+  getWorkerReadiness: () => ({ ...kalshiWorkerState }),
 };

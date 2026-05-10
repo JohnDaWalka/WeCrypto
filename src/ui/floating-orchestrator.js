@@ -30,6 +30,7 @@
 
   const MODEL_THRESHOLD  = 0.06;
   const MIN_SECONDS_LEFT = 5;
+  const MAX_SECONDS_LEFT = 15 * 60 + 30;
   const EDGE_MIN_CENTS   = 8;
   const INVERSION_THRESH = 30;
   const THIN_BOOK_THRESH = 0.05;
@@ -253,6 +254,8 @@
     var msLeft      = closeTimeMs != null ? Math.max(0, closeTimeMs - Date.now()) : null;
     var secsLeft    = msLeft != null ? msLeft / 1000 : null;
     var minsLeft    = msLeft != null ? msLeft / 60000 : null;
+    var is15mTicker = !k15 || !k15.ticker || /15M/i.test(String(k15.ticker));
+    var hasValid15mWindow = Number.isFinite(secsLeft) && secsLeft > 0 && secsLeft <= MAX_SECONDS_LEFT;
     pruneContractState(Date.now());
     var tooLate     = msLeft != null && msLeft < MIN_SECONDS_LEFT * 1000;
     var tooEarly    = minsLeft != null && minsLeft > 14.5;
@@ -270,6 +273,8 @@
     var earlyExit = pred && pred.diagnostics && pred.diagnostics.earlyExit;
     if (!kalshiActive && !modelActive)
       return _skip(sym, 'No signal — score ' + modelScore.toFixed(3) + ', no Kalshi data');
+    if (kalshiActive && (!is15mTicker || !hasValid15mWindow))
+      return _skip(sym, 'Invalid contract window for 15m execution');
     if (tooLate)
       return _skip(sym, 'Settlement < ' + MIN_SECONDS_LEFT + 's — too late to fill');
     if (earlyExit)
@@ -299,6 +304,7 @@
     if (alignment === 'KALSHI_ONLY') action = 'watch';
     else if (!entry || entry.edgeCents < EDGE_MIN_CENTS) action = (entry && entry.edgeCents < 0) ? 'skip' : 'watch';
     else action = modelActive ? 'trade' : 'watch';
+    if (tooEarly && action === 'trade') action = 'watch';
     if (action === 'skip')
       return _skip(sym, 'Negative EV — edge ' + (entry ? entry.edgeCents : 0) + 'c (need >=' + EDGE_MIN_CENTS + 'c)');
 

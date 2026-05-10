@@ -9,7 +9,6 @@ contextBridge.exposeInMainWorld('desktopApp', {
   ws: ws,
   proxyPort:             () => ipcRenderer.invoke('proxy:port'),
   loadKalshiCredentials: () => ipcRenderer.invoke('kalshi:loadCredentials'),
-  loadBirdeyeApiKey:     () => ipcRenderer.invoke('birdeye:loadApiKey'),
   // Returns all local drives (C-Z), UNC network shares, and cloud sync folders
   getDrives:             () => ipcRenderer.invoke('storage:getDrives'),
   networkError:          (type, details) => ipcRenderer.invoke('network:logError', type, details),
@@ -46,6 +45,10 @@ contextBridge.exposeInMainWorld('auditAPI', {
 contextBridge.exposeInMainWorld('pythLazer', {
   onTickers:    (cb) => ipcRenderer.on('pyth:tickers', (_e, data) => cb(data)),
   offTickers:   ()   => ipcRenderer.removeAllListeners('pyth:tickers'),
+  onStatus:     (cb) => ipcRenderer.on('pyth:status', (_e, data) => cb(data)),
+  onTimeout:    (cb) => ipcRenderer.on('pyth:timeout-fallback', (_e, data) => cb(data)),
+  onConnectionLost: (cb) => ipcRenderer.on('pyth:connection-lost', (_e, data) => cb(data)),
+  onConnectionFailed: (cb) => ipcRenderer.on('pyth:connection-failed', (_e, data) => cb(data)),
   getCandles:   (opts) => ipcRenderer.invoke('pyth:getCandles', opts),
   getProxyLatest: (feedIds) => ipcRenderer.invoke('pyth:getProxyLatest', feedIds),
 });

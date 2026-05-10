@@ -54,25 +54,27 @@
   // ── Fetch ETH gas with fallback sources ──
   async function fetchETHGas() {
     try {
-      // Primary: Blockscout
-      const blockscout = await Promise.race([
-        fetch('https://eth.blockscout.com/api/v2/gas-price-oracle', { signal: AbortSignal.timeout(8000) })
-          .then(r => r.json()),
+      // Primary: Etherscan proxy gasPrice (no API key)
+      const etherscanProxy = await Promise.race([
+        fetch('https://api.etherscan.io/api?module=proxy&action=eth_gasPrice', { signal: AbortSignal.timeout(8000) })
+          .then(r => r.ok ? r.json() : null),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
       ]).catch(() => null);
 
-      if (blockscout?.average || blockscout?.medium) {
+      const proxyGasWei = etherscanProxy?.result ? parseInt(etherscanProxy.result, 16) || 0 : 0;
+      const proxyGasGwei = proxyGasWei > 0 ? (proxyGasWei / 1e9) : 0;
+      if (proxyGasGwei > 0) {
         return {
-          fast: parseFloat(blockscout.fast || blockscout.high || 0),
-          medium: parseFloat(blockscout.average || blockscout.standard || blockscout.medium || 0),
-          slow: parseFloat(blockscout.slow || blockscout.low || 0),
-          source: 'blockscout'
+          fast: proxyGasGwei,
+          medium: proxyGasGwei,
+          slow: proxyGasGwei,
+          source: 'etherscan-proxy'
         };
       }
 
       // Fallback: Etherscan GasTracker
       const etherscan = await Promise.race([
-        fetch('https://api.etherscan.io/api?module=gastracker&action=gasoracle&apikey=YourApiKeyToken', 
+        fetch('https://api.etherscan.io/api?module=gastracker&action=gasoracle',
           { signal: AbortSignal.timeout(8000) })
           .then(r => r.json()),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
@@ -87,9 +89,9 @@
         };
       }
 
-      // Fallback: Polygonscan (can provide similar data)
+      // Fallback: Polygonscan (coarse L1 estimate)
       const polygonscan = await Promise.race([
-        fetch('https://api.polygonscan.com/api?module=gastracker&action=gasoracle&apikey=YourApiKeyToken',
+        fetch('https://api.polygonscan.com/api?module=gastracker&action=gasoracle',
           { signal: AbortSignal.timeout(8000) })
           .then(r => r.json()),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
@@ -124,14 +126,14 @@
       if (mempool?.vsize && mempool?.count) {
         // Fetch fees - try multiple endpoints
         let fees = null;
-        
+
         // Try: mempool.space/api/v1/fees/recommended (may be available)
         try {
-          const feeRes = await fetch('https://mempool.space/api/v1/fees/recommended', 
+          const feeRes = await fetch('https://mempool.space/api/v1/fees/recommended',
             { signal: AbortSignal.timeout(5000) });
           if (feeRes.ok) fees = await feeRes.json();
         } catch (e) { /* fall through */ }
-        
+
         // Fallback: use default BTC fees (will adjust with market data elsewhere)
         if (!fees?.fastestFee) {
           console.warn('[NetCongestion] mempool.space fees endpoint unavailable, using defaults');
@@ -161,7 +163,7 @@
       'https://rpc.ankr.com/solana',
       'https://solana-api.projectserum.com',
     ];
-    
+
     for (const rpc of SOL_RPCS) {
       try {
         const perfSamples = await Promise.race([
@@ -178,7 +180,7 @@
           const samples = perfSamples.result;
           const avgTPS = Math.round(samples.reduce((s, x) => s + (x.numTransactions / (x.samplePeriodSecs || 60)), 0) / samples.length);
           const peakTPS = Math.round(Math.max(...samples.map(x => x.numTransactions / (x.samplePeriodSecs || 60))));
-          
+
           return {
             avgTPS,
             peakTPS,
@@ -202,17 +204,17 @@
         if (!data?.medium) return null;
         // 0 = low gas (<10), 1 = high gas (>100)
         return Math.min(1, Math.max(0, (data.medium - 10) / 90));
-      
+
       case 'BTC':
         if (!data?.mempoolSizeMB) return null;
         // 0 = <5MB, 1 = >50MB
         return Math.min(1, Math.max(0, (parseFloat(data.mempoolSizeMB) - 5) / 45));
-      
+
       case 'SOL':
         if (!data?.avgTPS) return null;
         // 0 = <500 TPS, 1 = >4000 TPS
         return Math.min(1, Math.max(0, (data.avgTPS - 500) / 3500));
-      
+
       default:
         return null;
     }
@@ -221,7 +223,7 @@
   // ── Update all metrics ──
   async function updateAllMetrics() {
     const now = Date.now();
-    
+
     // ETH
     const ethGas = await fetchETHGas();
     if (ethGas) {

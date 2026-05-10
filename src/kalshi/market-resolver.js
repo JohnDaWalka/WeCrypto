@@ -23,9 +23,9 @@
 (function () {
   'use strict';
 
-  const KALSHI_BASE    = 'https://api.elections.kalshi.com/trade-api/v2';
-  const POLY_GAMMA     = 'https://gamma-api.polymarket.com';
-  const CB_BASE        = 'https://api.exchange.coinbase.com';
+  const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+  const POLY_GAMMA = 'https://gamma-api.polymarket.com';
+  const CB_BASE = 'https://api.exchange.coinbase.com';
 
   // Coinbase product IDs — used for post-settlement divergence diagnostics.
   const CB_PRODUCTS = {
@@ -33,33 +33,33 @@
     XRP: 'XRP-USD', DOGE: 'DOGE-USD', BNB: 'BNB-USD', HYPE: 'HYPE-USD',
   };
 
-  const LOG_MAX        = 300;   // max entries in _15mResolutionLog
-  const SETTLE_GRACE   = 120_000; // 2 min after close_time before we poll
-  const POLL_INTERVAL  = 60_000;  // poll for settlements every 60s
-  const MAX_PENDING    = 50;      // max pending snapshots queued at once
-  const PERSIST_KEY    = 'beta1_15m_resolution_log';
-  const AUDIT_KEY      = 'beta1_contract_audit';
-  const AUDIT_MAX      = 300;
+  const LOG_MAX = 300;   // max entries in _15mResolutionLog
+  const SETTLE_GRACE = 120_000; // 2 min after close_time before we poll
+  const POLL_INTERVAL = 60_000;  // poll for settlements every 60s
+  const MAX_PENDING = 50;      // max pending snapshots queued at once
+  const PERSIST_KEY = 'beta1_15m_resolution_log';
+  const AUDIT_KEY = 'beta1_contract_audit';
+  const AUDIT_MAX = 300;
 
   // ── State ────────────────────────────────────────────────────────
   // Pending: markets we've snapshotted and are waiting to settle
-  const _pending   = new Map();
-  let   _pollTimer = null;
+  const _pending = new Map();
+  let _pollTimer = null;
 
   // Initialise global stores
   window._15mResolutionLog = window._15mResolutionLog || [];
-  window._resolutionMap    = window._resolutionMap    || {};
+  window._resolutionMap = window._resolutionMap || {};
   window._contractAuditLog = window._contractAuditLog || [];
 
   // Restore persisted logs
-  try { const s = localStorage.getItem(PERSIST_KEY); if (s) window._15mResolutionLog = JSON.parse(s); } catch (_) {}
-  try { const s = localStorage.getItem(AUDIT_KEY);   if (s) window._contractAuditLog = JSON.parse(s); } catch (_) {}
+  try { const s = localStorage.getItem(PERSIST_KEY); if (s) window._15mResolutionLog = JSON.parse(s); } catch (_) { }
+  try { const s = localStorage.getItem(AUDIT_KEY); if (s) window._contractAuditLog = JSON.parse(s); } catch (_) { }
 
   function saveLog() {
-    try { localStorage.setItem(PERSIST_KEY, JSON.stringify(window._15mResolutionLog.slice(-LOG_MAX))); } catch (_) {}
+    try { localStorage.setItem(PERSIST_KEY, JSON.stringify(window._15mResolutionLog.slice(-LOG_MAX))); } catch (_) { }
   }
   function saveAudit() {
-    try { localStorage.setItem(AUDIT_KEY, JSON.stringify(window._contractAuditLog.slice(-AUDIT_MAX))); } catch (_) {}
+    try { localStorage.setItem(AUDIT_KEY, JSON.stringify(window._contractAuditLog.slice(-AUDIT_MAX))); } catch (_) { }
   }
 
   // Per-contract audit trail — every snapshot, poll, settle, and error is recorded.
@@ -91,7 +91,7 @@
   // ── Fetch helpers ────────────────────────────────────────────────
   function fetchWithTimeout(url, ms = 7000) {
     const ctrl = new AbortController();
-    const tid  = setTimeout(() => ctrl.abort(), ms);
+    const tid = setTimeout(() => ctrl.abort(), ms);
     return fetch(url, { signal: ctrl.signal })
       .then(r => { clearTimeout(tid); return r; })
       .catch(e => { clearTimeout(tid); throw e; });
@@ -113,11 +113,11 @@
     const product = CB_PRODUCTS[sym];
     if (!product) return null;
     // Fetch a 2-candle window centred on close_time
-    const endSec   = Math.ceil(closeTimeMs / 1000) + 5;
+    const endSec = Math.ceil(closeTimeMs / 1000) + 5;
     const startSec = endSec - 180;
     try {
       const url = `${CB_BASE}/products/${product}/candles?start=${startSec}&end=${endSec}&granularity=60`;
-      const r   = await fetchWithTimeout(url, 8000);
+      const r = await fetchWithTimeout(url, 8000);
       if (!r.ok) return null;
       const candles = await r.json();
       if (!Array.isArray(candles) || !candles.length) return null;
@@ -156,39 +156,39 @@
       }
 
       // Capture what the model currently predicts for this coin
-      const pred      = window._lastPrediction?.[sym];
-      const modelDir  = pred?.direction ?? null;
+      const pred = window._lastPrediction?.[sym];
+      const modelDir = pred?.direction ?? null;
       const entryProb = k15.probability ?? null;
 
       _pending.set(k15.ticker, {
         sym,
-        ticker:      k15.ticker,
-        type:        '15m',
-        snapshotTs:  now,
+        ticker: k15.ticker,
+        type: '15m',
+        snapshotTs: now,
         closeTimeMs: closeMs,
         entryProb,
         modelDir,
-        title:       k15.title ?? null,
-        subtitle:    k15.subtitle ?? null,
+        title: k15.title ?? null,
+        subtitle: k15.subtitle ?? null,
         // Structured contract fields — from Kalshi API directly, not text-parsed
         targetPrice: k15.targetPriceNum ?? null,   // resolved ref (floorPrice preferred)
-        floorPrice:  k15.floorPrice     ?? null,   // direct numeric API field
-        capPrice:    k15.capPrice       ?? null,
-        strikeDir:   k15.strikeDir      ?? 'above', // 'above'|'below' — YES direction
-        strikeType:  k15.strikeType     ?? null,    // raw API strike_type
-        edgeCents:            window.KalshiOrchestrator?.getIntent?.(sym)?.edgeCents   ?? null,
-        entryPrice:           window.KalshiOrchestrator?.getIntent?.(sym)?.entryPrice  ?? null,
-        side:                 window.KalshiOrchestrator?.getIntent?.(sym)?.side        ?? null,
-        modelProbUp:          window.KalshiOrchestrator?.getIntent?.(sym)?.modelProbUp ?? null,
-        orchestratorAction:   window.KalshiOrchestrator?.getIntent?.(sym)?.action      ?? null,
-        orchestratorAlign:    window.KalshiOrchestrator?.getIntent?.(sym)?.alignment   ?? null,
+        floorPrice: k15.floorPrice ?? null,   // direct numeric API field
+        capPrice: k15.capPrice ?? null,
+        strikeDir: k15.strikeDir ?? 'above', // 'above'|'below' — YES direction
+        strikeType: k15.strikeType ?? null,    // raw API strike_type
+        edgeCents: window.KalshiOrchestrator?.getIntent?.(sym)?.edgeCents ?? null,
+        entryPrice: window.KalshiOrchestrator?.getIntent?.(sym)?.entryPrice ?? null,
+        side: window.KalshiOrchestrator?.getIntent?.(sym)?.side ?? null,
+        modelProbUp: window.KalshiOrchestrator?.getIntent?.(sym)?.modelProbUp ?? null,
+        orchestratorAction: window.KalshiOrchestrator?.getIntent?.(sym)?.action ?? null,
+        orchestratorAlign: window.KalshiOrchestrator?.getIntent?.(sym)?.alignment ?? null,
         // Close-snapshot and orchestrator enrichment
         closeSnapshots: [],
-        modelScore:     window._lastPrediction?.[sym]?.score ?? null,
-        sweetSpot:      window.KalshiOrchestrator?.getIntent?.(sym)?.sweetSpot      ?? false,
-        confidence:     window.KalshiOrchestrator?.getIntent?.(sym)?.confidence     ?? null,
-        crowdFade:      window.KalshiOrchestrator?.getIntent?.(sym)?.crowdFade      ?? false,
-        crowdFadeDir:   window.KalshiOrchestrator?.getIntent?.(sym)?.direction      ?? null,
+        modelScore: window._lastPrediction?.[sym]?.score ?? null,
+        sweetSpot: window.KalshiOrchestrator?.getIntent?.(sym)?.sweetSpot ?? false,
+        confidence: window.KalshiOrchestrator?.getIntent?.(sym)?.confidence ?? null,
+        crowdFade: window.KalshiOrchestrator?.getIntent?.(sym)?.crowdFade ?? false,
+        crowdFadeDir: window.KalshiOrchestrator?.getIntent?.(sym)?.direction ?? null,
       });
 
       const secsToClose = Math.round((closeMs - now) / 1000);
@@ -199,9 +199,9 @@
       });
       console.log(
         `[Resolver] 📸 captured ${sym} ${k15.ticker} | ` +
-        `closes in ${Math.floor(secsToClose/60)}m${secsToClose%60}s | ` +
+        `closes in ${Math.floor(secsToClose / 60)}m${secsToClose % 60}s | ` +
         `ref=$${k15.targetPriceNum} (floor_price=${k15.floorPrice}) ` +
-        `strike=${k15.strikeDir ?? 'above'} prob=${entryProb != null ? (entryProb*100).toFixed(0)+'%' : 'n/a'} model=${modelDir}`
+        `strike=${k15.strikeDir ?? 'above'} prob=${entryProb != null ? (entryProb * 100).toFixed(0) + '%' : 'n/a'} model=${modelDir}`
       );
     }
   }
@@ -278,7 +278,7 @@
 
   async function resolveKalshiMarket(entry) {
     const url = `${KALSHI_BASE}/markets/${entry.ticker}`;
-    
+
     // Try ProxyOrchestrator if available
     if (typeof window.ProxyOrchestrator !== 'undefined' && window._proxyOrchestrator) {
       try {
@@ -288,9 +288,9 @@
           retries: 3,
           fallbackChain: ['kalshi', 'polymarket', 'cache'],
         });
-        
+
         if (d && d.market) {
-          addAudit(entry.ticker, 'proxy_fetch_success', { 
+          addAudit(entry.ticker, 'proxy_fetch_success', {
             sym: entry.sym,
             via: 'proxyOrchestrator',
           });
@@ -309,10 +309,10 @@
     const retryDelays = [2000, 4000, 8000];
     let d = null;
     let lastError = null;
-    
+
     for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
       d = await kalshiFetch(url);
-      
+
       if (d) {
         if (attempt > 0) {
           console.log(`[Resolver] ✅ Retry succeeded on attempt ${attempt + 1} for ${entry.sym} ${entry.ticker}`);
@@ -320,9 +320,9 @@
         }
         break;
       }
-      
+
       lastError = new Error(`Fetch returned null (network/rate-limit?)`);
-      
+
       if (attempt < retryDelays.length) {
         const delay = retryDelays[attempt];
         console.warn(`[Resolver] ⚠️ Retry attempt ${attempt + 1} for ${entry.sym} ${entry.ticker} — waiting ${delay}ms before retry`);
@@ -330,13 +330,13 @@
         await new Promise(r => setTimeout(r, delay));
       }
     }
-    
+
     if (!d) {
       console.error(`[Resolver] ❌ ${entry.sym} ${entry.ticker} — fetch failed after ${retryDelays.length + 1} attempts (network/rate-limit?)`);
       addAudit(entry.ticker, 'fetch_failed_all_retries', { sym: entry.sym, url, attempts: retryDelays.length + 1 });
       return null;
     }
-    
+
     return await processKalshiSettlement(d, entry);
   }
 
@@ -348,7 +348,8 @@
       addAudit(entry.ticker, 'no_market_key', { sym: entry.sym, responseKeys: Object.keys(d) });
       return null;
     }
-    if (m.status !== 'settled') {
+    const statusNorm = String(m.status || '').toLowerCase();
+    if (statusNorm !== 'settled' && statusNorm !== 'finalized') {
       console.log(`[Resolver] ⏳ ${entry.sym} ${entry.ticker} status='${m.status}' result='${m.result}' — not settled yet`);
       addAudit(entry.ticker, 'awaiting_settlement', {
         sym: entry.sym,
@@ -372,13 +373,21 @@
     // strikeDir determines which side of floor_price makes YES win:
     //   'above' (default for KXBTC15M): YES = close >= floor_price → UP
     //   'below':                        YES = close <  floor_price → DOWN
-    const apiFloorPrice = m.floor_price != null ? parseFloat(m.floor_price) : null;
-    const apiCapPrice   = m.cap_price   != null ? parseFloat(m.cap_price)   : null;
+    const apiFloorPriceRaw = m.floor_price != null ? parseFloat(m.floor_price) : null;
+    const apiFloorStrike = m.floor_strike != null ? parseFloat(m.floor_strike) : null;
+    const apiCapPriceRaw = m.cap_price != null ? parseFloat(m.cap_price) : null;
+    const apiCapStrike = m.cap_strike != null ? parseFloat(m.cap_strike) : null;
+    const apiFloorPrice = (Number.isFinite(apiFloorStrike) && apiFloorStrike > 0)
+      ? apiFloorStrike
+      : (Number.isFinite(apiFloorPriceRaw) && apiFloorPriceRaw > 0 ? apiFloorPriceRaw : null);
+    const apiCapPrice = (Number.isFinite(apiCapStrike) && apiCapStrike > 0)
+      ? apiCapStrike
+      : (Number.isFinite(apiCapPriceRaw) && apiCapPriceRaw > 0 ? apiCapPriceRaw : null);
     // Normalize strike_type — handle all Kalshi variants
     const apiStrikeType = m.strike_type ? String(m.strike_type).toLowerCase() : null;
-    const apiStrikeDir  = (() => {
+    const apiStrikeDir = (() => {
       if (apiStrikeType === 'below' || apiStrikeType === 'under') return 'below';
-      if (apiStrikeType === 'above' || apiStrikeType === 'over' || apiStrikeType === 'at_least') return 'above';
+      if (apiStrikeType === 'above' || apiStrikeType === 'over' || apiStrikeType === 'at_least' || apiStrikeType === 'greater_or_equal') return 'above';
       return entry.strikeDir ?? 'above'; // fall back to snapshot value
     })();
 
@@ -393,34 +402,36 @@
     // Map Kalshi result → UP/DOWN using the contract's actual strike direction
     // YES on an 'above' contract = price rose above ref = UP
     // YES on a 'below' contract = price stayed below ref = DOWN
-    const actualOutcome = m.result === 'yes'
+    const resultNorm = String(m.result || '').toLowerCase();
+    const yesResult = resultNorm === 'yes';
+    const actualOutcome = yesResult
       ? (apiStrikeDir === 'below' ? 'DOWN' : 'UP')
-      : (apiStrikeDir === 'below' ? 'UP'   : 'DOWN');
+      : (apiStrikeDir === 'below' ? 'UP' : 'DOWN');
 
     // Market direction: prob >= 50% says market thinks YES will win
     // Translate to UP/DOWN via same strikeDir logic
-    const entryProb     = entry.entryProb ?? 0.5;
-    const yesWins       = entryProb >= 0.50;
-    const marketDir     = yesWins
+    const entryProb = entry.entryProb ?? 0.5;
+    const yesWins = entryProb >= 0.50;
+    const marketDir = yesWins
       ? (apiStrikeDir === 'below' ? 'DOWN' : 'UP')
-      : (apiStrikeDir === 'below' ? 'UP'   : 'DOWN');
+      : (apiStrikeDir === 'below' ? 'UP' : 'DOWN');
 
-    const modelDir      = entry.modelDir;
-    const modelCorrect  = modelDir && modelDir !== 'FLAT' ? modelDir === actualOutcome : null;
+    const modelDir = entry.modelDir;
+    const modelCorrect = modelDir && modelDir !== 'FLAT' ? modelDir === actualOutcome : null;
     const marketCorrect = marketDir === actualOutcome;
 
     // Full contract audit — raw Kalshi API fields + derived values
     const rtiDiagnostics = getRtiDiagnostics(entry.sym, entry.closeTimeMs);
     addAudit(entry.ticker, 'contract_settled', {
-      sym:           entry.sym,
+      sym: entry.sym,
       // Raw Kalshi API fields
-      result:        m.result,
-      status:        m.status,
-      floor_price:   m.floor_price,
-      cap_price:     m.cap_price,
-      strike_type:   m.strike_type,
-      close_time:    m.close_time,
-      title:         m.title,
+      result: m.result,
+      status: m.status,
+      floor_price: m.floor_price,
+      cap_price: m.cap_price,
+      strike_type: m.strike_type,
+      close_time: m.close_time,
+      title: m.title,
       yes_sub_title: m.yes_sub_title,
       // Derived
       apiStrikeDir,
@@ -433,7 +444,7 @@
       marketCorrect,
       entryProb,
       // Proxy cross-check — what did the bucket-close proxy call?
-      proxyOutcome:  entry.proxyOutcome ?? null,
+      proxyOutcome: entry.proxyOutcome ?? null,
       proxyMismatch: entry.proxyOutcome ? entry.proxyOutcome !== actualOutcome : null,
       rtiDiagnostics,
     });
@@ -442,7 +453,7 @@
       `[Resolver] ✅ ${entry.sym} ${entry.ticker} | result=${m.result} → ${actualOutcome} | ` +
       `floor_price=${m.floor_price ?? 'null'} strike=${apiStrikeDir} conf=${confidence} | ` +
       `snapshot_ref=${entry.targetPrice} | model=${modelDir} ${modelCorrect ? '✓' : modelCorrect === false ? '✗' : '?'} | ` +
-      `mktProb=${(entryProb*100).toFixed(0)}% mktOk=${marketCorrect}`
+      `mktProb=${(entryProb * 100).toFixed(0)}% mktOk=${marketCorrect}`
     );
 
     const cbSettlePrice = await fetchCoinbaseSettlement(entry.sym, entry.closeTimeMs);
@@ -466,11 +477,11 @@
       const pythPrice = pythData.price;
       const divergence = Math.abs((pythPrice - refPrice) / refPrice);
       const pythSide = pythPrice >= refPrice ? 'UP' : 'DOWN';
-      
+
       if (divergence > 0.005) { // 0.5% threshold
         console.warn(
           `[Resolver] ⚠️ PRICE_DIVERGENCE: ${entry.sym} ${entry.ticker} | ` +
-          `PYTH=${pythPrice} vs Kalshi=${refPrice} (${(divergence*100).toFixed(2)}% diff) → PYTH=${pythSide} vs Kalshi=${actualOutcome}`
+          `PYTH=${pythPrice} vs Kalshi=${refPrice} (${(divergence * 100).toFixed(2)}% diff) → PYTH=${pythSide} vs Kalshi=${actualOutcome}`
         );
         addAudit(entry.ticker, 'pyth_divergence', {
           sym: entry.sym,
@@ -495,52 +506,54 @@
     }
 
     return {
-      sym:           entry.sym,
-      ticker:        entry.ticker,
-      type:          '15m',
-      snapshotTs:    entry.snapshotTs,
-      closeTimeMs:   entry.closeTimeMs,
-      settledTs:     Date.now(),
+      sym: entry.sym,
+      ticker: entry.ticker,
+      type: '15m',
+      snapshotTs: entry.snapshotTs,
+      closeTimeMs: entry.closeTimeMs,
+      settledTs: Date.now(),
+      settleLatencyMs: Math.max(0, Date.now() - entry.closeTimeMs),
+      settleLatencySec: Math.max(0, Math.round((Date.now() - entry.closeTimeMs) / 1000)),
       entryProb,
       marketDir,
       actualOutcome,
-      kalshiResult:  m.result,          // raw 'yes'/'no' from Kalshi API
+      kalshiResult: m.result,          // raw 'yes'/'no' from Kalshi API
       refPrice,                         // authoritative ref from floor_price
-      floorPrice:    apiFloorPrice,
-      capPrice:      apiCapPrice,
-      strikeDir:     apiStrikeDir,
-      strikeType:    apiStrikeType,
+      floorPrice: apiFloorPrice,
+      capPrice: apiCapPrice,
+      strikeDir: apiStrikeDir,
+      strikeType: apiStrikeType,
       confidence,                       // 92 = structured floor_price, 65 = fallback
       cbSettlePrice,
-      rtiAtResolve:  rtiDiagnostics,
-      proxyOutcome:  entry.proxyOutcome ?? null,  // what bucket-close proxy called
-      modelDir:      modelDir ?? null,
+      rtiAtResolve: rtiDiagnostics,
+      proxyOutcome: entry.proxyOutcome ?? null,  // what bucket-close proxy called
+      modelDir: modelDir ?? null,
       modelCorrect,
       marketCorrect,
-      correct:       modelCorrect,
-      edgeCents:     entry.edgeCents          ?? null,
-      entryPrice:    entry.entryPrice         ?? null,
-      side:          entry.side               ?? null,
-      modelProbUp:   entry.modelProbUp        ?? null,
+      correct: modelCorrect,
+      edgeCents: entry.edgeCents ?? null,
+      entryPrice: entry.entryPrice ?? null,
+      side: entry.side ?? null,
+      modelProbUp: entry.modelProbUp ?? null,
       orchestratorAction: entry.orchestratorAction ?? null,
-      orchestratorAlign:  entry.orchestratorAlign  ?? null,
+      orchestratorAlign: entry.orchestratorAlign ?? null,
       missedOpportunity: (
         modelCorrect === true &&
         (entry.orchestratorAction === 'skip' || entry.orchestratorAction === 'watch')
       ) ? {
-        action:    entry.orchestratorAction,
+        action: entry.orchestratorAction,
         alignment: entry.orchestratorAlign ?? null,
         edgeCents: entry.edgeCents ?? null,
       } : null,
       // Enhanced contract analysis fields
-      closeSnapshots:  entry.closeSnapshots ?? [],
-      modelScore:      entry.modelScore     ?? null,
-      sweetSpot:       entry.sweetSpot      ?? false,
-      crowdFade:       entry.crowdFade      ?? false,
-      crowdFadeDir:    entry.crowdFadeDir   ?? null,
-      wickedOut:       detectWick(entry, actualOutcome),
-      lateEntry:       entry.closeSnapshots?.some(s => s.secsLeft < 60) ?? false,
-      entrySecsLeft:   Math.round((entry.closeTimeMs - entry.snapshotTs) / 1000),
+      closeSnapshots: entry.closeSnapshots ?? [],
+      modelScore: entry.modelScore ?? null,
+      sweetSpot: entry.sweetSpot ?? false,
+      crowdFade: entry.crowdFade ?? false,
+      crowdFadeDir: entry.crowdFadeDir ?? null,
+      wickedOut: detectWick(entry, actualOutcome),
+      lateEntry: entry.closeSnapshots?.some(s => s.secsLeft < 60) ?? false,
+      entrySecsLeft: Math.round((entry.closeTimeMs - entry.snapshotTs) / 1000),
     };
   }
 
@@ -564,25 +577,31 @@
     try {
       window.dispatchEvent(new CustomEvent('market15m:resolved', {
         detail: {
-          sym:           res.sym,
-          outcome:       res.actualOutcome,   // 'UP' | 'DOWN'
-          kalshiResult:  res.kalshiResult,    // raw 'yes' | 'no' from Kalshi API
-          modelCorrect:  res.modelCorrect,
+          sym: res.sym,
+          outcome: res.actualOutcome,   // 'UP' | 'DOWN'
+          kalshiResult: res.kalshiResult,    // raw 'yes' | 'no' from Kalshi API
+          proxyMismatch: res.proxyMismatch ?? null,
+          settlementAuthority: 'kalshi_api',
+          canonical: true,
+          schemaVersion: 'resolver.v1',
+          modelCorrect: res.modelCorrect,
           marketCorrect: res.marketCorrect,
-          prob:          res.entryProb,
-          ticker:        res.ticker,
-          refPrice:      res.refPrice,        // authoritative floor_price
-          floorPrice:    res.floorPrice,
-          strikeDir:     res.strikeDir,
+          prob: res.entryProb,
+          ticker: res.ticker,
+          refPrice: res.refPrice,        // authoritative floor_price
+          floorPrice: res.floorPrice,
+          strikeDir: res.strikeDir,
           cbSettlePrice: res.cbSettlePrice,
-          rtiAtResolve:  res.rtiAtResolve,
+          rtiAtResolve: res.rtiAtResolve,
+          settleLatencyMs: res.settleLatencyMs,
+          settleLatencySec: res.settleLatencySec,
         },
       }));
-    } catch (_) {}
+    } catch (_) { }
 
-    const icon = res.modelCorrect === true  ? '\u2705'
-               : res.modelCorrect === false ? '\u274c'
-               : '\u2753';
+    const icon = res.modelCorrect === true ? '\u2705'
+      : res.modelCorrect === false ? '\u274c'
+        : '\u2753';
     console.log(
       `[Resolver] ${res.sym} 15M settled result=${res.kalshiResult} → ${res.actualOutcome} ${icon} ` +
       `| model=${res.modelDir ?? 'N/A'} | ref=$${res.refPrice} floor_price=${res.floorPrice} ` +
@@ -605,10 +624,10 @@
     const accuracy = correct / recent.length;
 
     // Trend: last 8 vs prior 8
-    const last8  = recent.slice(-8);
+    const last8 = recent.slice(-8);
     const prior8 = recent.slice(-16, -8);
-    const l8acc  = last8.length  ? last8.filter(e => e.modelCorrect).length  / last8.length  : accuracy;
-    const p8acc  = prior8.length ? prior8.filter(e => e.modelCorrect).length / prior8.length : accuracy;
+    const l8acc = last8.length ? last8.filter(e => e.modelCorrect).length / last8.length : accuracy;
+    const p8acc = prior8.length ? prior8.filter(e => e.modelCorrect).length / prior8.length : accuracy;
 
     // Streak
     let streak = 0;
@@ -654,10 +673,10 @@
   // ── PUBLIC API ───────────────────────────────────────────────────
   window.MarketResolver = {
     start,
-    getPending:           () => [..._pending.values()],
-    getLog:               () => window._15mResolutionLog,
+    getPending: () => [..._pending.values()],
+    getLog: () => window._15mResolutionLog,
     getResolutionAccuracy,
-    getLatest:            sym => window._resolutionMap[sym] ?? null,
+    getLatest: sym => window._resolutionMap[sym] ?? null,
     addCloseSnapshot,
     buildCalibration(sym, n = 30) { return getResolutionAccuracy(sym, n); },
     getMissedOpps(n = 50) {
@@ -667,16 +686,16 @@
       const log = (window._15mResolutionLog || [])
         .filter(e => e.edgeCents != null && e.modelCorrect !== null).slice(-n);
       const buckets = [
-        { label: 'Neg edge',  min: -Infinity, max: 0  },
-        { label: '0–5¢',      min: 0,         max: 5  },
-        { label: '5–10¢',     min: 5,         max: 10 },
-        { label: '10–20¢',    min: 10,        max: 20 },
-        { label: '20–30¢',    min: 20,        max: 30 },
-        { label: '30¢+',      min: 30,        max: Infinity },
+        { label: 'Neg edge', min: -Infinity, max: 0 },
+        { label: '0–5¢', min: 0, max: 5 },
+        { label: '5–10¢', min: 5, max: 10 },
+        { label: '10–20¢', min: 10, max: 20 },
+        { label: '20–30¢', min: 20, max: 30 },
+        { label: '30¢+', min: 30, max: Infinity },
       ];
       return buckets.map(b => {
         const entries = log.filter(e => e.edgeCents >= b.min && e.edgeCents < b.max);
-        const wins    = entries.filter(e => e.modelCorrect);
+        const wins = entries.filter(e => e.modelCorrect);
         return {
           label: b.label, trades: entries.length, wins: wins.length,
           winRate: entries.length ? +(wins.length / entries.length * 100).toFixed(1) : null,
@@ -702,7 +721,7 @@
       const log = window._contractAuditLog || [];
       const rows = sym ? log.filter(e => e.sym === sym || (e.ticker || '').includes(sym)) : log;
       console.table(rows.map(e => ({
-        time: e.tsIso?.slice(11,19), ticker: e.ticker, event: e.event,
+        time: e.tsIso?.slice(11, 19), ticker: e.ticker, event: e.event,
         sym: e.sym, result: e.result, outcome: e.actualOutcome,
         floor_price: e.floor_price, strike: e.apiStrikeDir ?? e.strikeDir,
         confidence: e.confidence, modelDir: e.modelDir, modelOk: e.modelCorrect,
@@ -712,7 +731,7 @@
     errors() {
       const errs = window._kalshiErrors || [];
       console.table(errs.map(e => ({
-        time: e.tsIso?.slice(11,19), type: e.type, sym: e.sym,
+        time: e.tsIso?.slice(11, 19), type: e.type, sym: e.sym,
         ticker: e.ticker, proxy: e.proxy, auth: e.authoritative,
         ref: e.refPrice, close: e.proxyClosePrice, cbSettle: e.cbSettlePrice,
         gap: e.refDiffPct, wick: e.wickStraddle, nearRef: e.nearRef,
@@ -724,10 +743,10 @@
       const p = [..._pending.values()];
       console.table(p.map(e => ({
         sym: e.sym, ticker: e.ticker,
-        closesAt: new Date(e.closeTimeMs).toISOString().slice(11,19),
+        closesAt: new Date(e.closeTimeMs).toISOString().slice(11, 19),
         secsLeft: Math.round((e.closeTimeMs - Date.now()) / 1000),
         floorPrice: e.floorPrice, strikeDir: e.strikeDir,
-        model: e.modelDir, prob: e.entryProb != null ? `${(e.entryProb*100).toFixed(0)}%` : null,
+        model: e.modelDir, prob: e.entryProb != null ? `${(e.entryProb * 100).toFixed(0)}%` : null,
       })));
       return p;
     },
@@ -739,7 +758,7 @@
         outcome: r.actualOutcome, strikeDir: r.strikeDir,
         floor_price: r.floorPrice, ref: r.refPrice, cbSettle: r.cbSettlePrice,
         model: r.modelDir, modelOk: r.modelCorrect, mktOk: r.marketCorrect,
-        confidence: r.confidence, settledAt: new Date(r.settledTs).toISOString().slice(11,19),
+        confidence: r.confidence, settledAt: new Date(r.settledTs).toISOString().slice(11, 19),
       }]);
       return r;
     },
@@ -763,12 +782,12 @@
     contract(sym) {
       const snap = window._lastKalshiSnapshot?.[sym];
       const pend = [..._pending.values()].find(e => e.sym === sym);
-      const res  = window._resolutionMap?.[sym];
+      const res = window._resolutionMap?.[sym];
       const errs = (window._kalshiErrors || []).filter(e => e.sym === sym).slice(-5);
       console.log(`\n=== ${sym} FULL CONTRACT STATE ===`);
       console.log('📸 snapshot:', snap ?? 'NONE');
       console.log('⏳ pending: ', pend ?? 'NONE');
-      console.log('✅ resolved:', res  ?? 'NONE');
+      console.log('✅ resolved:', res ?? 'NONE');
       errs.length && console.log('❌ errors:  ', errs);
       return { snap, pend, res, errs };
     },
@@ -782,13 +801,13 @@
       return entries;
     },
     summary() {
-      const coins = [...new Set((window._kalshiLog||[]).map(e=>e.sym))];
+      const coins = [...new Set((window._kalshiLog || []).map(e => e.sym))];
       const rows = coins.map(sym => {
-        const entries = (window._kalshiLog||[]).filter(e=>e.sym===sym && e._settled);
-        const correct = entries.filter(e=>!e._proxyMismatch).length;
-        const conflicts = entries.filter(e=>e._dirConflict).length;
-        const wicks = entries.filter(e=>e._wickStraddle).length;
-        return { sym, settled: entries.length, correct, accuracy: entries.length ? `${(correct/entries.length*100).toFixed(0)}%` : '–', conflicts, wicks };
+        const entries = (window._kalshiLog || []).filter(e => e.sym === sym && e._settled);
+        const correct = entries.filter(e => !e._proxyMismatch).length;
+        const conflicts = entries.filter(e => e._dirConflict).length;
+        const wicks = entries.filter(e => e._wickStraddle).length;
+        return { sym, settled: entries.length, correct, accuracy: entries.length ? `${(correct / entries.length * 100).toFixed(0)}%` : '–', conflicts, wicks };
       });
       console.table(rows);
       return rows;
@@ -796,33 +815,33 @@
     tune() {
       const log = window._15mResolutionLog || [];
       if (log.length === 0) { console.log('❌ No settlement data available'); return null; }
-      
+
       const coins = [...new Set(log.map(e => e.sym))];
       const tuneReport = {};
-      
+
       coins.forEach(sym => {
         const entries = log.filter(e => e.sym === sym);
         if (entries.length < 3) return; // skip coins with < 3 trades
-        
+
         // Per-coin accuracy
         const correct = entries.filter(e => e.modelCorrect === true).length;
         const accuracy = (correct / entries.length * 100).toFixed(1);
-        
+
         // Edge threshold analysis — bucket by edgeCents
         const edgeBuckets = [
-          { min: 0,  max: 5,  label: '0-5¢' },
-          { min: 5,  max: 10, label: '5-10¢' },
+          { min: 0, max: 5, label: '0-5¢' },
+          { min: 5, max: 10, label: '5-10¢' },
           { min: 10, max: 20, label: '10-20¢' },
           { min: 20, max: 999, label: '20+¢' },
         ];
-        
+
         const edgeAnalysis = edgeBuckets.map(bucket => {
           const inBucket = entries.filter(e => e.edgeCents != null && e.edgeCents >= bucket.min && e.edgeCents < bucket.max);
           const wins = inBucket.filter(e => e.modelCorrect === true).length;
           const rate = inBucket.length > 0 ? (wins / inBucket.length * 100).toFixed(1) : '—';
           return { ...bucket, trades: inBucket.length, wins, rate };
         });
-        
+
         // Volatility impact
         const volBuckets = ['low', 'medium', 'high'];
         const volAnalysis = volBuckets.map(vol => {
@@ -831,18 +850,18 @@
           const rate = inVol.length > 0 ? (wins / inVol.length * 100).toFixed(1) : '—';
           return { volatility: vol, trades: inVol.length, wins, rate };
         });
-        
+
         // Time bias — early vs late entries
         const early = entries.filter(e => (e.entrySecsLeft ?? 300) > 60);
         const late = entries.filter(e => (e.entrySecsLeft ?? 300) <= 60);
         const earlyRate = early.length > 0 ? (early.filter(e => e.modelCorrect).length / early.length * 100).toFixed(1) : '—';
         const lateRate = late.length > 0 ? (late.filter(e => e.modelCorrect).length / late.length * 100).toFixed(1) : '—';
-        
+
         // Fade analysis — when model disagrees with crowd
         const fadeEntries = entries.filter(e => e.crowdFade === true);
         const fadeWins = fadeEntries.filter(e => e.modelCorrect === true).length;
         const fadeRate = fadeEntries.length > 0 ? (fadeWins / fadeEntries.length * 100).toFixed(1) : '—';
-        
+
         tuneReport[sym] = {
           total: entries.length,
           accuracy: `${accuracy}%`,
@@ -852,12 +871,12 @@
           fadePerf: { trades: fadeEntries.length, rate: fadeRate, wins: fadeWins },
         };
       });
-      
+
       console.log('\n╔══════════════════════════════════════════════════════╗');
       console.log('║            DEEP MODEL TUNING ANALYSIS                ║');
       console.log('║          (Last ' + log.length + ' settled markets)                ║');
       console.log('╚══════════════════════════════════════════════════════╝\n');
-      
+
       coins.forEach(sym => {
         const t = tuneReport[sym];
         if (!t) return;
@@ -875,14 +894,14 @@
         console.log(`  ├─ Entry Timing: Early=${t.timeOfEntry.early} | Late=${t.timeOfEntry.late}`);
         console.log(`  └─ Fade Performance: ${t.fadePerf.wins}/${t.fadePerf.trades} (${t.fadePerf.rate}% win rate)`);
       });
-      
+
       console.log('\n💡 RECOMMENDATIONS:');
       Object.entries(tuneReport).forEach(([sym, t]) => {
         const lowEdge = t.edgeAnalysis.find(e => e.label === '0-5¢');
         const highEdge = t.edgeAnalysis.find(e => e.label === '20+¢');
         const lowRate = lowEdge?.rate !== '—' ? parseFloat(lowEdge.rate) : 50;
         const highRate = highEdge?.rate !== '—' ? parseFloat(highEdge.rate) : 50;
-        
+
         if (lowRate < 50 && highRate > 55) {
           console.log(`  • ${sym}: RAISE minimum edge threshold (high-edge trades ~${highRate}% vs low ~${lowRate}%)`);
         }
@@ -890,7 +909,7 @@
           console.log(`  • ${sym}: Crowd-fade strategy working well (${t.fadePerf.rate}%) — consider scaling`);
         }
       });
-      
+
       return tuneReport;
     },
   };

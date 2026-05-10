@@ -12,22 +12,22 @@ class HistoricalSettlementFetcher {
     this.kalshiBase = 'https://api.elections.kalshi.com/trade-api/v2';
     this.polyBase = 'https://gamma-api.polymarket.com';
     this.coinbaseBase = 'https://api.exchange.coinbase.com';
-    
+
     // Cache for settled contracts (avoid redundant API calls)
     this.settledCache = {
       kalshi: [],
       polymarket: [],
       coinbase: [],
     };
-    
+
     this.lastFetch = {
       kalshi: 0,
       polymarket: 0,
       coinbase: 0,
     };
-    
+
     this.cacheTTL = 300_000; // 5 minutes
-    
+
     console.log('[HistoricalSettlementFetcher] Initialized');
   }
 
@@ -37,47 +37,50 @@ class HistoricalSettlementFetcher {
    */
   async fetchKalshiSettled(hoursBack = 24, limit = 100) {
     const now = Date.now();
-    
+
     // Check cache
     if (this.settledCache.kalshi.length > 0 && now - this.lastFetch.kalshi < this.cacheTTL) {
       console.log(`[HistoricalFetcher] Using Kalshi cache (${this.settledCache.kalshi.length} settled contracts)`);
       return this.settledCache.kalshi;
     }
-    
+
     try {
       // Kalshi markets endpoint filters by status
       const url = `${this.kalshiBase}/markets?status=settled&limit=${limit}`;
       const response = await fetch(url, { timeout: 8000 });
-      
+
       if (!response.ok) {
         console.error(`[HistoricalFetcher] Kalshi API error: ${response.status}`);
         return [];
       }
-      
+
       const data = await response.json();
       const markets = data.markets || [];
-      
+
       const settled = markets
         .filter(m => {
           // Only 15M crypto markets
           if (!m.ticker) return false;
           if (!m.ticker.includes('15M')) return false;
           if (!['BTC', 'ETH', 'SOL', 'XRP'].some(sym => m.ticker.includes(sym))) return false;  // 4-coin focus
-          if (m.status !== 'settled') return false;
+          const statusNorm = String(m.status || '').toLowerCase();
+          if (statusNorm !== 'settled' && statusNorm !== 'finalized') return false;
           return true;
         })
         .map(m => {
           // Extract coin symbol from ticker (e.g., "KXBTC15M220430" → "BTC")
           const symMatch = m.ticker.match(/KX(\w+)15M/);
           const symbol = symMatch ? symMatch[1] : null;
-          
+
           return {
             source: 'kalshi',
             ticker: m.ticker,
             symbol,
             status: m.status,
             result: m.result, // 'YES' or 'NO'
-            floorPrice: m.floor_price,
+            floorPrice: (m.floor_strike != null && Number.isFinite(parseFloat(m.floor_strike)))
+              ? parseFloat(m.floor_strike)
+              : m.floor_price,
             strikeType: m.strike_type,
             settleTime: m.close_time ? new Date(m.close_time).getTime() : null,
             createdAt: m.created_at ? new Date(m.created_at).getTime() : null,
@@ -87,10 +90,10 @@ class HistoricalSettlementFetcher {
           };
         })
         .slice(0, 50); // Keep most recent 50
-      
+
       this.settledCache.kalshi = settled;
       this.lastFetch.kalshi = now;
-      
+
       console.log(`[HistoricalFetcher] Fetched ${settled.length} settled Kalshi 15M markets`);
       return settled;
     } catch (err) {
@@ -105,25 +108,25 @@ class HistoricalSettlementFetcher {
    */
   async fetchPolymarketSettled(hoursBack = 24, limit = 100) {
     const now = Date.now();
-    
+
     // Check cache
     if (this.settledCache.polymarket.length > 0 && now - this.lastFetch.polymarket < this.cacheTTL) {
       console.log(`[HistoricalFetcher] Using Polymarket cache (${this.settledCache.polymarket.length} resolved markets)`);
       return this.settledCache.polymarket;
     }
-    
+
     try {
       // Polymarket markets endpoint
       const url = `${this.polyBase}/markets?status=resolved&limit=${limit}`;
       const response = await fetch(url, { timeout: 8000 });
-      
+
       if (!response.ok) {
         console.error(`[HistoricalFetcher] Polymarket API error: ${response.status}`);
         return [];
       }
-      
+
       const markets = await response.json();
-      
+
       const resolved = markets
         .filter(m => {
           // Only crypto prediction markets
@@ -138,12 +141,12 @@ class HistoricalSettlementFetcher {
           // Extract symbol from title
           const symMatch = m.title.match(/(BTC|ETH|SOL|XRP|DOGE|BNB)/i);
           const symbol = symMatch ? symMatch[1].toUpperCase() : null;
-          
+
           // Determine outcome from outcome prices
           const outcomeYes = m.outcomePrices?.[0] ?? 0;
           const outcomeNo = m.outcomePrices?.[1] ?? 0;
           const outcome = outcomeYes > outcomeNo ? 'YES' : 'NO';
-          
+
           return {
             source: 'polymarket',
             marketId: m.id,
@@ -158,10 +161,10 @@ class HistoricalSettlementFetcher {
           };
         })
         .slice(0, 50); // Keep most recent 50
-      
+
       this.settledCache.polymarket = resolved;
       this.lastFetch.polymarket = now;
-      
+
       console.log(`[HistoricalFetcher] Fetched ${resolved.length} resolved Polymarket crypto markets`);
       return resolved;
     } catch (err) {
@@ -175,26 +178,26 @@ class HistoricalSettlementFetcher {
    */
   async fetchCoinbasePredictionsSettled(hoursBack = 24, limit = 50) {
     const now = Date.now();
-    
+
     // Check cache
     if (this.settledCache.coinbase.length > 0 && now - this.lastFetch.coinbase < this.cacheTTL) {
       console.log(`[HistoricalFetcher] Using Coinbase cache (${this.settledCache.coinbase.length} settled predictions)`);
       return this.settledCache.coinbase;
     }
-    
+
     try {
       // Coinbase prediction markets endpoint
       const url = `${this.coinbaseBase}/predictions?status=settled&limit=${limit}`;
       const response = await fetch(url, { timeout: 8000 });
-      
+
       if (!response.ok) {
         console.error(`[HistoricalFetcher] Coinbase API error: ${response.status}`);
         return [];
       }
-      
+
       const data = await response.json();
       const markets = data.predictions || [];
-      
+
       const settled = markets
         .filter(m => {
           if (!m.title) return false;
@@ -205,7 +208,7 @@ class HistoricalSettlementFetcher {
         .map(m => {
           const symMatch = m.title.match(/(BTC|ETH|SOL|XRP|DOGE|BNB)/i);
           const symbol = symMatch ? symMatch[1].toUpperCase() : null;
-          
+
           return {
             source: 'coinbase',
             marketId: m.id,
@@ -218,10 +221,10 @@ class HistoricalSettlementFetcher {
           };
         })
         .slice(0, 50);
-      
+
       this.settledCache.coinbase = settled;
       this.lastFetch.coinbase = now;
-      
+
       console.log(`[HistoricalFetcher] Fetched ${settled.length} settled Coinbase predictions`);
       return settled;
     } catch (err) {
@@ -239,7 +242,7 @@ class HistoricalSettlementFetcher {
       this.fetchPolymarketSettled(hoursBack),
       this.fetchCoinbasePredictionsSettled(hoursBack),
     ]);
-    
+
     return {
       kalshi,
       polymarket,
@@ -256,7 +259,7 @@ class HistoricalSettlementFetcher {
   calculateAccuracy(settledMarkets) {
     const predictions = window._lastPrediction || {};
     const accuracy = {};
-    
+
     // Group by coin symbol
     const byCoin = {};
     for (const market of settledMarkets) {
@@ -265,7 +268,7 @@ class HistoricalSettlementFetcher {
       if (!byCoin[sym]) byCoin[sym] = [];
       byCoin[sym].push(market);
     }
-    
+
     // Calculate per-coin accuracy
     for (const [sym, markets] of Object.entries(byCoin)) {
       const pred = predictions[sym];
@@ -279,10 +282,10 @@ class HistoricalSettlementFetcher {
         };
         continue;
       }
-      
+
       const modelDir = pred.direction; // 'UP' or 'DOWN'
       let correct = 0;
-      
+
       for (const m of markets) {
         // Kalshi: result is 'YES' or 'NO'
         let marketDir = null;
@@ -295,12 +298,12 @@ class HistoricalSettlementFetcher {
           // Polymarket and Coinbase: outcome is already 'YES' or 'NO' (price up/down)
           marketDir = m.outcome === 'YES' ? 'UP' : 'DOWN';
         }
-        
+
         if (marketDir === modelDir) {
           correct++;
         }
       }
-      
+
       accuracy[sym] = {
         symbol: sym,
         total: markets.length,
@@ -309,7 +312,7 @@ class HistoricalSettlementFetcher {
         prediction: modelDir,
       };
     }
-    
+
     return accuracy;
   }
 
@@ -318,14 +321,14 @@ class HistoricalSettlementFetcher {
    */
   async getScorecard() {
     const settled = await this.fetchAllSettled();
-    
+
     // Flatten to single array
     const allSettled = [
       ...settled.kalshi,
       ...settled.polymarket,
       ...settled.coinbase,
     ];
-    
+
     // Group by coin
     const byCoin = {};
     for (const market of allSettled) {
@@ -340,13 +343,13 @@ class HistoricalSettlementFetcher {
       }
       byCoin[sym].settled.push(market);
     }
-    
+
     // Calculate accuracy per coin
     const scorecard = {};
     for (const [sym, data] of Object.entries(byCoin)) {
       const pred = window._lastPrediction?.[sym];
       const modelDir = pred?.direction;
-      
+
       let correct = 0;
       for (const m of data.settled) {
         let marketDir;
@@ -360,7 +363,7 @@ class HistoricalSettlementFetcher {
         }
         if (marketDir === modelDir) correct++;
       }
-      
+
       scorecard[sym] = {
         symbol: sym,
         total: data.settled.length,
@@ -370,7 +373,7 @@ class HistoricalSettlementFetcher {
         recentMarkets: data.settled.slice(0, 5), // Last 5 for detail
       };
     }
-    
+
     // Feed accuracy data into adaptive learning engine
     if (typeof window !== 'undefined' && window.AdaptiveLearner) {
       for (const [sym, scoreData] of Object.entries(scorecard)) {
@@ -382,14 +385,14 @@ class HistoricalSettlementFetcher {
           window.AdaptiveLearner.recordSignalContribution(sym, signals, wasCorrect);
         }
       }
-      
+
       // Trigger auto-tuning if it's time
       const tuneEvent = window.AdaptiveLearner.autoTuneWeights();
       if (tuneEvent && Object.keys(tuneEvent.adjustments).length > 0) {
         window._lastTuneEvent = tuneEvent;
       }
     }
-    
+
     return {
       timestamp: Date.now(),
       scorecard,
@@ -429,7 +432,7 @@ class HistoricalSettlementFetcher {
         ...all.polymarket,
         ...all.coinbase,
       ];
-      
+
       return {
         settled: settled.map(s => ({
           symbol: s.symbol,

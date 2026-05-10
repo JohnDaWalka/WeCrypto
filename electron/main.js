@@ -1,6 +1,6 @@
 const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
 const path = require('path');
-const fs   = require('fs');
+const fs = require('fs');
 const { spawn } = require('child_process');
 
 // Load .env — check next to .exe (packaged) then repo root (dev)
@@ -12,15 +12,25 @@ try {
     path.join(__dirname, '..', '.env'),          // repo root (dev)
     path.join(process.resourcesPath || '', '..', '.env'), // resources sibling
   ];
+  let loadedEnvPath = null;
   for (const p of candidates) {
-    if (require('fs').existsSync(p)) { dotenv.config({ path: p }); break; }
+    if (require('fs').existsSync(p)) {
+      dotenv.config({ path: p, quiet: true });
+      loadedEnvPath = p;
+      break;
+    }
+  }
+  if (loadedEnvPath) {
+    console.log(`[Env] Loaded .env from ${loadedEnvPath}`);
+  } else {
+    console.log('[Env] No .env file found in startup candidates');
   }
 } catch (e) {
   // dotenv not installed, skip silently
 }
 
 // ── Kalshi Worker Bridge ──────────────────────────────────────────────────
-const { startKalshiWorker, stopKalshiWorker } = require('./kalshi-ipc-bridge.js');
+const { startKalshiWorker, stopKalshiWorker, getWorkerReadiness } = require('./kalshi-ipc-bridge.js');
 
 // ── Multi-Drive Settlement Logger ──────────────────────────────────────────
 require('./multi-drive-logger-handlers.js');
@@ -43,15 +53,49 @@ try {
 }
 
 // ── Pyth Lazer real-time WebSocket service ────────────────────────────────────
-let mainWin          = null;
-let pythLazerClient  = null;
+let mainWin = null;
+let pythLazerClient = null;
+let pythLazerStatus = { connected: false, lastDataTs: 0, dataCount: 0, timeoutCount: 0 };
+let proxyHealthy = false;
+let webServiceHealth = { started: false, mode: 'stopped', protocol: 'http', port: 3443 };
 const LAZER_FEED_IDS = [1, 2, 6, 10, 13, 14, 15, 110]; // BTC,ETH,SOL,DOGE,F13,XRP,BNB,F110
-const LAZER_ID_MAP   = { 1:'BTCUSD', 2:'ETHUSD', 6:'SOLUSD', 10:'DOGEUSD', 14:'XRPUSD', 15:'BNBUSD' };
+const LAZER_ID_MAP = { 1: 'BTCUSD', 2: 'ETHUSD', 6: 'SOLUSD', 10: 'DOGEUSD', 14: 'XRPUSD', 15: 'BNBUSD' };
+const PYTH_FALLBACK_TIMEOUT_MS = 1000; // STRICT: 1s timeout before fallback
+
+function configureCachePaths() {
+  try {
+    const localAppData = process.env.LOCALAPPDATA || app.getPath('appData');
+    const profileRoot = path.join(localAppData, 'WE-CRYPTO');
+    const cacheRoot = path.join(profileRoot, 'electron-cache');
+    const userDataPath = path.join(profileRoot, 'user-data');
+    const sessionPath = path.join(cacheRoot, 'session-data');
+    const diskCacheDir = path.join(cacheRoot, 'disk-cache');
+    fs.mkdirSync(profileRoot, { recursive: true });
+    fs.mkdirSync(userDataPath, { recursive: true });
+    fs.mkdirSync(sessionPath, { recursive: true });
+    fs.mkdirSync(diskCacheDir, { recursive: true });
+    app.setPath('userData', userDataPath);
+    app.setPath('sessionData', sessionPath);
+    app.commandLine.appendSwitch('disk-cache-dir', diskCacheDir);
+    app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+    console.log(`[Startup] Cache paths configured: userData=${userDataPath} session=${sessionPath} disk=${diskCacheDir}`);
+  } catch (e) {
+    console.warn('[Startup] Cache path configuration skipped:', e.message);
+  }
+}
+
+configureCachePaths();
 
 async function startPythLazerService(win) {
   const token = process.env.PYTH_LAZER_TOKEN;
   if (!token) {
     console.warn('[PythLazer] PYTH_LAZER_TOKEN not set — Lazer WS disabled');
+    if (!win.isDestroyed()) {
+      win.webContents.send('pyth:connection-failed', {
+        retries: 0,
+        error: 'PYTH_LAZER_TOKEN not set',
+      });
+    }
     return;
   }
 
@@ -77,52 +121,85 @@ async function startPythLazerService(win) {
       });
 
       pythLazerClient.subscribe({
-        type:               'subscribe',
-        subscriptionId:     1,
-        priceFeedIds:       LAZER_FEED_IDS,
-        properties:         ['price','bestBidPrice','bestAskPrice','confidence','exponent',
-                             'publisherCount','feedUpdateTimestamp','marketSession',
-                             'fundingRate','fundingTimestamp','fundingRateInterval'],
-        formats:            ['solana','leUnsigned','leEcdsa','evm'],
-        channel:            'real_time',
-        deliveryFormat:     'json',
+        type: 'subscribe',
+        subscriptionId: 1,
+        priceFeedIds: LAZER_FEED_IDS,
+        properties: ['price', 'bestBidPrice', 'bestAskPrice', 'confidence', 'exponent',
+          'publisherCount', 'feedUpdateTimestamp', 'marketSession',
+          'fundingRate', 'fundingTimestamp', 'fundingRateInterval'],
+        formats: ['solana', 'leUnsigned', 'leEcdsa', 'evm'],
+        channel: 'fixed_rate@1000ms',  // ★ STRICT 1000ms updates for predictable fallback
+        deliveryFormat: 'json',
         jsonBinaryEncoding: 'hex',
-        parsed:             true,
+        parsed: true,
         ignoreInvalidFeeds: true,
       });
 
       let lastPush = 0;
+      let pythTimeoutHandle = null;
+
+      // ★ STRICT TIMEOUT WATCHER: If no data arrives within 1000ms, trigger fallback
+      function resetPythTimeout() {
+        if (pythTimeoutHandle) clearTimeout(pythTimeoutHandle);
+        pythTimeoutHandle = setTimeout(() => {
+          pythLazerStatus.connected = false;
+          pythLazerStatus.timeoutCount++;
+          console.warn(`[PythLazer] ⚠️ TIMEOUT: No data in ${PYTH_FALLBACK_TIMEOUT_MS}ms — fallback triggered`);
+          if (!win.isDestroyed()) {
+            win.webContents.send('pyth:timeout-fallback', {
+              reason: 'no_data_1000ms',
+              timeoutCount: pythLazerStatus.timeoutCount,
+              fallbackTo: 'crypto.com,binance,coingecko,kraken',
+              recoveryAttempt: true
+            });
+          }
+        }, PYTH_FALLBACK_TIMEOUT_MS);
+      }
+      resetPythTimeout(); // Start watching immediately
+
       pythLazerClient.addMessageListener((message) => {
         if (message.type !== 'json') return;
         const feeds = message.value?.parsed?.priceFeeds;
         if (!feeds?.length) return;
         const now = Date.now();
-        if (now - lastPush < 800) return;    // ~1 push/sec max
+        if (now - lastPush < 800) return;    // ~1 push/sec max (fixed_rate@1000ms produces ~1/sec)
         lastPush = now;
+
+        // ★ RESET TIMEOUT on successful data arrival
+        resetPythTimeout();
 
         const prices = {};
         for (const f of feeds) {
           const instr = LAZER_ID_MAP[f.priceFeedId];
           if (!instr) continue;              // skip unmapped feeds (13, 110)
-          const exp   = f.exponent ?? -8;
+          const exp = f.exponent ?? -8;
           const scale = Math.pow(10, exp);
-          const px    = Number(f.price) * scale;
+          const px = Number(f.price) * scale;
           if (!px || px <= 0 || isNaN(px)) continue;
           prices[instr] = {
-            instrument_name:     instr,
-            last:                px,
-            best_bid:            f.bestBidPrice   != null ? Number(f.bestBidPrice)   * scale : null,
-            best_ask:            f.bestAskPrice   != null ? Number(f.bestAskPrice)   * scale : null,
-            confidence:          f.confidence     != null ? Number(f.confidence)     * scale : null,
-            publisherCount:      f.publisherCount,
-            marketSession:       f.marketSession,
+            instrument_name: instr,
+            last: px,
+            best_bid: f.bestBidPrice != null ? Number(f.bestBidPrice) * scale : null,
+            best_ask: f.bestAskPrice != null ? Number(f.bestAskPrice) * scale : null,
+            confidence: f.confidence != null ? Number(f.confidence) * scale : null,
+            publisherCount: f.publisherCount,
+            marketSession: f.marketSession,
             feedUpdateTimestamp: f.feedUpdateTimestamp,
-            source:              'pyth-lazer',
-            timestamp:           now,
+            source: 'pyth-lazer',
+            timestamp: now,
           };
         }
         if (Object.keys(prices).length && !win.isDestroyed()) {
+          // ★ UPDATE STATUS: Track Pyth Lazer health
+          pythLazerStatus.connected = true;
+          pythLazerStatus.lastDataTs = now;
+          pythLazerStatus.dataCount++;
+          pythLazerStatus.timeoutCount = 0;  // Reset timeout counter on success
           win.webContents.send('pyth:tickers', prices);
+          // Also send health status update every 5 data points
+          if (pythLazerStatus.dataCount % 5 === 0) {
+            win.webContents.send('pyth:status', pythLazerStatus);
+          }
         }
       });
 
@@ -159,9 +236,53 @@ async function startPythLazerService(win) {
   return createClientWithRetry();
 }
 
+function logStartupHealth(tag = 'snapshot') {
+  const kalshi = typeof getWorkerReadiness === 'function'
+    ? getWorkerReadiness()
+    : { ready: false, readyLatencyMs: null, lastHealthError: 'readiness unavailable' };
+  const pythAgeMs = pythLazerStatus.lastDataTs
+    ? Date.now() - pythLazerStatus.lastDataTs
+    : null;
+  const summary = {
+    tag,
+    proxy: { healthy: proxyHealthy, port: proxyPort },
+    kalshi: {
+      ready: !!kalshi.ready,
+      readyLatencyMs: kalshi.readyLatencyMs,
+      lastHealthError: kalshi.lastHealthError || null,
+    },
+    web: {
+      started: !!webServiceHealth.started,
+      mode: webServiceHealth.mode,
+      protocol: webServiceHealth.protocol,
+      port: webServiceHealth.port,
+    },
+    pyth: {
+      connected: !!pythLazerStatus.connected,
+      dataCount: pythLazerStatus.dataCount,
+      timeoutCount: pythLazerStatus.timeoutCount,
+      lastDataAgeMs: pythAgeMs,
+    },
+  };
+  const issues = [];
+  if (!summary.kalshi.ready) issues.push('kalshi-not-ready');
+  if (!summary.web.started) issues.push('web-not-started');
+  if (summary.web.mode === 'http-fallback') issues.push('web-http-fallback');
+  if (!summary.proxy.healthy) issues.push('proxy-fallback');
+  if (summary.pyth.timeoutCount > 0) issues.push('pyth-timeout-fallback');
+  const grade = (!summary.kalshi.ready || !summary.web.started)
+    ? 'RED'
+    : issues.length > 0
+      ? 'YELLOW'
+      : 'GREEN';
+  summary.grade = grade;
+  summary.issues = issues;
+  console.log('[StartupHealth]', JSON.stringify(summary));
+}
+
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
-let proxyPort    = 3010;
+let proxyPort = 3010;
 
 const PROXY_PORT_CASCADE = [3010, 3011, 3012, 3013, 3014];
 
@@ -173,7 +294,7 @@ function findFreePort(ports) {
     function tryNext() {
       if (idx >= ports.length) { resolve(ports[0]); return; }
       const port = ports[idx++];
-      const srv  = net.createServer();
+      const srv = net.createServer();
       srv.once('error', tryNext);
       srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(port)));
     }
@@ -232,11 +353,15 @@ async function startProxy() {
     // Dev path: electron/ is one level down from root, so ../we-crypto-proxy.exe
     path.join(__dirname, '..', 'we-crypto-proxy.exe'),
   ];
-  
+
   const exePath = candidates.find(p => fs.existsSync(p));
   if (!exePath) {
     console.error('[proxy] CRITICAL: we-crypto-proxy.exe not found. Searched:', candidates);
     console.warn('[proxy] Falling back to direct API access (NO proxy routing)');
+    console.warn('[proxy] Remediation:');
+    console.warn('[proxy] 1) Dev mode: place we-crypto-proxy.exe at project root (same level as package.json)');
+    console.warn('[proxy] 2) Packaged mode: ensure build.files includes we-crypto-proxy.exe and it is unpacked to resources/app.asar.unpacked');
+    console.warn('[proxy] 3) Validate from terminal: Test-Path .\\we-crypto-proxy.exe');
     return;
   }
   console.log(`[proxy] found executable at: ${exePath}`);
@@ -244,7 +369,7 @@ async function startProxy() {
   // Pick a free port then write config.toml
   const chosenPort = await findFreePort(PROXY_PORT_CASCADE);
   proxyPort = chosenPort;
-  
+
   // If exe is in asar (read-only), write config to temp dir; otherwise beside exe
   let proxyDir = path.dirname(exePath);
   if (proxyDir.includes('app.asar')) {
@@ -252,7 +377,7 @@ async function startProxy() {
     fs.mkdirSync(proxyDir, { recursive: true });
     console.log(`[proxy] writing config to temp: ${proxyDir}`);
   }
-  
+
   try {
     fs.writeFileSync(path.join(proxyDir, 'config.toml'), buildProxyConfig(chosenPort));
     console.log(`[proxy] config.toml → port ${chosenPort}`);
@@ -266,14 +391,14 @@ async function startProxy() {
     cwd: proxyDir,
   });
   proxyProcess.stdout.on('data', chunk => console.log('[proxy]', chunk.toString().trim()));
-  proxyProcess.on('error', e    => console.error('[proxy] start error:', e.message));
-  proxyProcess.on('exit',  code => console.log('[proxy] exited, code', code));
+  proxyProcess.on('error', e => console.error('[proxy] start error:', e.message));
+  proxyProcess.on('exit', code => console.log('[proxy] exited, code', code));
   console.log(`[proxy] started on port ${chosenPort} — pid ${proxyProcess.pid}`);
 }
 
 function stopProxy() {
   if (proxyProcess && !proxyProcess.killed) {
-    try { proxyProcess.kill(); } catch (_) {}
+    try { proxyProcess.kill(); } catch (_) { }
     proxyProcess = null;
   }
 }
@@ -287,13 +412,18 @@ function waitForProxy(maxMs = 5000, pollMs = 150) {
 
     function tryPort() {
       const port = PROXY_PORT_CASCADE[portIdx] || PROXY_PORT_CASCADE[0];
-      const req  = http.get(`http://127.0.0.1:${port}/health`, res => {
+      const req = http.get(`http://127.0.0.1:${port}/health`, res => {
         res.resume();
         proxyPort = port;           // lock in the responsive port
+        proxyHealthy = true;
         resolve();
       });
       req.on('error', () => {
-        if (Date.now() >= deadline) { resolve(); return; }  // give up gracefully
+        if (Date.now() >= deadline) {
+          proxyHealthy = false;
+          resolve();
+          return;
+        }  // give up gracefully
         // advance through cascade before retrying
         portIdx = (portIdx + 1) % PROXY_PORT_CASCADE.length;
         setTimeout(tryPort, pollMs);
@@ -313,18 +443,18 @@ ipcMain.handle('pyth:getCandles', async (_, { symbol, resolution, from, to }) =>
     if (!pythLazerClient) {
       return { success: false, error: 'Pyth Lazer client not initialized' };
     }
-    
+
     // Use Pyth History API to fetch candles
     const historyUrl = `https://api.dourolabs.app/v1/ohlc?instrument_name=${symbol}&resolution=${resolution}&start_time=${from}&end_time=${to}`;
     const response = await fetch(historyUrl);
-    
+
     if (!response.ok) {
       return { success: false, error: `HTTP ${response.status}` };
     }
-    
+
     const data = await response.json();
     const candles = data.ohlc || [];
-    
+
     return {
       success: true,
       candles: candles.map(c => ({
@@ -347,13 +477,13 @@ ipcMain.handle('pyth:getProxyLatest', async (_, feedIds) => {
     // Use Pyth Lazer proxy REST (no-auth) for latest prices
     const url = `https://pyth-lazer-proxy-0.dourolabs.app/v1/latest_price?price_feed_ids=${feedIds.join(',')}`;
     const response = await fetch(url);
-    
+
     if (!response.ok) {
       return { success: false, error: `HTTP ${response.status}` };
     }
-    
+
     const data = await response.json();
-    
+
     return {
       success: true,
       prices: data.prices || []
@@ -374,20 +504,20 @@ ipcMain.handle('kalshi:loadCredentials', async () => {
         error: 'KALSHI-API-KEY.txt not found'
       };
     }
-    
+
     const content = fs.readFileSync(credPath, 'utf8');
     const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
-    
+
     if (lines.length < 5) {
       return {
         success: false,
         error: 'Invalid credential file format'
       };
     }
-    
+
     const apiKeyId = lines[0];
     const privateKeyPem = lines.slice(4).join('\n');
-    
+
     return {
       success: true,
       apiKeyId,
@@ -398,23 +528,6 @@ ipcMain.handle('kalshi:loadCredentials', async () => {
       success: false,
       error: error.message
     };
-  }
-});
-
-// ── IPC: Load Birdeye API key ──────────────────────────────────────
-ipcMain.handle('birdeye:loadApiKey', async () => {
-  try {
-    const keyPath = path.join(__dirname, '../secrets/BIRDEYE-API-KEY.txt');
-    if (!fs.existsSync(keyPath)) {
-      return { success: false, error: 'BIRDEYE-API-KEY.txt not found in secrets/' };
-    }
-    const key = fs.readFileSync(keyPath, 'utf8').trim();
-    if (!key) {
-      return { success: false, error: 'BIRDEYE-API-KEY.txt is empty' };
-    }
-    return { success: true, apiKey: key };
-  } catch (error) {
-    return { success: false, error: error.message };
   }
 });
 
@@ -457,15 +570,31 @@ ipcMain.handle('data:listDir', async (_, dirPath) => {
 // ── IPC: Log network errors to COPILOT_DEBUG ──────────────────────────────────
 ipcMain.handle('network:logError', async (_, errorType, details) => {
   try {
-    const debugDir = path.join('F:\\WECRYP', 'COPILOT_DEBUG');
-    fs.mkdirSync(debugDir, { recursive: true });
-    
     const timestamp = new Date().toISOString();
     const logLine = `[${timestamp}] ${errorType} | ${details}`;
-    
-    const logFile = path.join(debugDir, 'network-errors.log');
-    fs.appendFileSync(logFile, logLine + '\n', 'utf8');
-    
+
+    const logRoots = new Set([
+      'F:\\WECRYP',
+      'D:\\WECRYP',
+    ]);
+
+    try {
+      const drives = await ipcMain._invokeHandler('storage:getDrives', { sender: null });
+      for (const drive of Array.isArray(drives) ? drives : []) {
+        if (drive?.type !== 'network' || !drive?.root) continue;
+        logRoots.add(path.join(drive.root, 'WECRYP'));
+      }
+    } catch (_) { }
+
+    for (const root of logRoots) {
+      try {
+        const debugDir = path.join(root, 'COPILOT_DEBUG');
+        fs.mkdirSync(debugDir, { recursive: true });
+        const logFile = path.join(debugDir, 'network-errors.log');
+        fs.appendFileSync(logFile, logLine + '\n', 'utf8');
+      } catch (_) { }
+    }
+
     console.log(`[IPC] Network error logged: ${errorType}`);
     return true;
   } catch (e) {
@@ -504,7 +633,7 @@ ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
     console.log(`[IPC] Loading CSV from: ${csvPath}`);
 
     const content = fs.readFileSync(csvPath, 'utf-8');
-    
+
     // Simple CSV parser
     const lines = content.split('\n').filter(l => l.trim());
     if (lines.length < 2) {
@@ -534,7 +663,7 @@ ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
         }
       }
       values.push(current.trim().replace(/^"|"$/g, ''));
-      
+
       const record = {};
       headers.forEach((h, idx) => {
         record[h] = values[idx] || '';
@@ -545,7 +674,7 @@ ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
       if (record.type === 'Order' && record.Status === 'Filled') {
         const symMatch = record.Market_Ticker?.match(/KX(\w+)15M/);
         const coin = symMatch ? symMatch[1].substring(0, 3) : null;
-        
+
         if (coin) {
           trades.push({
             timestamp: new Date(record.Original_Date).getTime(),
@@ -563,7 +692,7 @@ ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
     }
 
     console.log(`[IPC] Parsed ${trades.length} filled Kalshi orders from CSV`);
-    
+
     // Try to parse resolution log from browser state
     let resolutionLog = [];
     try {
@@ -575,11 +704,11 @@ ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
     } catch (e) {
       console.warn(`[IPC] Could not parse browser state:`, e.message);
     }
-    
-    return { 
-      success: true, 
-      trades, 
-      csvPath, 
+
+    return {
+      success: true,
+      trades,
+      csvPath,
       count: trades.length,
       resolutionCount: resolutionLog.length,
       resolution: resolutionLog
@@ -594,29 +723,29 @@ ipcMain.handle('kalshi:loadCSVTrades', async (event, browserStateJson) => {
 ipcMain.handle('kalshi:fetchHistoricalContracts', async (event, { limit = 100, symbol = null } = {}) => {
   try {
     const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
-    
+
     console.log(`[IPC] Fetching historical contracts from Kalshi (limit: ${limit}, symbol: ${symbol})`);
-    
+
     // Fetch portfolio to get user's historical contract IDs
     const portfolioResp = await fetch(`${KALSHI_BASE}/portfolio`, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
     });
-    
+
     if (!portfolioResp.ok) {
       console.warn('[IPC] Kalshi portfolio fetch failed');
       return { success: false, contracts: [], error: 'Portfolio fetch failed' };
     }
-    
+
     const portfolio = await portfolioResp.json();
     const contracts = portfolio.contracts || [];
-    
+
     // Filter by symbol if requested
     let filtered = contracts;
     if (symbol) {
       filtered = contracts.filter(c => c.ticker && c.ticker.includes(symbol));
     }
-    
+
     // Return most recent contracts up to limit
     const result = filtered
       .sort((a, b) => new Date(b.resolved_at || b.created_at) - new Date(a.resolved_at || a.created_at))
@@ -633,7 +762,7 @@ ipcMain.handle('kalshi:fetchHistoricalContracts', async (event, { limit = 100, s
         avgPrice: c.avg_price,
         source: 'kalshi-api',
       }));
-    
+
     console.log(`[IPC] Fetched ${result.length} historical contracts from Kalshi API`);
     return { success: true, contracts: result, count: result.length };
   } catch (error) {
@@ -758,7 +887,7 @@ function buildAutoDiscoveryDirectories(home) {
       fs.accessSync(root, fs.constants.R_OK);
       rootCandidates.add(root);
       rootCandidates.add(`${root}\\My Drive`);
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // Discover OneDrive folder variants under home (e.g., OneDrive - org)
@@ -770,7 +899,7 @@ function buildAutoDiscoveryDirectories(home) {
         }
       }
     }
-  } catch (_) {}
+  } catch (_) { }
 
   for (const root of rootCandidates) {
     if (!root) continue;
@@ -787,7 +916,7 @@ function buildAutoDiscoveryDirectories(home) {
       if (!normalized) continue;
       try {
         if (fs.existsSync(normalized)) dirs.push(normalized);
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -834,7 +963,7 @@ function gatherContractCacheCandidateFiles(targets) {
         if (!/^contract-cache.*\.json$/i.test(entry.name)) continue;
         pushFile(path.join(dirPath, entry.name));
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   return dedupePaths(files);
@@ -1062,22 +1191,22 @@ ipcMain.handle('storage:getDrives', async () => {
   // ── Local / mapped drive letters C-Z ─────────────────────────────────────
   for (let code = 67; code <= 90; code++) {        // 'C' … 'Z'
     const letter = String.fromCharCode(code);
-    const root   = `${letter}:\\`;
+    const root = `${letter}:\\`;
     try { fs.accessSync(root, fs.constants.R_OK); found.push({ type: 'local', letter, root }); }
-    catch (_) {}
+    catch (_) { }
   }
 
   // ── Network / UNC shares via `net use` ────────────────────────────────────
   try {
     const { execSync } = require('child_process');
     const out = execSync('net use', { encoding: 'utf8', timeout: 3000 });
-    const re  = /\\\\[\w\-.]+\\[\w\-.$]+/g;
+    const re = /\\\\[\w\-.]+\\[\w\-.$]+/g;
     for (const unc of (out.match(re) || [])) {
       if (!found.some(d => d.root === unc + '\\')) {
         found.push({ type: 'network', letter: null, root: unc + '\\' });
       }
     }
-  } catch (_) {}
+  } catch (_) { }
 
   // ── Cloud sync folders (OneDrive / Google Drive) ──────────────────────────
   const home = process.env.USERPROFILE || '';
@@ -1098,10 +1227,10 @@ ipcMain.handle('storage:getDrives', async () => {
         }
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   for (const p of cloudCandidates) {
     try { if (fs.existsSync(p)) found.push({ type: 'cloud', letter: null, root: p }); }
-    catch (_) {}
+    catch (_) { }
   }
 
   return found;
@@ -1248,22 +1377,23 @@ function createWindow() {
   // Inject the live proxy port so proxy-fetch.js can correct itself if it
   // started on the wrong guess before discovery completed.
   win.webContents.on('did-finish-load', () => {
-    win.webContents.executeJavaScript(`window.__PROXY_PORT__ = ${proxyPort};`).catch(() => {});
+    win.webContents.executeJavaScript(`window.__PROXY_PORT__ = ${proxyPort};`).catch(() => { });
   });
 }
 
 app.whenReady().then(async () => {
   await startProxy();
-  await startKalshiWorker();  // Start Kalshi worker
+  await startKalshiWorker({ bootTimeoutMs: 12000, pollMs: 150 });  // Start Kalshi worker with explicit readiness budget
   Menu.setApplicationMenu(null);
   await waitForProxy();   // give proxy ~3s to bind before renderer fires fetchAll
-  
+
   // Start web service (HTTPS)
-  startWebService();
-  console.log('[Main] Web service started on https://localhost:3443');
-  
+  webServiceHealth = startWebService() || webServiceHealth;
+  console.log(`[Main] Web service started on ${webServiceHealth.protocol}://localhost:${webServiceHealth.port}`);
+
   createWindow();
-  
+  logStartupHealth('post-bootstrap');
+
   // Start Pyth Lazer with proper error handling
   (async () => {
     const pythSuccess = await startPythLazerService(mainWin);
@@ -1272,6 +1402,7 @@ app.whenReady().then(async () => {
     } else {
       console.warn('[Main] Pyth Lazer unavailable — renderer will use alternative feeds');
     }
+    logStartupHealth('post-pyth-init');
   })();
 
   app.on('activate', () => {
@@ -1284,7 +1415,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   stopProxy();
   stopKalshiWorker();
-  if (pythLazerClient) { try { pythLazerClient.shutdown(); } catch (_) {} pythLazerClient = null; }
+  if (pythLazerClient) { try { pythLazerClient.shutdown(); } catch (_) { } pythLazerClient = null; }
   if (process.platform !== 'darwin') {
     app.quit();
   }

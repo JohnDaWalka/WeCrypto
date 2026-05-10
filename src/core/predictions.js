@@ -28,8 +28,8 @@
   const CB_EXCH_BASE = 'https://api.exchange.coinbase.com';
   const CB_EXCH_SYMS = { BTC: 'BTC-USD', ETH: 'ETH-USD', SOL: 'SOL-USD', XRP: 'XRP-USD', DOGE: 'DOGE-USD', BNB: 'BNB-USD', HYPE: 'HYPE-USD' };
   const GECKO_ONLY = new Set(['BNB']);
-  const BIN_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
-  const MEXC_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
+  const BIN_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
+  const MEXC_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
   const BYBIT_BASE = 'https://api.bybit.com/v5';
   function getBybitUrl(path) { return `${BYBIT_BASE}${path}`; }
   const BYBIT_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
@@ -40,6 +40,8 @@
   const BFNX_SYMS = { BTC: 'tBTCUSD', ETH: 'tETHUSD', SOL: 'tSOLUSD', XRP: 'tXRPUSD', DOGE: 'tDOGEUSD' };
   const SHORT_HORIZON_MINUTES = [1, 5, 10, 15];
   const DEFAULT_SHORT_HORIZON_MIN = 15;  // Primary target: next 15-min candle session (Kalshi contracts)
+  // Model-first policy: prediction markets are verification context, not a directional driver.
+  const KALSHI_VERIFY_ONLY = true;
   const SHORT_HORIZON_WEIGHTS = { 1: 0.60, 5: 0.80, 10: 0.90, 15: 1.40 };
   const SHORT_HORIZON_FILTERS = {
     h1: { entryThreshold: 0.16, minAgreement: 0.62 },  // ★ RAISED: Filter out noise at 1min (was 0.08)
@@ -60,7 +62,8 @@
   const INFERENCE_REQUEST_TIMEOUT_MS = 7000;
 
   // ── Backtest localStorage cache (cold-start / refresh acceleration) ───────
-  const BT_CACHE_KEY    = 'beta1_bt_cache';
+  // Bump cache key to force recomputation after h1/h5 horizon-candle fix.
+  const BT_CACHE_KEY = 'beta1_bt_cache_v2';
   const BT_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
   function saveBtCache() {
@@ -71,7 +74,7 @@
         if (bt) store[coin.sym] = { bt, ts: Date.now(), walkKey: candleCache[coin.sym]?._walkBacktestKey || '' };
       });
       localStorage.setItem(BT_CACHE_KEY, JSON.stringify(store));
-    } catch(e) {}
+    } catch (e) { }
   }
 
   (function loadBtCache() {
@@ -86,21 +89,38 @@
         // Pre-seed in-memory key so runWalkForwardBacktest skips re-run when candles match
         if (!candleCache[coin.sym]) candleCache[coin.sym] = {};
         candleCache[coin.sym]._walkBacktestKey = entry.walkKey;
-        candleCache[coin.sym]._walkBacktest    = entry.bt;
+        candleCache[coin.sym]._walkBacktest = entry.bt;
       });
-    } catch(e) {}
+    } catch (e) { }
   })();
   const ENABLE_MDT_SCORE_MULT = true; // set false to instantly revert to pre-MDT formula
 
   // Fear & Greed Index cache (5-minute TTL)
   let _fngCache = { value: null, ts: 0 };
+
+  async function fetchAnalyticsWithRoute(url, timeoutMs = 4500) {
+    const torOptIn = !!window.__TOR_ANALYTICS_OPT_IN__;
+    const router = window.TORRouter;
+    if (torOptIn && router && typeof router.routeAPI === 'function') {
+      try {
+        return await router.routeAPI(url, {
+          routeClass: 'analytics',
+          timeout: timeoutMs,
+        });
+      } catch (_) {
+        // Fall through to direct path.
+      }
+    }
+    return fetchWithTimeout(url, timeoutMs);
+  }
+
   async function fetchFearGreed() {
     const now = Date.now();
     if (now - _fngCache.ts < 300000) return _fngCache.value;
     // Throttle on attempt (not only success) so transient outages don't spam requests.
     _fngCache.ts = now;
     try {
-      const res = await fetch('https://api.alternative.me/fng/?limit=1');
+      const res = await fetchAnalyticsWithRoute('https://api.alternative.me/fng/?limit=1', 5000);
       if (!res.ok) return _fngCache.value;
       const data = await res.json();
       _fngCache.value = parseInt(data.data[0].value, 10);
@@ -121,46 +141,104 @@
     // ── Synced with backtest-runner.js (2026-04-28) ───────────────────────────
     // ── Updated 2026-05-04: Increased microstructure weights (short-horizon boost)
     // Trend / directional
-    supertrend:  0.10,
-    hma:         0.07,
-    vwma:        0.06,
-    ema:         0.05,
-    sma:         0.03,
-    macd:        0.07,
+    supertrend: 0.10,
+    hma: 0.07,
+    vwma: 0.06,
+    ema: 0.05,
+    sma: 0.03,
+    macd: 0.07,
     persistence: 0.07,
     // Mean-reversion / oscillators
-    bands:       0.08,
-    keltner:     0.05,
-    williamsR:   0.07,
-    rsi:         0.06,
-    cci:         0.05,
-    stochrsi:    0.04,
+    bands: 0.08,
+    keltner: 0.05,
+    williamsR: 0.07,
+    rsi: 0.06,
+    cci: 0.05,
+    stochrsi: 0.04,
     // Volume / flow
-    volume:      0.10,
-    obv:         0.07,
-    cmf:         0.07,
-    mfi:         0.07,
+    volume: 0.10,
+    obv: 0.07,
+    cmf: 0.07,
+    mfi: 0.07,
     // Structure / trend quality
-    structure:   0.10,
-    ichimoku:    0.05,
-    adx:         0.04,
-    fisher:      0.04,
+    structure: 0.10,
+    ichimoku: 0.05,
+    adx: 0.04,
+    fisher: 0.04,
     // Live-only microstructure (INCREASED for h1/h5 edge)
-    book:         0.25,  // was 0.13 — 92% increase for order flow signal at short horizons
-    flow:         0.22,  // was 0.12 — 83% increase for trade flow signal
+    book: 0.25,  // was 0.13 — 92% increase for order flow signal at short horizons
+    flow: 0.22,  // was 0.12 — 83% increase for trade flow signal
     mktSentiment: 0.18,  // was 0.11 — 64% increase for macro context
-    fearGreed:    0.12,  // Fear & Greed Index macro overlay
-    cmcMacro:     0.08,  // ★ CoinMarketCap Pro: BTC dominance + global volume flux (added 2026-05-06)
+    fearGreed: 0.12,  // Fear & Greed Index macro overlay
+    cmcMacro: 0.08,  // ★ CoinMarketCap Pro: BTC dominance + global volume flux (added 2026-05-06)
   };
 
   // Regime-adaptive weight multipliers — applied after static weights based on live market regime
   const REGIME_WEIGHT_MULTS = {
-    trending_smooth:   { ema: 1.5, hma: 1.4, vwap: 1.3, obv: 1.2, bands: 0.7, williamsR: 0.7, momentum: 0.5 },
+    trending_smooth: { ema: 1.5, hma: 1.4, vwap: 1.3, obv: 1.2, bands: 0.7, williamsR: 0.7, momentum: 0.5 },
     trending_volatile: { volume: 1.5, flow: 1.4, book: 1.3, macd: 1.2, ema: 1.1, bands: 0.8, momentum: 2.0 },
-    ranging:           { bands: 1.6, williamsR: 1.5, cci: 1.4, rsi: 1.3, stochrsi: 1.3, ema: 0.7, hma: 0.6, momentum: 0.1 },
-    choppy:            { book: 0.4, flow: 0.4, macd: 0.5, ema: 0.6, bands: 0.6, momentum: 0.3 },
-    neutral:           {},
+    ranging: { bands: 1.6, williamsR: 1.5, cci: 1.4, rsi: 1.3, stochrsi: 1.3, ema: 0.7, hma: 0.6, momentum: 0.1 },
+    choppy: { book: 0.4, flow: 0.4, macd: 0.5, ema: 0.6, bands: 0.6, momentum: 0.3 },
+    neutral: {},
   };
+
+  const ONLINE_WEIGHT_BOUNDS = {
+    minMult: 0.6,
+    maxMult: 1.4,
+    minPruneMult: 0.15,
+    maxStep: 0.06,
+  };
+  const ONLINE_WEIGHT_STATE = {};
+
+  function _coinKey(sym) {
+    return String(sym || 'GLOBAL').toUpperCase();
+  }
+
+  function _ensureOnlineState(sym) {
+    const key = _coinKey(sym);
+    if (!ONLINE_WEIGHT_STATE[key]) {
+      ONLINE_WEIGHT_STATE[key] = {
+        updatedAt: Date.now(),
+        signals: {},
+      };
+    }
+    return ONLINE_WEIGHT_STATE[key];
+  }
+
+  function _ensureOnlineSignalState(sym, signal) {
+    const state = _ensureOnlineState(sym);
+    const skey = String(signal || '').trim();
+    if (!skey) return null;
+    if (!state.signals[skey]) {
+      state.signals[skey] = {
+        mult: 1,
+        pruneMult: 1,
+        samples: 0,
+        wins: 0,
+        losses: 0,
+        updatedAt: Date.now(),
+      };
+    }
+    return state.signals[skey];
+  }
+
+  function _clampOnlineStep(delta) {
+    return clamp(delta, -ONLINE_WEIGHT_BOUNDS.maxStep, ONLINE_WEIGHT_BOUNDS.maxStep);
+  }
+
+  function applyOnlineWeightOverlay(sym, baseWeights) {
+    const state = ONLINE_WEIGHT_STATE[_coinKey(sym)];
+    if (!state || !state.signals) return { ...baseWeights };
+    const out = { ...baseWeights };
+    Object.keys(out).forEach((signal) => {
+      const st = state.signals[signal];
+      if (!st) return;
+      const mult = clamp(Number(st.mult) || 1, ONLINE_WEIGHT_BOUNDS.minMult, ONLINE_WEIGHT_BOUNDS.maxMult);
+      const pruneMult = clamp(Number(st.pruneMult) || 1, ONLINE_WEIGHT_BOUNDS.minPruneMult, 1);
+      out[signal] = out[signal] * mult * pruneMult;
+    });
+    return out;
+  }
 
   /**
    * Applies regime-based multipliers to a copy of baseWeights.
@@ -178,7 +256,7 @@
   // ── Outer Orbital — coin-specific; activated via PER_COIN_INDICATOR_BIAS ──
   const OUTER_ORBITAL_WEIGHTS = {
     momentum: 0.05,  // SOL/BNB only — globally 25–39% WR (contrarian everywhere else)
-    vwap:     0.05,  // BNB inner (5× bias); 33–43% WR globally (contrarian)
+    vwap: 0.05,  // BNB inner (5× bias); 33–43% WR globally (contrarian)
   };
 
   // ================================================================
@@ -194,23 +272,23 @@
       //      trending_volatile: 2.0x (catch dumps/rallies), ranging: 0.1x (suppress noise)
       //      This allows early dump detection (May 4 case) while maintaining ranging accuracy
       stochrsi: 1.8,   // ★ REDUCED FROM 3.5 (64% at h15 but ~40% at h1/h5 - oscillators less reliable short-term)
-      vwma:     1.2,   // ★ REDUCED FROM 2.5 (62% at h15 but less reliable at h1/h5)
-      volume:   1.4,   // ★ REDUCED FROM 2.2 (60% at h15 but noisy at h1/h5)
+      vwma: 1.2,   // ★ REDUCED FROM 2.5 (62% at h15 but less reliable at h1/h5)
+      volume: 1.4,   // ★ REDUCED FROM 2.2 (60% at h15 but noisy at h1/h5)
       // Keep proven mean-reversion core — bands/williamsR/keltner boosted 2026-05-05 (Pyth oracle accuracy)
-      bands:      2.8, williamsR: 2.2, structure: 1.4, fisher: 1.3, keltner: 1.8, cci: 1.2,
+      bands: 2.8, williamsR: 2.2, structure: 1.4, fisher: 1.3, keltner: 1.8, cci: 1.2,
       cmf: 1.0, rsi: 0.8, macd: 0.6, persistence: 0.8, ema: 0.5, ichimoku: 0.3, adx: 0.3,
       vwap: 0.2, sma: 0.185,
       // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
       momentum: 0.25,  // ★ RESTORED FROM 0.05 (2026-05-04 HOTFIX2) — regime gates amplify/suppress
-      obv:      0.12,  // outcome-retuned 2026-05-08 (180 windows)
-      hma:      0.121, // outcome-retuned 2026-05-08 (180 windows)
-      mfi:      0.5,
+      obv: 0.12,  // outcome-retuned 2026-05-08 (180 windows)
+      hma: 0.121, // outcome-retuned 2026-05-08 (180 windows)
+      mfi: 0.5,
       supertrend: 0.368,
       // Pyth oracle aggregate prices → F&G strongly correlated with BTC macro moves
       fearGreed: 1.2,
       // ★ BOOST MICROSTRUCTURE FOR h1/h5 RECOVERY ★
-      book:     0.26,  // NEW: Order book imbalance
-      flow:     0.24,  // NEW: Trade flow signal
+      book: 0.26,  // NEW: Order book imbalance
+      flow: 0.24,  // NEW: Trade flow signal
     },
     ETH: {
       // h15 best: rsi 82%, stochrsi 56%, williamsR 55%
@@ -220,17 +298,17 @@
       //      trending_volatile: 2.0x (catch dumps), ranging: 0.1x (suppress noise)
       // CRITICAL: rsi 82% at h15 but only 37% at h1/h5 (MASSIVE OVERFITTING)
       // Solution: Reduce RSI weight dramatically for short horizons
-      rsi:      0.5,   // ★ REDUCED FROM 5.0 (82% at h15 but 37% at h1 - disable for short horizons)
+      rsi: 0.5,   // ★ REDUCED FROM 5.0 (82% at h15 but 37% at h1 - disable for short horizons)
       stochrsi: 1.0,   // ★ REDUCED FROM 3.5 (56% at h15 but ~30% at h1/h5 - oscillators less reliable short-term)
       williamsR: 1.8,  // ★ BOOST 2026-05-05: Pyth oracle prices → more reliable %R levels
-      bands:    2.8,   // ★ BOOST: Pyth oracle prices → cleaner band touches at exact levels
+      bands: 2.8,   // ★ BOOST: Pyth oracle prices → cleaner band touches at exact levels
       structure: 1.4, keltner: 1.4, cci: 0.9, fisher: 0.9, cmf: 0.6,
       volume: 0.9, persistence: 0.8, obv: 0.5, macd: 0.4,
       ema: 0.35, sma: 0.079, adx: 0.25, ichimoku: 0.2, vwap: 0.15, vwma: 0.5, supertrend: 0.271,
       // ★ FIX: Restore momentum for trending detection (gated by regime multipliers)
       momentum: 0.20,  // ★ RESTORED FROM 0.01 (2026-05-04 HOTFIX2) — regime gates amplify/suppress
-      mfi:      0.055, // outcome-retuned 2026-05-08 (180 windows)
-      hma:      0.07,  // outcome-retuned 2026-05-08 (180 windows)
+      mfi: 0.055, // outcome-retuned 2026-05-08 (180 windows)
+      hma: 0.07,  // outcome-retuned 2026-05-08 (180 windows)
       // ETH moderately correlated with F&G (less than BTC)
       fearGreed: 1.1,
     },
@@ -238,27 +316,27 @@
       // ── FIXED 2026-05-06: Remove maxScore cap + lower h1/h5 thresholds ──────────────
       // Root cause: maxScore: 0.55 was killing 60-70% of high-confidence h15 mean-reversion signals
       // Solution: Remove maxScore entirely, lower h1/h5 thresholds from 0.43 → 0.30 (match ETH/XRP)
-      bands:     2.5,    // ← REDUCED FROM 3.5 (prevent saturation, oscillations)
-      fisher:    1.8,    // ← REDUCED FROM 2.8
+      bands: 2.5,    // ← REDUCED FROM 3.5 (prevent saturation, oscillations)
+      fisher: 1.8,    // ← REDUCED FROM 2.8
       williamsR: 2.5,    // ← REDUCED FROM 4.5 (keep strong but prevent 0.65+ scores)
-      cci:       2.0,    // ← REDUCED FROM 3.5
-      hma:       0.0,    // 41% WR gate is broken on h1/h5
+      cci: 2.0,    // ← REDUCED FROM 3.5
+      hma: 0.0,    // 41% WR gate is broken on h1/h5
       structure: 2.5,
-      keltner:   1.5,    // ← REDUCED FROM 2.8
-      obv:       1.2,    // volume-direction breakout confirmation
-      macd:      0.8, ichimoku: 0.3, adx: 1.5,
-      vwma:      0.1, volume: 0.2, sma: 0.0,
-      vwap:      0.0,
-      rsi:       0.0,   // 29% WR is inversely useful, but engine has no rsiInvert flag
+      keltner: 1.5,    // ← REDUCED FROM 2.8
+      obv: 1.2,    // volume-direction breakout confirmation
+      macd: 0.8, ichimoku: 0.3, adx: 1.5,
+      vwma: 0.1, volume: 0.2, sma: 0.0,
+      vwap: 0.0,
+      rsi: 0.0,   // 29% WR is inversely useful, but engine has no rsiInvert flag
       persistence: 0.0,
-      ema:       0.0,
-      cmf:       0.0,
+      ema: 0.0,
+      cmf: 0.0,
       supertrend: 0.038, // outcome-retuned 2026-05-08 (180 windows)
-      momentum:  0.0,
-      mfi:       0.0,
-      stochrsi:  0.0,
-      book:      0.45,
-      flow:      0.42,
+      momentum: 0.0,
+      mfi: 0.0,
+      stochrsi: 0.0,
+      book: 0.45,
+      flow: 0.42,
       // SOL correlates with broad crypto sentiment; F&G matters
       fearGreed: 1.0,
     },
@@ -267,20 +345,20 @@
       // h15 worst: momentum 28%, vwma 31%, hma 31%
       // ──── TUNED 2026-05-04: Reduce h15-specific weights, boost h1/h5 performers ──
       structure: 1.0,   // ★ REDUCED FROM 5.0 (72% at h15 but meaningless at h1/h5 - needs multiple candles)
-      volume:    1.5,   // ★ REDUCED FROM 4.5 (66% at h15 but volume spikes = noise at h1/h5)
-      vwap:      3.5,   // ★ REDUCED: Pyth oracle prices less exchange-anchored; keep strong but not dominant
-      fisher:    2.8,   // ★ BOOST 2026-05-05: precise oracle prices → cleaner price extremes detection
-      rsi:       3.5,   // ★ INCREASED FROM 2.0 (80-100% at h1/h10 - massive underweight!)
-      obv:       1.5,   // volume direction confirm
+      volume: 1.5,   // ★ REDUCED FROM 4.5 (66% at h15 but volume spikes = noise at h1/h5)
+      vwap: 3.5,   // ★ REDUCED: Pyth oracle prices less exchange-anchored; keep strong but not dominant
+      fisher: 2.8,   // ★ BOOST 2026-05-05: precise oracle prices → cleaner price extremes detection
+      rsi: 3.5,   // ★ INCREASED FROM 2.0 (80-100% at h1/h10 - massive underweight!)
+      obv: 1.5,   // volume direction confirm
       williamsR: 1.2,   // moderate keep
-      bands:     0.8, supertrend: 0.46, cci: 0.5, cmf: 0.6, keltner: 0.4,
+      bands: 0.8, supertrend: 0.46, cci: 0.5, cmf: 0.6, keltner: 0.4,
       macd: 0.3, stochrsi: 0.8, persistence: 0.176, ema: 0.19, adx: 0.2, ichimoku: 0.184,
       sma: 0.0,
       mfi: 0.105,
       // Kill confirmed worst performers
       momentum: 0.017,
-      vwma:     0.045,
-      hma:      0.066,
+      vwma: 0.045,
+      hma: 0.066,
       // XRP is news/regulatory driven; F&G less predictive
       fearGreed: 0.7,
     },
@@ -289,40 +367,40 @@
       // h15 worst: momentum 28%, hma 35%, macd 37%
       // SURPRISE: HYPE is pure mean-reversion at h15 — NOT volume/momentum
       williamsR: 6.5,  // ★ 79% best — prior 0.4 was disastrously wrong
-      fisher:    5.0,  // ★ 77% best — extreme price detection
-      cci:       4.5,  // ★ 75% best — was 0.5
-      bands:     3.0,  // ★ 78% best at h1/h5 — complementary
-      keltner:   2.0,  // ATR-based bands — follows bands signal
-      rsi:       1.5,  // oscillator — complements williamsR
-      stochrsi:  1.2,  // overbought/oversold confirmation
+      fisher: 5.0,  // ★ 77% best — extreme price detection
+      cci: 4.5,  // ★ 75% best — was 0.5
+      bands: 3.0,  // ★ 78% best at h1/h5 — complementary
+      keltner: 2.0,  // ATR-based bands — follows bands signal
+      rsi: 1.5,  // oscillator — complements williamsR
+      stochrsi: 1.2,  // overbought/oversold confirmation
       structure: 0.8,  // minor support/resistance
-      obv:       0.5, persistence: 0.4, vwap: 0.3, ema: 0.3,
+      obv: 0.5, persistence: 0.4, vwap: 0.3, ema: 0.3,
       cmf: 0.3, adx: 0.3, ichimoku: 0.2, sma: 0.0, vwma: 0.2, supertrend: 0.1,
       // Kill confirmed worst performers
       momentum: 0.05,  // 28% worst — was 1.5
-      hma:      0.05,  // 35% worst — was 1.2
-      macd:     0.1,   // 37% worst — was 1.2
+      hma: 0.05,  // 35% worst — was 1.2
+      macd: 0.1,   // 37% worst — was 1.2
       // Demote previously assumed dominant but unproven at h15
-      volume:   0.3,   // was 4.5 — not in h15 best list
-      mfi:      0.3,   // was 3.5 — not in h15 best list
+      volume: 0.3,   // was 4.5 — not in h15 best list
+      mfi: 0.3,   // was 3.5 — not in h15 best list
       // HYPE is highly speculative; F&G is a strong macro driver
       fearGreed: 1.8,
     },
     DOGE: {
       // h15 best: obv 68%, volume 61%, cmf 60%
       // h15 worst: stochrsi 36%, momentum 42%, vwma 43%
-      obv:    4.5,  // ★ 68% best — was 0.3 (massive correction)
+      obv: 4.5,  // ★ 68% best — was 0.3 (massive correction)
       volume: 3.5,  // ★ 61% best
-      cmf:    3.0,  // ★ 60% best — was 0.5 (major correction)
-      bands:  2.5,  // proven extreme mean-reversion
-      mfi:    2.0,  // keep — was proven in original
+      cmf: 3.0,  // ★ 60% best — was 0.5 (major correction)
+      bands: 2.5,  // proven extreme mean-reversion
+      mfi: 2.0,  // keep — was proven in original
       structure: 1.8, fisher: 1.8, keltner: 1.2, cci: 1.0, williamsR: 0.8,
       rsi: 0.5, persistence: 0.3, ema: 0.3, macd: 0.2, ichimoku: 0.2, adx: 0.1,
       hma: 0.3, sma: 0.0, supertrend: 0.2, vwap: 0.1,
       // Kill confirmed worst performers
       stochrsi: 0.05,  // 36% worst — was 1.7
       momentum: 0.05,  // 42% worst — was 0.25
-      vwma:     0.05,  // 43% worst — was 1.5
+      vwma: 0.05,  // 43% worst — was 1.5
       // DOGE re-enabled 2026-05-05 via Pyth Lazer ID 10; meme coin = maximum F&G sensitivity
       fearGreed: 2.0,
     },
@@ -330,24 +408,24 @@
       // h15 best: sma 92%, mfi 91%, ema 86% (NOTE: only 14 signals — high noise)
       // h15 worst: structure 0%, keltner 17%, williamsR 29%
       // Use data cautiously given tiny sample; align with original research where consistent
-      sma:    5.0,  // ★ 92% best — was 0.0 (!!!)
-      mfi:    4.5,  // ★ 91% best — confirmed across prior research too
-      ema:    4.0,  // ★ 86% best — confirmed
-      vwap:   3.5,  // 64% from prior research — consistent trend
-      hma:    3.0,  // 60% from prior research
-      vwma:   2.5,  // 63% from prior research
+      sma: 5.0,  // ★ 92% best — was 0.0 (!!!)
+      mfi: 4.5,  // ★ 91% best — confirmed across prior research too
+      ema: 4.0,  // ★ 86% best — confirmed
+      vwap: 3.5,  // 64% from prior research — consistent trend
+      hma: 3.0,  // 60% from prior research
+      vwma: 2.5,  // 63% from prior research
       volume: 3.5,  // 80% from prior research
       momentum: 2.0, persistence: 2.0, macd: 1.5, ichimoku: 2.0, supertrend: 2.0,
       cmf: 1.5, obv: 0.5, fisher: 0.8, cci: 0.3, adx: 0.5,
       // Kill confirmed worst (and consistent with prior research)
-      structure:  0.01,  // 0% worst — certain kill
-      keltner:    0.05,  // 17% worst
-      williamsR:  0.05,  // 29% worst — consistent with prior research
-      bands:      0.05,  // prior research: 30-43% — confirmed bad
-      rsi:        0.05,  // prior research: 34-43% — confirmed bad
-      stochrsi:   0.05,  // aligned with kill-mean-reversion theme
+      structure: 0.01,  // 0% worst — certain kill
+      keltner: 0.05,  // 17% worst
+      williamsR: 0.05,  // 29% worst — consistent with prior research
+      bands: 0.05,  // prior research: 30-43% — confirmed bad
+      rsi: 0.05,  // prior research: 34-43% — confirmed bad
+      stochrsi: 0.05,  // aligned with kill-mean-reversion theme
       // BNB ecosystem-driven; F&G less predictive than for BTC/DOGE
-      fearGreed:  0.8,
+      fearGreed: 0.8,
     },
   };
 
@@ -369,17 +447,17 @@
   // ================================================================
   const SIGNAL_GATE = {
     // Hard gate — signal must pass ALL of these to be directional
-    minConfidence:    42,    // % confidence
-    minAgreement:     0.56,  // indicator agreement ratio (was 0.54)
-    maxConflict:      0.38,
-    minAbsScore:      0.22,  // was 0.10 — now scaled for post-amplification composite
-    minReliability:   0.42,
+    minConfidence: 42,    // % confidence
+    minAgreement: 0.56,  // indicator agreement ratio (was 0.54)
+    maxConflict: 0.38,
+    minAbsScore: 0.22,  // was 0.10 — now scaled for post-amplification composite
+    minReliability: 0.42,
 
     // Soft gate — signal is flagged LOW CONVICTION if below either
-    medConfidence:    58,
-    medAgreement:     0.64,  // was 0.62
-    medAbsScore:      0.38,  // was 0.20 — scaled for post-amplification
-    medReliability:   0.52,
+    medConfidence: 58,
+    medAgreement: 0.64,  // was 0.62
+    medAbsScore: 0.38,  // was 0.20 — scaled for post-amplification
+    medReliability: 0.52,
   };
 
   // Per-coin gate overrides — derived from 30-day walk-forward optimization (2026-04-27).
@@ -389,53 +467,53 @@
   //      Gate raised to 0.55 (very tight); re-run backtest before trusting live signals.
   const SIGNAL_GATE_OVERRIDES = {
     BTC: {
-      minAbsScore:   0.35,  // ★ WF-calibrated 2026-05-04: h15 OOS 52.6% (recent 10-fold: 65.1%)
-      minAgreement:  0.50,
+      minAbsScore: 0.35,  // ★ WF-calibrated 2026-05-04: h15 OOS 52.6% (recent 10-fold: 65.1%)
+      minAgreement: 0.50,
       minConfidence: 44,
-      medAbsScore:   0.52,
-      medAgreement:  0.60,
+      medAbsScore: 0.52,
+      medAgreement: 0.60,
     },
     ETH: {
-      minAbsScore:   0.30,  // ★ WF-calibrated 2026-05-04: 0.40 was over-tight, h15 OOS 51.8% (recent 56.7%)
-      minAgreement:  0.56,
+      minAbsScore: 0.30,  // ★ WF-calibrated 2026-05-04: 0.40 was over-tight, h15 OOS 51.8% (recent 56.7%)
+      minAgreement: 0.56,
       minConfidence: 44,
-      medAbsScore:   0.45,
-      medAgreement:  0.62,
+      medAbsScore: 0.45,
+      medAgreement: 0.62,
     },
     XRP: {
-      minAbsScore:   0.30,  // ★ WF-calibrated 2026-05-04: h15 OOS 45.7% avg (recent 10-fold: 64.7%)
-      minAgreement:  0.50,
+      minAbsScore: 0.30,  // ★ WF-calibrated 2026-05-04: h15 OOS 45.7% avg (recent 10-fold: 64.7%)
+      minAgreement: 0.50,
       minConfidence: 50,
-      medAbsScore:   0.45,
-      medAgreement:  0.60,
+      medAbsScore: 0.45,
+      medAgreement: 0.60,
     },
     SOL: {
-      minAbsScore:   0.44,  // ★ Keep tight (noisy); minAgreement lowered: 0.64 blocked valid h15 signals
-      minAgreement:  0.54,
+      minAbsScore: 0.44,  // ★ Keep tight (noisy); minAgreement lowered: 0.64 blocked valid h15 signals
+      minAgreement: 0.54,
       minConfidence: 52,
-      medAbsScore:   0.62,
-      medAgreement:  0.66,
+      medAbsScore: 0.62,
+      medAgreement: 0.66,
     },
     BNB: {
-      minAbsScore:   0.55,  // ★ very tight gate — re-enabled 2026-04-27 with overhauled bias; validate via backtest
-      minAgreement:  0.72,
+      minAbsScore: 0.55,  // ★ very tight gate — re-enabled 2026-04-27 with overhauled bias; validate via backtest
+      minAgreement: 0.72,
       minConfidence: 68,    // ↑ RETUNED: moderate floor to add diversification (0% → 5-10% allocation)
-      medAbsScore:   0.75,
-      medAgreement:  0.78,
+      medAbsScore: 0.75,
+      medAgreement: 0.78,
     },
     DOGE: {
-      minAbsScore:   0.24,  // ★ LOWERED 2026-05-05: Pyth ID 10 + History API = better data quality
-      minAgreement:  0.56,
+      minAbsScore: 0.24,  // ★ LOWERED 2026-05-05: Pyth ID 10 + History API = better data quality
+      minAgreement: 0.56,
       minConfidence: 55,    // ↑ RETUNED: lower floor for scalp opportunities
-      medAbsScore:   0.32,
-      medAgreement:  0.62,
+      medAbsScore: 0.32,
+      medAgreement: 0.62,
     },
     HYPE: {
-      minAbsScore:   0.20,
-      minAgreement:  0.56,
+      minAbsScore: 0.20,
+      minAgreement: 0.56,
       minConfidence: 70,    // ↑ RETUNED: moderate floor for emerging alpha (1% → 5-8% allocation)
-      medAbsScore:   0.30,
-      medAgreement:  0.60,
+      medAbsScore: 0.30,
+      medAgreement: 0.60,
     },
   };
 
@@ -454,12 +532,13 @@
       return { passed: true, gated: false, quality: 'medium', label: 'NEUTRAL', reasons: [] };
     }
 
-    const conf      = pred.confidence ?? 0;
-    const absScore  = Math.abs(pred.score ?? 0);
+    const conf = pred.confidence ?? 0;
+    const absScore = Math.abs(pred.score ?? 0);
     const agreement = pred.diagnostics?.agreement ?? 0.5;
-    const conflict  = pred.diagnostics?.conflict  ?? 0;
+    const conflict = pred.diagnostics?.conflict ?? 0;
     const reliability = pred.backtest?.summary?.reliability ?? 0;
     const routedAction = pred.diagnostics?.routedAction ?? '';
+    const quantRegime = pred.diagnostics?.quantRegime || null;
     const reasons = [];
 
     // Apply coin-specific gate if available
@@ -488,6 +567,9 @@
     if (agreement < gate.minAgreement) reasons.push('Low agreement (' + Math.round(agreement * 100) + '%)');
     if (conflict >= gate.maxConflict) reasons.push('High conflict (' + Math.round(conflict * 100) + '%)');
     if (reliability > 0 && reliability < gate.minReliability) reasons.push('Weak backtest (' + Math.round(reliability * 100) + '%)');
+    if (quantRegime?.state === 'chop' && conf < (gate.medConfidence + 4) && agreement < gate.medAgreement) {
+      reasons.push('Choppy quant regime guard');
+    }
 
     if (reasons.length > 0) {
       return { passed: false, gated: true, quality: 'blocked', label: '⛔ HOLD', reasons };
@@ -513,7 +595,7 @@
   // considered a conclusive directional call in the UI.
   // Signals below threshold are labelled LOW CONVICTION or BLOCKED.
   // ================================================================
-  const CORE_SIGNAL_KEYS = ['hma', 'vwma', 'rsi', 'ema', 'sma', 'obv', 'volume', 'momentum', 'bands', 'persistence', 'structure', 'macd', 'stochrsi', 'adx', 'ichimoku', 'williamsR', 'mfi', 'vwap', 'mktSentiment', 'supertrend', 'cci', 'cmf', 'fisher', 'keltner'];
+  const CORE_SIGNAL_KEYS = ['hma', 'vwma', 'rsi', 'ema', 'sma', 'obv', 'volume', 'momentum', 'bands', 'persistence', 'structure', 'macd', 'stochrsi', 'adx', 'ichimoku', 'williamsR', 'mfi', 'vwap', 'supertrend', 'cci', 'cmf', 'fisher', 'keltner'];
   const MICRO_SIGNAL_KEYS = ['book', 'flow'];
   const SIGNAL_LABELS = {
     rsi: 'RSI',
@@ -542,11 +624,11 @@
   const BACKTEST_FILTER_OVERRIDES = {
     // Retuned 2026-05-08 via 60-day walk-forward OOS calibration.
     // These medians reduced overfitting drift and normalized trigger frequency at h15.
-    BTC:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
-    ETH:  { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.54 } },
-    XRP:  { h1: { entryThreshold: 0.30, minAgreement: 0.58 }, h5: { entryThreshold: 0.30, minAgreement: 0.58 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
-    SOL:  { h1: { entryThreshold: 0.35, minAgreement: 0.54 }, h5: { entryThreshold: 0.35, minAgreement: 0.54 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
-    BNB:  { h1: { entryThreshold: 0.50, minAgreement: 0.72 }, h5: { entryThreshold: 0.50, minAgreement: 0.72 }, h10: { entryThreshold: 0.50, minAgreement: 0.72 }, h15: { entryThreshold: 0.50, minAgreement: 0.72 } },
+    BTC: { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
+    ETH: { h1: { entryThreshold: 0.30, minAgreement: 0.54 }, h5: { entryThreshold: 0.30, minAgreement: 0.54 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.30, minAgreement: 0.54 } },
+    XRP: { h1: { entryThreshold: 0.30, minAgreement: 0.58 }, h5: { entryThreshold: 0.30, minAgreement: 0.58 }, h10: { entryThreshold: 0.30, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
+    SOL: { h1: { entryThreshold: 0.35, minAgreement: 0.54 }, h5: { entryThreshold: 0.35, minAgreement: 0.54 }, h10: { entryThreshold: 0.35, minAgreement: 0.54 }, h15: { entryThreshold: 0.35, minAgreement: 0.54 } },
+    BNB: { h1: { entryThreshold: 0.50, minAgreement: 0.72 }, h5: { entryThreshold: 0.50, minAgreement: 0.72 }, h10: { entryThreshold: 0.50, minAgreement: 0.72 }, h15: { entryThreshold: 0.50, minAgreement: 0.72 } },
     DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
     HYPE: { h1: { entryThreshold: 0.20, minAgreement: 0.56 }, h5: { entryThreshold: 0.25, minAgreement: 0.60 }, h10: { entryThreshold: 0.30, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, minAgreement: 0.64 } },
   };
@@ -618,14 +700,14 @@
 
     // Session windows (UTC)
     const sessions = {
-      asia_open:   { start: 0, end: 2,   label: 'Asia Open',     scalp: true,  desc: 'Tokyo/Seoul open — high volatility spike, scalp-friendly' },
-      asia_mid:    { start: 2, end: 6,   label: 'Asia Session',  scalp: false, desc: 'Mid-session Asia — liquidity thinning' },
-      london_open: { start: 7, end: 9,   label: 'London Open',   scalp: true,  desc: 'London/EU open — biggest volume surge, prime scalp window' },
-      london_mid:  { start: 9, end: 12,  label: 'London Session', scalp: false, desc: 'EU active — steady directional flow' },
-      ny_open:     { start: 13, end: 15.5, label: 'NY Open',      scalp: true,  desc: 'NYSE open overlap — maximum liquidity, sharpest moves' },
-      ny_mid:      { start: 15.5, end: 18, label: 'NY Session',   scalp: false, desc: 'US afternoon — momentum continuation or reversal' },
-      ny_close:    { start: 18, end: 21,  label: 'NY Close',      scalp: true,  desc: 'NYSE close — position squaring, mean-reversion scalps' },
-      dead_zone:   { start: 21, end: 24,  label: 'Dead Zone',     scalp: false, desc: 'Low liquidity — avoid scalping, wide spreads' },
+      asia_open: { start: 0, end: 2, label: 'Asia Open', scalp: true, desc: 'Tokyo/Seoul open — high volatility spike, scalp-friendly' },
+      asia_mid: { start: 2, end: 6, label: 'Asia Session', scalp: false, desc: 'Mid-session Asia — liquidity thinning' },
+      london_open: { start: 7, end: 9, label: 'London Open', scalp: true, desc: 'London/EU open — biggest volume surge, prime scalp window' },
+      london_mid: { start: 9, end: 12, label: 'London Session', scalp: false, desc: 'EU active — steady directional flow' },
+      ny_open: { start: 13, end: 15.5, label: 'NY Open', scalp: true, desc: 'NYSE open overlap — maximum liquidity, sharpest moves' },
+      ny_mid: { start: 15.5, end: 18, label: 'NY Session', scalp: false, desc: 'US afternoon — momentum continuation or reversal' },
+      ny_close: { start: 18, end: 21, label: 'NY Close', scalp: true, desc: 'NYSE close — position squaring, mean-reversion scalps' },
+      dead_zone: { start: 21, end: 24, label: 'Dead Zone', scalp: false, desc: 'Low liquidity — avoid scalping, wide spreads' },
     };
 
     let current = sessions.dead_zone;
@@ -683,7 +765,7 @@
 
   function normCandle(c) {
     if (Array.isArray(c)) return { t: c[0], o: +c[1], h: +c[2], l: +c[3], c: +c[4], v: +c[5] };
-    return { t: c.t, o: +(c.o||0), h: +(c.h||0), l: +(c.l||0), c: +(c.c||0), v: +(c.v||0) };
+    return { t: c.t, o: +(c.o || 0), h: +(c.h || 0), l: +(c.l || 0), c: +(c.c || 0), v: +(c.v || 0) };
   }
 
   function wait(ms) {
@@ -732,7 +814,7 @@
     };
 
     const queued = geckoRequestQueue.then(() => run());
-    geckoRequestQueue = queued.catch(() => {});
+    geckoRequestQueue = queued.catch(() => { });
     return queued;
   }
 
@@ -1195,11 +1277,11 @@
     const json = await res.json();
     if (!Array.isArray(json)) return [];
     return json.map(t => ({
-      px:   Number(t.price),
-      qty:  Number(t.qty),
+      px: Number(t.price),
+      qty: Number(t.qty),
       // isBuyerMaker=false → taker was buyer (aggressive buy)
       side: t.isBuyerMaker ? 'sell' : 'buy',
-      t:    Number(t.time),
+      t: Number(t.time),
     })).filter(t => Number.isFinite(t.qty) && t.qty > 0);
   }
 
@@ -1269,7 +1351,7 @@
   // HYPE not listed on Kraken; all other PREDICTION_COINS supported
   // ---------------------------------------------------------------
   const KRAKEN_BASE = 'https://api.kraken.com/0/public';
-  const KRAKEN_SYMS = { BTC:'XBTUSD', ETH:'ETHUSD', SOL:'SOLUSD', XRP:'XRPUSD', DOGE:'XDGUSD', BNB:'BNBUSD' };
+  const KRAKEN_SYMS = { BTC: 'XBTUSD', ETH: 'ETHUSD', SOL: 'SOLUSD', XRP: 'XRPUSD', DOGE: 'XDGUSD', BNB: 'BNBUSD' };
 
   function krakenInterval(tf) {
     return tf === '1m' ? 1 : tf === '5m' ? 5 : tf === '15m' ? 15 : 5;
@@ -1326,10 +1408,10 @@
     if (!rows) return [];
     // Kraken trade: [price, volume, time_float, "b"/"s", ...]
     return rows.slice(-limit).map(t => ({
-      px:   Number(t[0]),
-      qty:  Number(t[1]),
+      px: Number(t[0]),
+      qty: Number(t[1]),
       side: t[3] === 'b' ? 'buy' : 'sell',
-      t:    Math.round(Number(t[2]) * 1000),
+      t: Math.round(Number(t[2]) * 1000),
     })).filter(t => Number.isFinite(t.qty) && t.qty > 0);
   }
 
@@ -1363,22 +1445,22 @@
           fetchCBExchBook(coin.sym).catch(() => null),
           hasLongHistory ? Promise.resolve(existing.longHistory) : fetchGeckoMaxHistory(coin.geckoId).catch(() => existing.longHistory || []),
         ]);
-        const prices  = Array.isArray(market?.prices)        ? market.prices        : [];
+        const prices = Array.isArray(market?.prices) ? market.prices : [];
         const volumes = Array.isArray(market?.total_volumes) ? market.total_volumes : [];
-        const gecko5m  = bucketGeckoSeries(prices, volumes, geckoBucketMs('5m'));
+        const gecko5m = bucketGeckoSeries(prices, volumes, geckoBucketMs('5m'));
         const gecko15m = bucketGeckoSeries(prices, volumes, geckoBucketMs('15m'));
         const ws15m = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
-        const ws1m  = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
-        const candles    = anchoredPoolCandles(cb5m, gecko5m, bin5m);
+        const ws1m = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym) : [];
+        const candles = anchoredPoolCandles(cb5m, gecko5m, bin5m);
         const candles15m = anchoredPoolCandles(ws15m, cb15m, gecko15m, bin15m);
-        const candles1m  = anchoredPoolCandles(ws1m, cb1m, bin1m);
+        const candles1m = anchoredPoolCandles(ws1m, cb1m, bin1m);
         if (!candles.length && Array.isArray(existing.candles) && existing.candles.length) {
           candleCache[coin.sym] = existing;
           return;
         }
         const latestPrice = cb5m.length ? cb5m[cb5m.length - 1].c
           : prices.length ? Number(prices[prices.length - 1][1]) : (candles[candles.length - 1]?.c || existing.ticker?.usd || 0);
-        const firstPrice  = prices.length ? Number(prices[0][1]) : (candles[0]?.o || latestPrice);
+        const firstPrice = prices.length ? Number(prices[0][1]) : (candles[0]?.o || latestPrice);
         const totalVolume = volumes.length
           ? volumes.reduce((s, p) => s + Number(p?.[1] || 0), 0)
           : candles.reduce((s, c) => s + Number(c.v || 0), 0);
@@ -1409,10 +1491,10 @@
           fetchCBExchTrades(coin.sym).catch(() => []),
         ]);
         const ws15m_b = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
-        const ws1m    = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
-        const candles5m  = anchoredPoolCandles(cb5m, bin5m);
+        const ws1m = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym) : [];
+        const candles5m = anchoredPoolCandles(cb5m, bin5m);
         const candles15m = anchoredPoolCandles(ws15m_b, cb15m, bin15m);
-        const candles1m  = anchoredPoolCandles(ws1m, cb1m, bin1m);
+        const candles1m = anchoredPoolCandles(ws1m, cb1m, bin1m);
         // If exchange APIs returned nothing, keep existing cache rather than blanking it
         if (!candles5m.length) {
           if (Array.isArray(existing.candles) && existing.candles.length) {
@@ -1446,11 +1528,11 @@
   async function enrichCoinDataBackground(coin) {
     try {
       const existing = candleCache[coin.sym] || {};
-      const cb1m  = existing._cb1m  || [];
-      const cb5m  = existing._cb5m  || [];
+      const cb1m = existing._cb1m || [];
+      const cb5m = existing._cb5m || [];
       const cb15m = existing._cb15m || [];
-      const bin1m  = existing._bin1m  || [];
-      const bin5m  = existing._bin5m  || [];
+      const bin1m = existing._bin1m || [];
+      const bin5m = existing._bin5m || [];
       const bin15m = existing._bin15m || [];
 
       if (GECKO_ONLY.has(coin.sym)) {
@@ -1476,25 +1558,27 @@
           fetchKrakenCandles(coin.sym, '15m', 300).catch(() => []),
           fetchKrakenBook(coin.sym).catch(() => null),
         ]);
-        const gecko5m  = existing._gecko5m  || [];
+        const gecko5m = existing._gecko5m || [];
         const gecko15m = existing._gecko15m || [];
         const ws15m = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
-        const ws1m  = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
-        const candles    = anchoredPoolCandles(cb5m, gecko5m, bin5m, mexc5m, bybit5m, kucoin5m, bfnx5m, krk5m);
+        const ws1m = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym) : [];
+        const candles = anchoredPoolCandles(cb5m, gecko5m, bin5m, mexc5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m, cb15m, gecko15m, bin15m, mexc15m, bybit15m, kucoin15m, bfnx15m, krk15m);
-        const candles1m  = anchoredPoolCandles(ws1m, cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        const candles1m = anchoredPoolCandles(ws1m, cb1m, bin1m, mexc1m, bybit1m, kucoin1m, bfnx1m, krk1m);
         if (!candles.length) return;
         const book = existing.book?.bids?.length ? existing.book
           : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook
-          : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
+            : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
         const srcBase = (existing.source || '').split(' + ');
         if (mexc5m.length || mexc1m.length) srcBase.push('mexc');
         if (bybit5m.length || bybit1m.length) srcBase.push('bybit');
         if (kucoin5m.length || kucoin1m.length) srcBase.push('kucoin');
         if (bfnx5m.length || bfnx1m.length) srcBase.push('bitfinex');
         if (krk5m.length || krk1m.length) srcBase.push('kraken');
-        candleCache[coin.sym] = { ...existing, candles, candles15m, candles1m, book,
-          source: [...new Set(srcBase)].filter(Boolean).join(' + '), ts: Date.now() };
+        candleCache[coin.sym] = {
+          ...existing, candles, candles15m, candles1m, book,
+          source: [...new Set(srcBase)].filter(Boolean).join(' + '), ts: Date.now()
+        };
       } else {
         const hasLongHistory = Array.isArray(existing.longHistory) && existing.longHistory.length >= 90 && (Date.now() - (existing.longHistoryTs || 0) < 12 * 60 * 60 * 1000);
         const [cdc1m, cdc5m, cdc15m, cdcBook, cdcTrades, mexc1m, mexc5m, mexc15m, mexcBook, mexcTrades, bybit1m, bybit5m, bybit15m, bybitBook, bybitTrades, kucoin1m, kucoin5m, kucoin15m, kucoinBook, kucoinTrades, bfnx1m, bfnx5m, bfnx15m, bfnxBook, bfnxTrades, krk1m, krk5m, krk15m, krkBook, krkTrades, longHistory] = await Promise.all([
@@ -1531,19 +1615,19 @@
           hasLongHistory ? Promise.resolve(existing.longHistory) : fetchGeckoMaxHistory(coin.geckoId).catch(() => existing.longHistory || []),
         ]);
         const ws15m_b = window.CandleWS ? window.CandleWS.getClosedBuckets15m(coin.sym) : [];
-        const ws1m    = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym)  : [];
-        const candles5m  = anchoredPoolCandles(cb5m, cdc5m, mexc5m, bin5m, bybit5m, kucoin5m, bfnx5m, krk5m);
+        const ws1m = window.CandleWS ? window.CandleWS.getClosedBuckets1m(coin.sym) : [];
+        const candles5m = anchoredPoolCandles(cb5m, cdc5m, mexc5m, bin5m, bybit5m, kucoin5m, bfnx5m, krk5m);
         const candles15m = anchoredPoolCandles(ws15m_b, cb15m, cdc15m, mexc15m, bin15m, bybit15m, kucoin15m, bfnx15m, krk15m);
-        const candles1m  = anchoredPoolCandles(ws1m, cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
+        const candles1m = anchoredPoolCandles(ws1m, cb1m, cdc1m, mexc1m, bin1m, bybit1m, kucoin1m, bfnx1m, krk1m);
         if (!candles5m.length) return;
         const book = existing.book?.bids?.length ? existing.book
           : cdcBook?.bids?.length ? cdcBook : mexcBook?.bids?.length ? mexcBook
-          : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook
-          : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
+            : bybitBook?.bids?.length ? bybitBook : kucoinBook?.bids?.length ? kucoinBook
+              : bfnxBook?.bids?.length ? bfnxBook : krkBook?.bids?.length ? krkBook : null;
         const trades = existing.trades?.length ? existing.trades
           : cdcTrades.length ? cdcTrades : mexcTrades.length ? mexcTrades
-          : bybitTrades.length ? bybitTrades : kucoinTrades.length ? kucoinTrades
-          : bfnxTrades.length ? bfnxTrades : krkTrades;
+            : bybitTrades.length ? bybitTrades : kucoinTrades.length ? kucoinTrades
+              : bfnxTrades.length ? bfnxTrades : krkTrades;
         const sourceParts = (existing.source || '').split(' + ');
         if (cdc5m.length || cdc1m.length) sourceParts.push('crypto.com');
         if (mexc5m.length || mexc1m.length) sourceParts.push('mexc');
@@ -1551,7 +1635,8 @@
         if (kucoin5m.length || kucoin1m.length) sourceParts.push('kucoin');
         if (bfnx5m.length || bfnx1m.length) sourceParts.push('bitfinex');
         if (krk5m.length || krk1m.length) sourceParts.push('kraken');
-        candleCache[coin.sym] = { ...existing,
+        candleCache[coin.sym] = {
+          ...existing,
           candles: candles5m, candles15m, candles1m, book, trades,
           source: [...new Set(sourceParts)].filter(Boolean).join(' + '),
           ts: Date.now(), longHistory,
@@ -1559,7 +1644,7 @@
         };
       }
       // Re-score this coin with the enriched data
-      window._backtests[coin.sym]   = runWalkForwardBacktest(coin);
+      window._backtests[coin.sym] = runWalkForwardBacktest(coin);
       window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
     } catch (err) {
       console.warn(`[enrichCoinDataBackground] ${coin.sym}:`, err.message);
@@ -1620,7 +1705,7 @@
   // Formula: rtiClose = sum(close[i] * (i+1) / barCount) / sum(1..barCount)
   function aggregateToRTI(candles1m, barSize = 5) {
     if (!candles1m || candles1m.length === 0) return [];
-    
+
     const rtiCandles = [];
     for (let i = 0; i < candles1m.length; i += barSize) {
       const slice = candles1m.slice(i, i + barSize);
@@ -1628,7 +1713,7 @@
 
       const barsNeeded = slice.length;
       const weightSum = (barsNeeded * (barsNeeded + 1)) / 2;
-      
+
       // RTI close: weighted average (newer bars = higher weight)
       const rtiClose = slice.reduce((sum, c, j) => {
         const weight = (j + 1) / barsNeeded;
@@ -1644,10 +1729,10 @@
         c: rtiClose,  // RTI-weighted close
         v: slice.reduce((sum, c) => sum + (c.v || 0), 0),
       };
-      
+
       rtiCandles.push(rtiBar);
     }
-    
+
     return rtiCandles;
   }
 
@@ -1678,7 +1763,7 @@
   // Default period 16 → half=8, smoothing=4 — tuned for 15m crypto candles.
   function calcHMA(data, period = 16) {
     if (data.length < 4) return data.map(() => data[data.length - 1] ?? 0);
-    const half  = Math.max(Math.floor(period / 2), 2);
+    const half = Math.max(Math.floor(period / 2), 2);
     const sqrtN = Math.max(Math.floor(Math.sqrt(period)), 2);
     const wmaFull = calcWMA(data, period);
     const wmaHalf = calcWMA(data, half);
@@ -1695,7 +1780,7 @@
       const start = Math.max(0, i - period + 1);
       const slice = candles.slice(start, i + 1);
       const sumPV = slice.reduce((s, c) => s + c.c * (c.v || 1), 0);
-      const sumV  = slice.reduce((s, c) => s + (c.v || 1), 0);
+      const sumV = slice.reduce((s, c) => s + (c.v || 1), 0);
       result.push(sumV > 0 ? sumPV / sumV : candles[i].c);
     }
     return result;
@@ -1979,7 +2064,7 @@
     const signal = clamp(((aboveRate - 50) / 30) + slopePct * 4, -1, 1);
     const label = aboveRate >= 75 && slopePct > 0.04 ? 'Persistent uptrend'
       : aboveRate <= 25 && slopePct < -0.04 ? 'Persistent downtrend'
-      : 'Mixed persistence';
+        : 'Mixed persistence';
     return { aboveRate, slopePct, signal, label };
   }
 
@@ -2005,7 +2090,7 @@
     }
     const label = zone === 'support' ? 'Near support buffer'
       : zone === 'resistance' ? 'Near resistance buffer'
-      : 'Inside range';
+        : 'Inside range';
     return { support, resistance, supportGapPct, resistanceGapPct, signal, label, zone, bufferPct };
   }
 
@@ -2103,13 +2188,13 @@
   function defaultBacktestFilter(horizonMin, sym = null) {
     const key = horizonKey(horizonMin);
     let override = sym ? BACKTEST_FILTER_OVERRIDES[sym]?.[key] : null;
-    
+
     // H15-TUNING: Apply h15-specific entry filters if available and horizon is h15
     if (horizonMin === 15 && window._h15Tuner) {
       const h15Override = window._h15Tuner.getTunedFilter(15, sym, override || defaultShortFilter(horizonMin));
       override = h15Override;
     }
-    
+
     if (override) return override;
     return defaultShortFilter(horizonMin);
   }
@@ -2189,9 +2274,9 @@
       vetoed: !isActive && (conflictVeto || weakCoreVeto || structureVeto || persistenceVeto),
       vetoReason: conflictVeto ? 'conflict veto'
         : weakCoreVeto ? 'weak-core veto'
-        : structureVeto ? 'structure veto'
-        : persistenceVeto ? 'persistence veto'
-        : '',
+          : structureVeto ? 'structure veto'
+            : persistenceVeto ? 'persistence veto'
+              : '',
     };
   }
 
@@ -2305,15 +2390,15 @@
   function summarizeReliabilityLabel(reliability) {
     return reliability >= 0.72 ? 'Strong'
       : reliability >= 0.56 ? 'Decent'
-      : reliability >= 0.40 ? 'Mixed'
-      : 'Weak';
+        : reliability >= 0.40 ? 'Mixed'
+          : 'Weak';
   }
 
   function summarizeTradeFitLabel(tradeFit) {
     return tradeFit >= 0.72 ? 'Dialed in'
       : tradeFit >= 0.58 ? 'Short-term edge'
-      : tradeFit >= 0.44 ? 'Watchlist only'
-      : 'Needs caution';
+        : tradeFit >= 0.44 ? 'Watchlist only'
+          : 'Needs caution';
   }
 
   function scoreTradeFitHorizon(stats, horizonMin) {
@@ -2552,8 +2637,8 @@
   function normalCDF(z) {
     const t = 1 / (1 + 0.2316419 * Math.abs(z));
     const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
-    const pdf  = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
-    const p    = 1 - pdf * poly;
+    const pdf = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
+    const p = 1 - pdf * poly;
     return z >= 0 ? p : 1 - p;
   }
 
@@ -2957,8 +3042,8 @@
         regime = 'TRENDING_UP'; bias = 'bullish'; layer = 4;
         biasScore = str * (confirmed ? 1.15 : caution ? 0.65 : 0.90);
         biasConf = confirmed ? Math.min(88, 68 + (adx - 22) * 0.8)
-                 : caution  ? Math.min(55, 42 + (adx - 22) * 0.5)
-                             : Math.min(72, 58 + (adx - 22) * 0.6);
+          : caution ? Math.min(55, 42 + (adx - 22) * 0.5)
+            : Math.min(72, 58 + (adx - 22) * 0.6);
         path.push({ node: 'TREND', type: 'trend', cond: `adx=${adx.toFixed(1)} trendUp confirmed=${confirmed} caution=${caution}`, result: 'TRENDING_UP', pass: true });
       } else if (trendDn) {
         const str = clamp((adx / 50) * Math.min(absVal(emaCross) / 0.3, 1), 0.25, 1);
@@ -2967,8 +3052,8 @@
         regime = 'TRENDING_DOWN'; bias = 'bearish'; layer = 4;
         biasScore = -(str * (confirmed ? 1.15 : caution ? 0.65 : 0.90));
         biasConf = confirmed ? Math.min(88, 68 + (adx - 22) * 0.8)
-                 : caution  ? Math.min(55, 42 + (adx - 22) * 0.5)
-                             : Math.min(72, 58 + (adx - 22) * 0.6);
+          : caution ? Math.min(55, 42 + (adx - 22) * 0.5)
+            : Math.min(72, 58 + (adx - 22) * 0.6);
         path.push({ node: 'TREND', type: 'trend', cond: `adx=${adx.toFixed(1)} trendDn confirmed=${confirmed} caution=${caution}`, result: 'TRENDING_DOWN', pass: true });
       } else {
         const diDiffVal = (pdi - mdi) / ((pdi + mdi) || 1);
@@ -3123,34 +3208,34 @@
 
     // 1. ATR-based volatility regime
     const atr = calcATR(candles, 10);
-    const atrPct = closes[n-1] > 0 ? (atr / closes[n-1]) * 100 : 0;
+    const atrPct = closes[n - 1] > 0 ? (atr / closes[n - 1]) * 100 : 0;
     const isHighVol = atrPct > 0.35;
-    const isLowVol  = atrPct < 0.10;
+    const isLowVol = atrPct < 0.10;
 
     // 2. Trend regime: price vs EMA9 and EMA21
-    const ema9  = calcEMA(closes, 9);
+    const ema9 = calcEMA(closes, 9);
     const ema21 = calcEMA(closes, 21);
     const e9 = ema9[ema9.length - 1];
     const e21 = ema21[ema21.length - 1];
-    const price = closes[n-1];
+    const price = closes[n - 1];
     const emaCross = e9 > e21 ? 'bull' : e9 < e21 ? 'bear' : 'flat';
     const priceVsE9 = (price - e9) / (Math.abs(e9) || 1) * 100;
 
     // 3. Momentum: last 5 bars direction consistency
     let upBars = 0, downBars = 0;
     for (let i = n - 5; i < n; i++) {
-      if (closes[i] > closes[i-1]) upBars++;
-      else if (closes[i] < closes[i-1]) downBars++;
+      if (closes[i] > closes[i - 1]) upBars++;
+      else if (closes[i] < closes[i - 1]) downBars++;
     }
     const momentumBias = upBars >= 4 ? 'strong_up' : downBars >= 4 ? 'strong_down' : 'mixed';
 
     // 4. Book pressure (if fresh) — expects imbalance in range [-1, 1]
     const bookBias = bookAnalysis?.imbalance > 0.15 ? 'bid_heavy'
-                   : bookAnalysis?.imbalance < -0.15 ? 'ask_heavy' : 'balanced';
+      : bookAnalysis?.imbalance < -0.15 ? 'ask_heavy' : 'balanced';
 
     // 5. Tape aggression (if available) — expects buyRatio normalised 0–1
     const tapeBias = tapeData?.buyRatio > 0.65 ? 'buy_aggression'
-                   : tapeData?.buyRatio < 0.35 ? 'sell_aggression' : 'neutral_tape';
+      : tapeData?.buyRatio < 0.35 ? 'sell_aggression' : 'neutral_tape';
 
     // Determine regime
     let regime, confidence, label;
@@ -3242,8 +3327,10 @@
 
     // Gate: coins with no statistical edge pending external feed integration
     if (options.sym && SIGNAL_DISABLED_COINS.has(options.sym.toUpperCase())) {
-      return { score: 0, confidence: 0, direction: 'NEUTRAL', disabled: true,
-               disabledReason: `${options.sym} signal disabled — pending Birdeye/Dexscreener feed` };
+      return {
+        score: 0, confidence: 0, direction: 'NEUTRAL', disabled: true,
+        disabledReason: `${options.sym} signal disabled — pending Birdeye/Dexscreener feed`
+      };
     }
 
     const includeMicrostructure = options.includeMicrostructure !== false;
@@ -3379,9 +3466,9 @@
     mfiSig = clamp(mfiSig, -1, 1);
 
     // --- Hull MA signal (primary trend filter) ---
-    const hmaLine  = calcHMA(closes, 16);
-    const hmaCurr  = hmaLine[hmaLine.length - 1];
-    const hmaPrev  = hmaLine[hmaLine.length - 2] ?? hmaCurr;
+    const hmaLine = calcHMA(closes, 16);
+    const hmaCurr = hmaLine[hmaLine.length - 1];
+    const hmaPrev = hmaLine[hmaLine.length - 2] ?? hmaCurr;
     const hmaPrev2 = hmaLine[hmaLine.length - 3] ?? hmaPrev;
     const hmaSlope = (hmaCurr - hmaPrev2) / (Math.abs(hmaPrev2) || 1) * 100;
     const hmaDevPct = (lastPrice - hmaCurr) / (Math.abs(hmaCurr) || 1) * 100;
@@ -3390,9 +3477,9 @@
     hmaSig = clamp(hmaSig, -1, 1);
 
     // --- VWMA signal (volume-weighted trend confirmation) ---
-    const vwmaLine  = calcVWMA(candles, 20);
-    const vwmaCurr  = vwmaLine[vwmaLine.length - 1];
-    const vwmaPrev  = vwmaLine[vwmaLine.length - 3] ?? vwmaCurr;
+    const vwmaLine = calcVWMA(candles, 20);
+    const vwmaCurr = vwmaLine[vwmaLine.length - 1];
+    const vwmaPrev = vwmaLine[vwmaLine.length - 3] ?? vwmaCurr;
     const vwmaSlope = (vwmaCurr - vwmaPrev) / (Math.abs(vwmaPrev) || 1) * 100;
     const vwmaDevPct = (lastPrice - vwmaCurr) / (Math.abs(vwmaCurr) || 1) * 100;
     let vmaSig = clamp(vwmaSlope * 6, -0.6, 0.6);
@@ -3410,31 +3497,55 @@
       const suppressFactor = clamp((adxResult.adx - 22) / 28, 0, 0.80);
       if (isBullTrend) {
         // Dampen bearish readings from contrarian oscillators during bull trends
-        if (rsiSig   < 0) rsiSig   *= (1 - suppressFactor);
+        if (rsiSig < 0) rsiSig *= (1 - suppressFactor);
         if (stochSig < 0) stochSig *= (1 - suppressFactor);
-        if (wRSig    < 0) wRSig    *= (1 - suppressFactor);
-        if (bandSig  < 0) bandSig  *= (1 - suppressFactor * 0.75);
-        if (mfiSig   < 0) mfiSig   *= (1 - suppressFactor * 0.75);
-        if (vwapSig  < 0) vwapSig  *= (1 - suppressFactor * 0.70);
+        if (wRSig < 0) wRSig *= (1 - suppressFactor);
+        if (bandSig < 0) bandSig *= (1 - suppressFactor * 0.75);
+        if (mfiSig < 0) mfiSig *= (1 - suppressFactor * 0.75);
+        if (vwapSig < 0) vwapSig *= (1 - suppressFactor * 0.70);
       } else {
         // Dampen bullish readings from contrarian oscillators during bear trends
-        if (rsiSig   > 0) rsiSig   *= (1 - suppressFactor);
+        if (rsiSig > 0) rsiSig *= (1 - suppressFactor);
         if (stochSig > 0) stochSig *= (1 - suppressFactor);
-        if (wRSig    > 0) wRSig    *= (1 - suppressFactor);
-        if (bandSig  > 0) bandSig  *= (1 - suppressFactor * 0.75);
-        if (mfiSig   > 0) mfiSig   *= (1 - suppressFactor * 0.75);
-        if (vwapSig  > 0) vwapSig  *= (1 - suppressFactor * 0.70);
+        if (wRSig > 0) wRSig *= (1 - suppressFactor);
+        if (bandSig > 0) bandSig *= (1 - suppressFactor * 0.75);
+        if (mfiSig > 0) mfiSig *= (1 - suppressFactor * 0.75);
+        if (vwapSig > 0) vwapSig *= (1 - suppressFactor * 0.70);
       }
     }
 
     // --- Book & Trade Flow ---
     const bookAnalysis = analyzeBook(book);
     const tradeFlow = analyzeTradeFlow(trades);
+    const microstructure = (() => {
+      try {
+        if (window.MicrostructureEngine?.analyze && options.sym) {
+          return window.MicrostructureEngine.analyze(options.sym, book, trades, {
+            horizon: options.horizon || 15,
+          });
+        }
+      } catch (_) { }
+      return null;
+    })();
     const bookFresh = book && (Date.now() - (book.timestamp || 0)) < 30000;
-    const bookSig = bookFresh ? clamp((bookAnalysis.imbalance || 0) * 1.5, -1, 1) : 0;
-    let flowSig = 0;
-    if (tradeFlow.aggressor === 'buyers') flowSig = Math.min(1, (tradeFlow.buyRatio - 50) / 30);
-    else if (tradeFlow.aggressor === 'sellers') flowSig = Math.max(-1, -(tradeFlow.sellRatio - 50) / 30);
+    const bookSigBase = bookFresh ? clamp((bookAnalysis.imbalance || 0) * 1.5, -1, 1) : 0;
+    let flowSigBase = 0;
+    if (tradeFlow.aggressor === 'buyers') flowSigBase = Math.min(1, (tradeFlow.buyRatio - 50) / 30);
+    else if (tradeFlow.aggressor === 'sellers') flowSigBase = Math.max(-1, -(tradeFlow.sellRatio - 50) / 30);
+
+    // Conservative microstructure blend to preserve existing book/flow semantics.
+    const microstructureComposite = clamp(microstructure?.composite || 0, -1, 1);
+    const sweepScore = clamp(microstructure?.sweep?.score || 0, -1, 1);
+    const vacuumPenalty = clamp(microstructure?.vacuum?.severity || 0, 0, 1);
+    const toxicityPenalty = clamp(microstructure?.toxicity?.proxy || 0, 0, 1);
+    const bookSig = clamp(bookSigBase * 0.86 + microstructureComposite * 0.14, -1, 1);
+    let flowSig = clamp(flowSigBase * 0.84 + sweepScore * 0.16, -1, 1);
+    if (vacuumPenalty > 0.55) {
+      flowSig *= (1 - vacuumPenalty * 0.35);
+    }
+    if (toxicityPenalty > 0.60) {
+      flowSig *= (1 - (toxicityPenalty - 0.60) * 0.20);
+    }
 
     // --- Prediction Market Sentiment (Kalshi + Polymarket) ---
     const mktData = options.sym ? (window.PredictionMarkets?.getCoin(options.sym) ?? null) : null;
@@ -3444,6 +3555,7 @@
       if (p > 0.62) mktSig = Math.min(1, (p - 0.62) / 0.38);
       else if (p < 0.38) mktSig = -Math.min(1, (0.38 - p) / 0.38);
     }
+    const mktModelSig = KALSHI_VERIFY_ONLY ? 0 : mktSig;
 
     // Supertrend
     const stR = calcSupertrend(candles, 10, 3.0);
@@ -3510,13 +3622,13 @@
     if (window._cmcProFeed && window._cmcProFeed.startPolling) {
       // Lazy-start polling on first prediction run (non-blocking)
       if (!window._cmcProFeed._pollingStarted) {
-        window._cmcProFeed.startPolling(['BTC','ETH','SOL','XRP','BNB','DOGE','HYPE'], 60000);
+        window._cmcProFeed.startPolling(['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'], 60000);
         window._cmcProFeed._pollingStarted = true;
       }
     }
 
     const signalVector = {
-      hma:  hmaSig,
+      hma: hmaSig,
       vwma: vmaSig,
       rsi: rsiSig,
       ema: emaSig,
@@ -3536,7 +3648,7 @@
       ichimoku: ichiSig,
       williamsR: wRSig,
       mfi: mfiSig,
-      mktSentiment: mktSig,
+      mktSentiment: mktModelSig,
       supertrend: supertrendSig,
       cci: cciSig,
       cmf: cmfSig,
@@ -3553,9 +3665,9 @@
     const wallAbs = detectWallAbsorption(options.candles1m || null);
     if (wallAbs.detected) {
       const sup = wallAbs.strength;
-      signalVector.momentum  = signalVector.momentum  * (1 - sup * 0.88); // most noisy
-      signalVector.obv       = signalVector.obv       * (1 - sup * 0.68); // wrong-dir accumulation
-      signalVector.stochrsi  = signalVector.stochrsi  * (1 - sup * 0.52); // reacts to wick overshoots
+      signalVector.momentum = signalVector.momentum * (1 - sup * 0.88); // most noisy
+      signalVector.obv = signalVector.obv * (1 - sup * 0.68); // wrong-dir accumulation
+      signalVector.stochrsi = signalVector.stochrsi * (1 - sup * 0.52); // reacts to wick overshoots
       // Inject absorption counter-bias via persistence (highest-quality weight)
       const absorbBias = wallAbs.dir * sup * 0.65;
       signalVector.persistence = clamp(signalVector.persistence * 0.4 + absorbBias, -1, 1);
@@ -3570,11 +3682,15 @@
     const biasedVector = applyBiasFilter(signalVector, mdt);
     Object.assign(signalVector, biasedVector);
     const activeKeys = Object.keys(signalVector).filter(key => includeMicrostructure || !MICRO_SIGNAL_KEYS.includes(key));
+    const modelActiveKeys = KALSHI_VERIFY_ONLY
+      ? activeKeys.filter(key => key !== 'mktSentiment')
+      : activeKeys;
     // Regime detection BEFORE composite — adaptiveWeights must affect actual score computation
     const _tapeNorm = tradeFlow ? { buyRatio: tradeFlow.buyRatio / 100 } : null;
     const liveRegime = detectLiveRegime(candles, bookAnalysis, _tapeNorm);
-    const adaptiveWeights = applyRegimeMults(COMPOSITE_WEIGHTS, liveRegime.regime);
-    
+    const regimeWeights = applyRegimeMults(COMPOSITE_WEIGHTS, liveRegime.regime);
+    const adaptiveWeights = applyOnlineWeightOverlay(options.sym, regimeWeights);
+
     // H15-TUNING: Apply h15-specific indicator weights if available and horizon is h15
     let coinBias = PER_COIN_INDICATOR_BIAS[options.sym?.toUpperCase()] ?? {};
     if (options.horizon === 15 && window._h15Tuner) {
@@ -3588,15 +3704,15 @@
     };
     const coreComposite = weightedComposite(CORE_SIGNAL_KEYS);
     const microComposite = includeMicrostructure ? weightedComposite(MICRO_SIGNAL_KEYS) : 0;
-    const rawComposite = weightedComposite(activeKeys);
+    const rawComposite = weightedComposite(modelActiveKeys);
 
     // ADX gate: suppress signal in flat/ranging markets (ADX < 20 = noise).
     // Proportional — dead-flat market (ADX=5) dampens composite by 75%.
-    const adxGate = adxResult.adx < 10 
+    const adxGate = adxResult.adx < 10
       ? Math.max(0.05, adxResult.adx / 10 * 0.25)
-      : adxResult.adx < 20 
-      ? Math.max(0.25, adxResult.adx / 20) 
-      : 1.0;
+      : adxResult.adx < 20
+        ? Math.max(0.25, adxResult.adx / 20)
+        : 1.0;
 
     // Amplify: realistic composite range is 0–0.45 → stretch to 0–0.9 so
     // high-agreement signals reach meaningful confidence levels in the UI.
@@ -3609,7 +3725,7 @@
       return aligns ? (1 + strength * maxEffect) : (1 - strength * maxEffect * 0.65);
     })();
     const _sessMult = 1.0; // session multipliers removed — crypto is 24/7
-    
+
     // CRITICAL FIX 2026-05-06: Detect bearish divergence (uptrend + negative momentum = reversal imminent)
     // Signal: price trending up but momentum falling = exhaustion = reverse is coming
     // Use REAL-TIME CFM momentum (from window._cfm) not stale 6-bar ROC — CFM has live tick momentum
@@ -3623,43 +3739,49 @@
     } catch (e) {
       // Silently fall back to mom if CFM access fails — don't crash
     }
-    
+
     const bullishSignal = rawComposite > 0.05;  // Model says UP
     const bearishMomentum = liveRealtimeMomentum < -0.02;  // But momentum is falling
     const bearishDivergence = bullishSignal && bearishMomentum;
-    
+
     const divergenceSuppression = bearishDivergence ? 0.15 : 1.0;  // Kill 85% of signal if divergence detected
-    
+
     const score = clamp(rawComposite * 1.6 * adxGate * divergenceSuppression * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult, -1, 1);
-    const agreement = summarizeAgreement(Object.fromEntries(activeKeys.map(key => [key, signalVector[key]])));
+    const agreement = summarizeAgreement(Object.fromEntries(modelActiveKeys.map(key => [key, signalVector[key]])));
     const coreAgreement = summarizeAgreement(Object.fromEntries(CORE_SIGNAL_KEYS.map(key => [key, signalVector[key]])));
 
     const indicatorsPack = { rsi, emaCross, vwapDev: vwapDevRolling, vwapBands };
     const scalpSetups = includeSetups ? detectScalpSetups(candles, indicatorsPack, bookAnalysis, tradeFlow, session) : [];
 
     const indicatorsSummary = {
-      rsi:      { value: rsi, signal: rsiSig, label: rsi > 70 ? 'Overbought' : rsi < 30 ? 'Oversold' : rsi > 55 ? 'Bullish' : rsi < 45 ? 'Bearish' : 'Neutral' },
-      ema:      { value: emaCross, signal: emaSig, label: emaCross > 0.1 ? 'Bull Cross' : emaCross < -0.1 ? 'Bear Cross' : 'Converging', ema9: ema9[ema9.length - 1], ema21: ema21[ema21.length - 1] },
-      vwap:     { value: vwapDevRolling, signal: vwapSig, price: vwapRollingLast, bands: vwapBands, label: Math.abs(vwapDevRolling) < 0.3 ? 'At VWAP' : vwapDevRolling > 0 ? 'Above VWAP' : 'Below VWAP' },
-      obv:      { slope: obvSlope, signal: obvSig, label: obvSlope > 2 ? 'Accumulation' : obvSlope < -2 ? 'Distribution' : 'Flat' },
-      volume:   { buyPct: buyV / ((buyV + sellV) || 1) * 100, sellPct: sellV / ((buyV + sellV) || 1) * 100, ratio: volRatio, signal: volSig, label: volRatio > 1.2 ? 'Buy Pressure' : volRatio < 0.8 ? 'Sell Pressure' : 'Balanced' },
+      rsi: { value: rsi, signal: rsiSig, label: rsi > 70 ? 'Overbought' : rsi < 30 ? 'Oversold' : rsi > 55 ? 'Bullish' : rsi < 45 ? 'Bearish' : 'Neutral' },
+      ema: { value: emaCross, signal: emaSig, label: emaCross > 0.1 ? 'Bull Cross' : emaCross < -0.1 ? 'Bear Cross' : 'Converging', ema9: ema9[ema9.length - 1], ema21: ema21[ema21.length - 1] },
+      vwap: { value: vwapDevRolling, signal: vwapSig, price: vwapRollingLast, bands: vwapBands, label: Math.abs(vwapDevRolling) < 0.3 ? 'At VWAP' : vwapDevRolling > 0 ? 'Above VWAP' : 'Below VWAP' },
+      obv: { slope: obvSlope, signal: obvSig, label: obvSlope > 2 ? 'Accumulation' : obvSlope < -2 ? 'Distribution' : 'Flat' },
+      volume: { buyPct: buyV / ((buyV + sellV) || 1) * 100, sellPct: sellV / ((buyV + sellV) || 1) * 100, ratio: volRatio, signal: volSig, label: volRatio > 1.2 ? 'Buy Pressure' : volRatio < 0.8 ? 'Sell Pressure' : 'Balanced' },
       momentum: { value: mom, signal: momSig, label: mom > 0.5 ? 'Rising' : mom < -0.5 ? 'Falling' : 'Flat' },
-      bands:    { position: bands.position, widthPct: bands.widthPct, signal: bandSig, upper: bands.upper, lower: bands.lower, label: bands.position >= 0.88 ? 'Upper-band stretch' : bands.position <= 0.12 ? 'Lower-band stretch' : 'Inside bands' },
+      bands: { position: bands.position, widthPct: bands.widthPct, signal: bandSig, upper: bands.upper, lower: bands.lower, label: bands.position >= 0.88 ? 'Upper-band stretch' : bands.position <= 0.12 ? 'Lower-band stretch' : 'Inside bands' },
       persistence,
       structure,
-      book:     bookAnalysis,
-      flow:     tradeFlow,
-      macd:     { macd: macdResult.macd, signal: macdResult.signal, histogram: macdResult.histogram, sig: macdSig, label: macdResult.histogram > 0 ? (macdResult.macd > macdResult.signal ? 'Bull MACD' : 'Bullish') : (macdResult.macd < macdResult.signal ? 'Bear MACD' : 'Bearish') },
+      book: bookAnalysis,
+      flow: { ...tradeFlow, signal: flowSig },
+      microstructure: microstructure || {
+        composite: 0,
+        sweep: { score: 0, label: 'No tape' },
+        vacuum: { active: false, severity: 0, label: 'Unknown' },
+        toxicity: { available: false, proxy: 0, label: 'Unavailable' },
+      },
+      macd: { macd: macdResult.macd, signal: macdResult.signal, histogram: macdResult.histogram, sig: macdSig, label: macdResult.histogram > 0 ? (macdResult.macd > macdResult.signal ? 'Bull MACD' : 'Bullish') : (macdResult.macd < macdResult.signal ? 'Bear MACD' : 'Bearish') },
       stochrsi: { k: stochRsiResult.k, d: stochRsiResult.d, signal: stochSig, label: stochRsiResult.k > 80 ? 'Overbought' : stochRsiResult.k < 20 ? 'Oversold' : stochRsiResult.k > stochRsiResult.d ? 'Bull cross' : 'Bear cross' },
-      adx:      { adx: adxResult.adx, pdi: adxResult.pdi, mdi: adxResult.mdi, signal: adxSig, label: adxResult.adx > 25 ? (adxResult.pdi > adxResult.mdi ? 'Strong uptrend' : 'Strong downtrend') : 'Ranging' },
+      adx: { adx: adxResult.adx, pdi: adxResult.pdi, mdi: adxResult.mdi, signal: adxSig, label: adxResult.adx > 25 ? (adxResult.pdi > adxResult.mdi ? 'Strong uptrend' : 'Strong downtrend') : 'Ranging' },
       ichimoku: { ...ichimoku, signal: ichiSig, label: ichimoku.cloudPos === 'above' ? 'Above cloud' : ichimoku.cloudPos === 'below' ? 'Below cloud' : 'In cloud' },
       williamsR: { value: wR, signal: wRSig, label: wR > -20 ? 'Overbought' : wR < -80 ? 'Oversold' : 'Neutral' },
-      mfi:      { value: mfi, signal: mfiSig, label: mfi > 80 ? 'Overbought' : mfi < 20 ? 'Oversold' : mfi > 55 ? 'Bullish' : mfi < 45 ? 'Bearish' : 'Neutral' },
-      hma:      { value: hmaCurr, slope: hmaSlope, signal: hmaSig, label: hmaSlope > 0.04 ? 'Rising' : hmaSlope < -0.04 ? 'Falling' : 'Flat' },
-      vwma:     { value: vwmaCurr, slope: vwmaSlope, dev: vwmaDevPct, signal: vmaSig, label: vwmaDevPct > 0.3 ? 'Price above VWMA' : vwmaDevPct < -0.3 ? 'Price below VWMA' : 'At VWMA' },
+      mfi: { value: mfi, signal: mfiSig, label: mfi > 80 ? 'Overbought' : mfi < 20 ? 'Oversold' : mfi > 55 ? 'Bullish' : mfi < 45 ? 'Bearish' : 'Neutral' },
+      hma: { value: hmaCurr, slope: hmaSlope, signal: hmaSig, label: hmaSlope > 0.04 ? 'Rising' : hmaSlope < -0.04 ? 'Falling' : 'Flat' },
+      vwma: { value: vwmaCurr, slope: vwmaSlope, dev: vwmaDevPct, signal: vmaSig, label: vwmaDevPct > 0.3 ? 'Price above VWMA' : vwmaDevPct < -0.3 ? 'Price below VWMA' : 'At VWMA' },
       mktSentiment: {
         kalshi: mktData?.kalshi ?? null,
-        poly:   mktData?.poly   ?? null,
+        poly: mktData?.poly ?? null,
         combined: mktData?.combinedProb ?? null,
         signal: mktSig,
         label: mktSig > 0.3 ? 'Markets say UP' : mktSig < -0.3 ? 'Markets say DOWN' : 'Markets neutral',
@@ -3684,21 +3806,21 @@
 
     // Build sigVec for rationale(named signal contributions, using adaptive weights)
     const _sigVec = [];
-    if (typeof rsiSig    !== 'undefined') _sigVec.push({ name: 'rsi',        value: rsiSig,    weight: adaptiveWeights.rsi        ?? COMPOSITE_WEIGHTS.rsi        ?? 0.06 });
-    if (typeof macdSig   !== 'undefined') _sigVec.push({ name: 'macd',       value: macdSig,   weight: adaptiveWeights.macd       ?? COMPOSITE_WEIGHTS.macd       ?? 0.07 });
-    if (typeof emaSig    !== 'undefined') _sigVec.push({ name: 'ema',        value: emaSig,    weight: adaptiveWeights.ema        ?? COMPOSITE_WEIGHTS.ema        ?? 0.05 });
-    if (typeof hmaSig    !== 'undefined') _sigVec.push({ name: 'hma',        value: hmaSig,    weight: adaptiveWeights.hma        ?? COMPOSITE_WEIGHTS.hma        ?? 0.07 });
-    if (typeof bandSig   !== 'undefined') _sigVec.push({ name: 'bands',      value: bandSig,   weight: adaptiveWeights.bands      ?? COMPOSITE_WEIGHTS.bands      ?? 0.08 });
-    if (typeof stochSig  !== 'undefined') _sigVec.push({ name: 'stochrsi',   value: stochSig,  weight: adaptiveWeights.stochrsi   ?? COMPOSITE_WEIGHTS.stochrsi   ?? 0.04 });
-    if (typeof wRSig     !== 'undefined') _sigVec.push({ name: 'williamsR',  value: wRSig,     weight: adaptiveWeights.williamsR  ?? COMPOSITE_WEIGHTS.williamsR  ?? 0.07 });
-    if (typeof bookSig   !== 'undefined') _sigVec.push({ name: 'book',       value: bookSig,   weight: adaptiveWeights.book       ?? COMPOSITE_WEIGHTS.book       ?? 0.25 });
-    if (typeof obvSig    !== 'undefined') _sigVec.push({ name: 'obv',        value: obvSig,    weight: adaptiveWeights.obv        ?? COMPOSITE_WEIGHTS.obv        ?? 0.07 });
-    if (typeof cciSig    !== 'undefined') _sigVec.push({ name: 'cci',        value: cciSig,    weight: adaptiveWeights.cci        ?? COMPOSITE_WEIGHTS.cci        ?? 0.05 });
-    if (typeof fngSig    !== 'undefined') _sigVec.push({ name: 'fearGreed',  value: fngSig,    weight: adaptiveWeights.fearGreed  ?? COMPOSITE_WEIGHTS.fearGreed  ?? 0.12 });
-    if (typeof vwapSig   !== 'undefined') _sigVec.push({ name: 'vwap',       value: vwapSig,   weight: adaptiveWeights.vwap       ?? OUTER_ORBITAL_WEIGHTS.vwap   ?? 0.05 });
-    if (typeof flowSig   !== 'undefined') _sigVec.push({ name: 'flow',       value: flowSig,   weight: adaptiveWeights.flow       ?? COMPOSITE_WEIGHTS.flow       ?? 0.22 });
-    if (typeof volSig    !== 'undefined') _sigVec.push({ name: 'volume',     value: volSig,    weight: adaptiveWeights.volume     ?? COMPOSITE_WEIGHTS.volume     ?? 0.10 });
-    if (typeof mktSig    !== 'undefined') _sigVec.push({ name: 'mktSentiment', value: mktSig,  weight: adaptiveWeights.mktSentiment ?? COMPOSITE_WEIGHTS.mktSentiment ?? 0.18 });
+    if (typeof rsiSig !== 'undefined') _sigVec.push({ name: 'rsi', value: rsiSig, weight: adaptiveWeights.rsi ?? COMPOSITE_WEIGHTS.rsi ?? 0.06 });
+    if (typeof macdSig !== 'undefined') _sigVec.push({ name: 'macd', value: macdSig, weight: adaptiveWeights.macd ?? COMPOSITE_WEIGHTS.macd ?? 0.07 });
+    if (typeof emaSig !== 'undefined') _sigVec.push({ name: 'ema', value: emaSig, weight: adaptiveWeights.ema ?? COMPOSITE_WEIGHTS.ema ?? 0.05 });
+    if (typeof hmaSig !== 'undefined') _sigVec.push({ name: 'hma', value: hmaSig, weight: adaptiveWeights.hma ?? COMPOSITE_WEIGHTS.hma ?? 0.07 });
+    if (typeof bandSig !== 'undefined') _sigVec.push({ name: 'bands', value: bandSig, weight: adaptiveWeights.bands ?? COMPOSITE_WEIGHTS.bands ?? 0.08 });
+    if (typeof stochSig !== 'undefined') _sigVec.push({ name: 'stochrsi', value: stochSig, weight: adaptiveWeights.stochrsi ?? COMPOSITE_WEIGHTS.stochrsi ?? 0.04 });
+    if (typeof wRSig !== 'undefined') _sigVec.push({ name: 'williamsR', value: wRSig, weight: adaptiveWeights.williamsR ?? COMPOSITE_WEIGHTS.williamsR ?? 0.07 });
+    if (typeof bookSig !== 'undefined') _sigVec.push({ name: 'book', value: bookSig, weight: adaptiveWeights.book ?? COMPOSITE_WEIGHTS.book ?? 0.25 });
+    if (typeof obvSig !== 'undefined') _sigVec.push({ name: 'obv', value: obvSig, weight: adaptiveWeights.obv ?? COMPOSITE_WEIGHTS.obv ?? 0.07 });
+    if (typeof cciSig !== 'undefined') _sigVec.push({ name: 'cci', value: cciSig, weight: adaptiveWeights.cci ?? COMPOSITE_WEIGHTS.cci ?? 0.05 });
+    if (typeof fngSig !== 'undefined') _sigVec.push({ name: 'fearGreed', value: fngSig, weight: adaptiveWeights.fearGreed ?? COMPOSITE_WEIGHTS.fearGreed ?? 0.12 });
+    if (typeof vwapSig !== 'undefined') _sigVec.push({ name: 'vwap', value: vwapSig, weight: adaptiveWeights.vwap ?? OUTER_ORBITAL_WEIGHTS.vwap ?? 0.05 });
+    if (typeof flowSig !== 'undefined') _sigVec.push({ name: 'flow', value: flowSig, weight: adaptiveWeights.flow ?? COMPOSITE_WEIGHTS.flow ?? 0.22 });
+    if (typeof volSig !== 'undefined') _sigVec.push({ name: 'volume', value: volSig, weight: adaptiveWeights.volume ?? COMPOSITE_WEIGHTS.volume ?? 0.10 });
+    if (!KALSHI_VERIFY_ONLY && typeof mktSig !== 'undefined') _sigVec.push({ name: 'mktSentiment', value: mktSig, weight: adaptiveWeights.mktSentiment ?? COMPOSITE_WEIGHTS.mktSentiment ?? 0.18 });
 
     // Resolve kalshi probability for alignment check
     const _kalshiProb = mktData?.combinedProb ?? null;
@@ -3738,15 +3860,15 @@
           // YES resolves if closePrice ≥ targetPriceNum (meet or exceed).
           // Compute model-implied P(closePrice ≥ ref) using normal CDF over
           // our projected price distribution (mean = target, sigma = ATR-range).
-          const k15m        = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
-          const kalshiRef   = k15m?.targetPriceNum ?? null;   // null while "TBD"
-          const kalshiYes   = k15m?.probability    ?? null;   // market's YES price (0–1)
-          const kalshiStDir = k15m?.strikeDir       ?? 'above'; // 'above'|'below'
-          const isBelowK    = kalshiStDir === 'below';
+          const k15m = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
+          const kalshiRef = k15m?.targetPriceNum ?? null;   // null while "TBD"
+          const kalshiYes = k15m?.probability ?? null;   // market's YES price (0–1)
+          const kalshiStDir = k15m?.strikeDir ?? 'above'; // 'above'|'below'
+          const isBelowK = kalshiStDir === 'below';
 
           // Use RTI price for settlement comparison (Kalshi settles on CME CF RTI, not Binance pool)
-          const rtiData      = window._rtiPrices?.[options.sym] ?? null;
-          const rtiPrice     = rtiData?.price ?? null;   // RTI approximation from 4 constituent exchanges
+          const rtiData = window._rtiPrices?.[options.sym] ?? null;
+          const rtiPrice = rtiData?.price ?? null;   // RTI approximation from 4 constituent exchanges
           const settlementPrice = rtiPrice ?? lastPrice; // fallback to candle price if RTI unavailable
 
           if (kalshiRef !== null && kalshiRef > 0) {
@@ -3757,22 +3879,22 @@
             // P(closePrice ≥ kalshiRef) via normal CDF
             // For 'above' contracts: YES = close ≥ ref  → modelYesPct = CDF(z)
             // For 'below' contracts: YES = close <  ref → modelYesPct = 1 - CDF(z)
-            const pAbove       = normalCDF(z);
-            const modelYesPct  = Math.round((isBelowK ? 1 - pAbove : pAbove) * 100);
+            const pAbove = normalCDF(z);
+            const modelYesPct = Math.round((isBelowK ? 1 - pAbove : pAbove) * 100);
             const kalshiYesPct = kalshiYes !== null ? Math.round(kalshiYes * 100) : null;
-            const divergence   = kalshiYesPct !== null ? Math.abs(modelYesPct - kalshiYesPct) : null;
+            const divergence = kalshiYesPct !== null ? Math.abs(modelYesPct - kalshiYesPct) : null;
             // Distance from settlement price to reference
-            const gapPct       = ((kalshiRef - settlementPrice) / settlementPrice) * 100;
+            const gapPct = ((kalshiRef - settlementPrice) / settlementPrice) * 100;
 
             // Direction consistency check:
             // modelYesPct ≥ 50 means model thinks YES wins.
             // For 'above': YES=UP — so modelYesPct ≥ 50 should agree with dir='UP'
             // For 'below': YES=DOWN — so modelYesPct ≥ 50 should agree with dir='DOWN'
-            const modelYesSide   = modelYesPct >= 50 ? 'YES' : 'NO';
-            const yesDir         = isBelowK ? 'DOWN' : 'UP';
-            const noDir          = isBelowK ? 'UP' : 'DOWN';
-            const cdfImpliedDir  = modelYesPct >= 50 ? yesDir : noDir;
-            const dirConflict    = dir !== 'FLAT' && cdfImpliedDir !== dir;
+            const modelYesSide = modelYesPct >= 50 ? 'YES' : 'NO';
+            const yesDir = isBelowK ? 'DOWN' : 'UP';
+            const noDir = isBelowK ? 'UP' : 'DOWN';
+            const cdfImpliedDir = modelYesPct >= 50 ? yesDir : noDir;
+            const dirConflict = dir !== 'FLAT' && cdfImpliedDir !== dir;
             if (dirConflict) {
               console.warn(
                 `[KalshiAlign] ⚠️ DIR CONFLICT ${options.sym}: ` +
@@ -3782,26 +3904,26 @@
             }
 
             acc[entry].kalshiAlign = {
-              ref:           kalshiRef,
+              ref: kalshiRef,
               gapPct,
               modelYesPct,
               kalshiYesPct,
               divergence,
-              strikeDir:     kalshiStDir,  // 'above'|'below' — passed through to snapshot
-              floorPrice:    k15m?.floorPrice  ?? kalshiRef,
-              capPrice:      k15m?.capPrice    ?? null,
-              strikeType:    k15m?.strikeType  ?? null,
-              ticker:        k15m?.ticker      ?? null,   // contract ticker for window alignment
-              closeTimeMs:   k15m?.closeTime   ? new Date(k15m.closeTime).getTime() : null,
+              strikeDir: kalshiStDir,  // 'above'|'below' — passed through to snapshot
+              floorPrice: k15m?.floorPrice ?? kalshiRef,
+              capPrice: k15m?.capPrice ?? null,
+              strikeType: k15m?.strikeType ?? null,
+              ticker: k15m?.ticker ?? null,   // contract ticker for window alignment
+              closeTimeMs: k15m?.closeTime ? new Date(k15m.closeTime).getTime() : null,
               // RTI settlement data — Kalshi settles on CME CF RTI, not Binance pool
-              rtiPrice:      rtiPrice,
-              rtiData:       rtiData ? { openAvg: rtiData.openAvg, closeAvg: rtiData.closeAvg, delta: rtiData.delta } : null,
-              priceSource:   rtiPrice ? 'RTI' : 'candle',
+              rtiPrice: rtiPrice,
+              rtiData: rtiData ? { openAvg: rtiData.openAvg, closeAvg: rtiData.closeAvg, delta: rtiData.delta } : null,
+              priceSource: rtiPrice ? 'RTI' : 'candle',
               dirConflict,      // true when momentum direction contradicts CDF direction
               cdfImpliedDir,    // direction implied by model probability
               status: divergence === null ? 'no-market'
-                    : divergence <= 12  ? 'aligned'
-                    : divergence <= 25  ? 'soft-split'
+                : divergence <= 12 ? 'aligned'
+                  : divergence <= 25 ? 'soft-split'
                     : 'divergent',
             };
           }
@@ -3817,6 +3939,7 @@
       rationale,
       liveRegime,
       adaptiveWeights,
+      adaptiveWeightState: JSON.parse(JSON.stringify(_ensureOnlineState(options.sym))),
       diagnostics: {
         agreement: agreement.agreement,
         conflict: agreement.conflict,
@@ -3833,6 +3956,7 @@
         structureZone: structure.zone,
         topDrivers: driverSummary.topDrivers,
         driverSummary: driverSummary.driverSummary,
+        microstructure: indicatorsSummary.microstructure,
         wallAbsorption: wallAbs,
         mdt,
         reversalFlags,
@@ -3853,20 +3977,20 @@
   //   7. RecentStreak  — unbroken recent candles in drift direction
   function buildFastTimingModel(candles, sym = null) {
     if (!candles || candles.length < 8) return null;
-    const N       = candles.length;
-    const window  = candles.slice(-Math.min(15, N));
-    const last5   = candles.slice(-5);
+    const N = candles.length;
+    const window = candles.slice(-Math.min(15, N));
+    const last5 = candles.slice(-5);
     const lastPrice = candles[N - 1].c;
 
     // ── 1. DriftPurity — net move / Σ|candle moves| ──────────────────────────
     let netMove = 0, totalAbs = 0;
     for (const c of window) {
       const m = c.c - c.o;
-      netMove  += m;
+      netMove += m;
       totalAbs += Math.abs(m);
     }
     const driftPurity = totalAbs > 0 ? Math.abs(netMove) / totalAbs : 0;
-    const driftDir    = netMove > 0 ? 1 : netMove < 0 ? -1 : 0;
+    const driftDir = netMove > 0 ? 1 : netMove < 0 ? -1 : 0;
 
     // ── 2. CandlePurity — body / (high - low) ────────────────────────────────
     const avgPurity = window.reduce((s, c) => {
@@ -3888,28 +4012,28 @@
     // Negative = rejection wicks (opposition winning at the extremes)
     let wickWith = 0, wickContra = 0;
     for (const c of window) {
-      const bodyTop    = Math.max(c.o, c.c);
-      const bodyBot    = Math.min(c.o, c.c);
-      const upperWick  = c.h - bodyTop;
-      const lowerWick  = bodyBot - c.l;
+      const bodyTop = Math.max(c.o, c.c);
+      const bodyBot = Math.min(c.o, c.c);
+      const upperWick = c.h - bodyTop;
+      const lowerWick = bodyBot - c.l;
       if (driftDir > 0) { wickWith += lowerWick; wickContra += upperWick; }
-      else               { wickWith += upperWick; wickContra += lowerWick; }
+      else { wickWith += upperWick; wickContra += lowerWick; }
     }
-    const totalWick   = (wickWith + wickContra) || 0.0001;
+    const totalWick = (wickWith + wickContra) || 0.0001;
     const wickBalance = (wickWith - wickContra) / totalWick; // -1..+1
 
     // ── 5. GradientSteadiness — low variance = steady not jumpy ──────────────
     const returns = window.map(c => (c.c - c.o) / (c.o || 1) * 100);
-    const avgRet  = returns.reduce((s, v) => s + v, 0) / returns.length;
-    const stdDev  = Math.sqrt(returns.reduce((s, v) => s + (v - avgRet) ** 2, 0) / returns.length);
+    const avgRet = returns.reduce((s, v) => s + v, 0) / returns.length;
+    const stdDev = Math.sqrt(returns.reduce((s, v) => s + (v - avgRet) ** 2, 0) / returns.length);
     const gradientSteadiness = Math.abs(avgRet) > 0
       ? clamp(1 / (1 + stdDev / Math.abs(avgRet)), 0, 1)
       : 0;
 
     // ── 6. VolumeSteadiness — organic buying vs erratic pumps ────────────────
-    const vols   = window.map(c => c.v || 0);
+    const vols = window.map(c => c.v || 0);
     const avgVol = vols.reduce((s, v) => s + v, 0) / vols.length;
-    const volCV  = avgVol > 0
+    const volCV = avgVol > 0
       ? Math.sqrt(vols.reduce((s, v) => s + (v - avgVol) ** 2, 0) / vols.length) / avgVol
       : 1;
     const volSteadiness = clamp(1 / (1 + volCV), 0, 1);
@@ -3923,38 +4047,38 @@
 
     // ── COMPOSITE MOMENTUM QUALITY (0..1) ─────────────────────────────────────
     const momentumQuality = clamp(
-      driftPurity                    * 0.28 +  // primary: directional purity
-      avgPurity                      * 0.16 +  // candle cleanliness
-      staircaseRate                  * 0.18 +  // stairstepping pressure
-      (0.5 + wickBalance * 0.5)      * 0.14 +  // wick support (normalized 0..1)
-      gradientSteadiness             * 0.13 +  // steady gradient
-      volSteadiness                  * 0.11,   // organic volume
+      driftPurity * 0.28 +  // primary: directional purity
+      avgPurity * 0.16 +  // candle cleanliness
+      staircaseRate * 0.18 +  // stairstepping pressure
+      (0.5 + wickBalance * 0.5) * 0.14 +  // wick support (normalized 0..1)
+      gradientSteadiness * 0.13 +  // steady gradient
+      volSteadiness * 0.11,   // organic volume
       0, 1
     );
 
     // ── GATE THRESHOLDS (quality-based, not bar-count) ────────────────────────
     const highQuality = momentumQuality >= 0.60 && driftPurity >= 0.55 && streak >= 3;
-    const medQuality  = momentumQuality >= 0.42 && driftPurity >= 0.35 && streak >= 2;
-    const gated       = highQuality || medQuality;
-    const hardGated   = highQuality;
+    const medQuality = momentumQuality >= 0.42 && driftPurity >= 0.35 && streak >= 2;
+    const gated = highQuality || medQuality;
+    const hardGated = highQuality;
 
     // ── SCORE ──────────────────────────────────────────────────────────────────
     const qualMult = hardGated ? 1.22 : medQuality ? 0.90 : 0.24;
-    const score    = clamp(driftDir * momentumQuality * qualMult, -1, 1);
+    const score = clamp(driftDir * momentumQuality * qualMult, -1, 1);
 
     // ── PER-HORIZON SCORES ─────────────────────────────────────────────────────
     // 5m contract: needs high quality AND last 5 candles net-aligned
-    const last5Net     = last5.reduce((s, c) => s + (c.c - c.o), 0);
+    const last5Net = last5.reduce((s, c) => s + (c.c - c.o), 0);
     const last5Aligned = Math.sign(last5Net) === driftDir;
-    const h1Score  = hardGated && last5Aligned ? clamp(score * 1.12, -1, 1) : 0;
-    const h5Score  = gated && last5Aligned     ? clamp(score * (hardGated ? 1.06 : 0.88), -1, 1) : score * 0.16;
-    const h10Score = gated                     ? clamp(score * 0.90, -1, 1) : score * 0.26;
+    const h1Score = hardGated && last5Aligned ? clamp(score * 1.12, -1, 1) : 0;
+    const h5Score = gated && last5Aligned ? clamp(score * (hardGated ? 1.06 : 0.88), -1, 1) : score * 0.16;
+    const h10Score = gated ? clamp(score * 0.90, -1, 1) : score * 0.26;
     // 15m contract: most forgiving — even medium drift matters; missed quiet ETH drifts end here
-    const h15Score = medQuality                ? clamp(score * 0.88, -1, 1) : score * 0.38;
+    const h15Score = medQuality ? clamp(score * 0.88, -1, 1) : score * 0.38;
 
-    const qualityLabel = hardGated  ? '🟢 Pure thin drift'
-                       : medQuality ? '🟡 Moderate drift'
-                                    : '🔴 Choppy / no drift';
+    const qualityLabel = hardGated ? '🟢 Pure thin drift'
+      : medQuality ? '🟡 Moderate drift'
+        : '🔴 Choppy / no drift';
     const dirLabel = driftDir > 0 ? 'UP' : driftDir < 0 ? 'DOWN' : 'FLAT';
 
     return {
@@ -3973,13 +4097,13 @@
       momentumQuality,
       horizonScores: { h1: h1Score, h5: h5Score, h10: h10Score, h15: h15Score },
       diagnostics: {
-        agreement:         clamp(momentumQuality, 0, 1),
-        conflict:          clamp(1 - driftPurity, 0, 1),
-        momentum:          avgRet,
-        volBurst:          vols[vols.length - 1] / (avgVol || 1),
+        agreement: clamp(momentumQuality, 0, 1),
+        conflict: clamp(1 - driftPurity, 0, 1),
+        momentum: avgRet,
+        volBurst: vols[vols.length - 1] / (avgVol || 1),
         gated,
         hardGated,
-        accelerating:      streak >= 4 && staircaseRate > 0.72,
+        accelerating: streak >= 4 && staircaseRate > 0.72,
         // quality breakdown — exposed for diagnostics UI
         driftPurity,
         avgPurity,
@@ -4226,7 +4350,7 @@
                 snapshot,
                 { sync: false }
               );
-            } catch (_) {}
+            } catch (_) { }
           }
 
           return { coin: coin.sym, ok: true };
@@ -4240,7 +4364,7 @@
         emitPredictionEvent('predictioninference', { updated, total: results.length });
       }
       if (window.MultiDriveCache?.flushSync) {
-        try { window.MultiDriveCache.flushSync(); } catch (_) {}
+        try { window.MultiDriveCache.flushSync(); } catch (_) { }
       }
       return results;
     })();
@@ -4367,8 +4491,9 @@
     if (!cache || ((!cache.candles || cache.candles.length < 30) && (!cache.candles1m || cache.candles1m.length < 30))) return null;
 
     const walkKey = SHORT_HORIZON_MINUTES.map(horizonMin => {
-      const use1m = shouldUseRTIAggregation(horizonMin, cache.candles1m);
-      const series = use1m ? aggregateToRTI(cache.candles1m, 5) : cache.candles;
+      const series = (horizonMin <= 5 && cache.candles1m && cache.candles1m.length >= 30)
+        ? cache.candles1m
+        : cache.candles;
       const last = series?.[series.length - 1];
       return `${horizonMin}:${series?.length || 0}:${last?.t || 0}:${Math.round((last?.c || 0) * 10000)}`;
     }).join('|');
@@ -4378,8 +4503,12 @@
     const results = {};
 
     SHORT_HORIZON_MINUTES.forEach(horizonMin => {
-      const use1m = shouldUseRTIAggregation(horizonMin, cache.candles1m);
-      const candles = use1m ? aggregateToRTI(cache.candles1m, 5) : cache.candles;
+      // ★★★ CRITICAL FIX: Use raw candles WITHOUT RTI aggregation for h1/h5
+      // Previously: aggregateToRTI(candles1m, 5) converted 1m→5m, breaking h1 horizon (looked ahead 5m instead of 1m)
+      // Now: Use raw candles1m for h1/h5, raw candles5m for h10+
+      const candles = (horizonMin <= 5 && cache.candles1m && cache.candles1m.length >= 30)
+        ? cache.candles1m  // Use raw 1-minute candles for h1/h5
+        : cache.candles;   // Use 5-minute candles for h10+
       if (!candles || candles.length < 30) return;
       const barMinutes = inferBarMinutes(candles) || 5;  // RTI aggregates to 5m
       const horizonBars = Math.max(1, Math.round(horizonMin / barMinutes));
@@ -4470,12 +4599,12 @@
 
   function applyLiveCalibration(model, backtest) {
     const wfReliability = backtest?.summary?.reliability ?? 0.5;
-    const wfTradeFit    = backtest?.summary?.tradeFit ?? wfReliability;
+    const wfTradeFit = backtest?.summary?.tradeFit ?? wfReliability;
 
     // Blend D1/D7 advanced backtest (structural long-term fit) with short walk-forward.
     // 65 % walk-forward (tactical) + 35 % advanced (structural baseline).
     const advReliability = backtest?.advanced?.summary?.reliability;
-    const advTradeFit    = backtest?.advanced?.summary?.tradeFit;
+    const advTradeFit = backtest?.advanced?.summary?.tradeFit;
     const reliability = Number.isFinite(advReliability)
       ? 0.65 * wfReliability + 0.35 * advReliability : wfReliability;
     const tradeFit = Number.isFinite(advTradeFit)
@@ -4549,9 +4678,9 @@
     ));
     const vetoReason = conflictVeto ? 'Conflict veto'
       : weakCoreVeto ? 'Weak-core veto'
-      : structureVeto ? 'Structure veto'
-      : persistenceVeto ? 'Persistence veto'
-      : '';
+        : structureVeto ? 'Structure veto'
+          : persistenceVeto ? 'Persistence veto'
+            : '';
     const vetoSeverity = hardVeto ? 'hard' : softVeto ? 'soft' : '';
 
     return {
@@ -4594,16 +4723,16 @@
     // Gate-aware overlay: hard-locked sections carry more weight than a soft gate;
     // a blocked gate provides almost no contribution and penalises confidence.
     const overlayWeight = fastTiming.hardGated && aligns ? 0.22
-      : fastTiming.gated && aligns                       ? 0.16
-      : fastTiming.gated === false                       ? 0.04
-      : aligns ? 0.14 : 0.07;
+      : fastTiming.gated && aligns ? 0.16
+        : fastTiming.gated === false ? 0.04
+          : aligns ? 0.14 : 0.07;
 
     const adjustedScore = clamp(model.score + fastTiming.score * overlayWeight, -1, 1);
 
     const confDelta = fastTiming.hardGated && aligns ? fastTiming.confidence * 0.16
-      : fastTiming.gated && aligns                   ? fastTiming.confidence * 0.12
-      : fastTiming.gated === false                   ? -fastTiming.confidence * 0.08
-      : aligns ? fastTiming.confidence * 0.12 : -fastTiming.confidence * 0.05;
+      : fastTiming.gated && aligns ? fastTiming.confidence * 0.12
+        : fastTiming.gated === false ? -fastTiming.confidence * 0.08
+          : aligns ? fastTiming.confidence * 0.12 : -fastTiming.confidence * 0.05;
 
     const adjustedConfidence = Math.round(clamp(model.confidence + confDelta, 0, 95));
 
@@ -4642,12 +4771,12 @@
     const sourceLabel = cache?.source || '';
     const trustBase = sourceLabel.includes('coinbase') ? 0.90
       : sourceLabel.includes('crypto.com') ? 0.86
-      : sourceLabel.includes('binance') ? 0.80
-      : sourceLabel.includes('bybit') ? 0.80
-      : sourceLabel.includes('kucoin') ? 0.78
-      : sourceLabel.includes('bitfinex') ? 0.78
-      : sourceLabel.includes('mexc') ? 0.76
-      : 0.72;
+        : sourceLabel.includes('binance') ? 0.80
+          : sourceLabel.includes('bybit') ? 0.80
+            : sourceLabel.includes('kucoin') ? 0.78
+              : sourceLabel.includes('bitfinex') ? 0.78
+                : sourceLabel.includes('mexc') ? 0.76
+                  : 0.72;
     const microTrust = cache?.book && cache?.trades?.length ? 0.84 : 0.46;
     const timingTrust = cache?.candles1m?.length ? 0.82 : 0.35;
     const derivativeTrust = derivCache[coin.sym] ? 0.70 : 0.30;
@@ -4656,6 +4785,30 @@
     const transitionRisk = (!session.current.scalp && session.current.label === 'Dead Zone') || session.minsToNext <= 30;
     const routerProfile = getOrbitalRouterProfile(coin.sym);
     const innerArmed = Math.abs(model.diagnostics?.coreScore || model.score || 0) >= (routerProfile.key === 'highBeta' ? 0.15 : 0.10);
+    const liveRegimeKey = String(model?.liveRegime?.regime || '').toLowerCase();
+    let quantState = /trend/.test(liveRegimeKey)
+      ? 'trend'
+      : /chop|rang|neutral|unknown/.test(liveRegimeKey)
+        ? 'chop'
+        : 'neutral';
+    let quantSource = 'live-regime';
+    const hmmPath = window.QuantCore?.hmm?.lastViterbiPath;
+    const hmmLast = Array.isArray(hmmPath) && hmmPath.length
+      ? String(hmmPath[hmmPath.length - 1]).toLowerCase()
+      : '';
+    if (hmmLast) {
+      if (/trend|bull|bear/.test(hmmLast)) quantState = 'trend';
+      else if (/chop|flat|range|sideways|mean/.test(hmmLast)) quantState = 'chop';
+      else quantState = 'transition';
+      quantSource = 'quant-hmm';
+    }
+    const quantRegime = {
+      state: quantState,
+      confidence: clamp(Number(model?.liveRegime?.confidence ?? 0.5), 0, 1),
+      source: quantSource,
+      liveRegime: model?.liveRegime?.regime || null,
+      hmmState: hmmLast || null,
+    };
     return {
       coin,
       model,
@@ -4671,6 +4824,7 @@
       session,
       transitionRisk,
       innerArmed,
+      quantRegime,
       routerProfile,
       preferredHorizon: backtest?.summary?.preferredHorizon ?? model.diagnostics?.preferredHorizon ?? DEFAULT_SHORT_HORIZON_MIN,
     };
@@ -4756,9 +4910,23 @@
       });
     }
 
+    if (innerArmed && model.indicators?.microstructure) {
+      const micro = model.indicators.microstructure;
+      pushPacket({
+        family: 'micro-engine',
+        category: 'microstructure',
+        label: 'Microstructure engine',
+        detail: `${micro.sweep?.label || 'Sweep'} · ${micro.vacuum?.label || 'Liquidity'}`,
+        direction: Math.sign(micro.composite || 0),
+        strength: clamp(Math.abs(micro.composite || 0), 0, 1),
+        trust: microTrust * 0.82,
+        relevance: ultraFast ? 0.90 : shortBias ? 0.74 : 0.40,
+      });
+    }
+
     if (innerArmed && fastTiming) {
       const horizonScore = fastTiming.horizonScores?.[`h${preferredHorizon}`] ?? fastTiming.score;
-      const gateArmed    = fastTiming.gated !== undefined;  // is this the new sectioned model?
+      const gateArmed = fastTiming.gated !== undefined;  // is this the new sectioned model?
       pushPacket({
         family: 'timing',
         category: 'timing',
@@ -4809,8 +4977,8 @@
 
     const riskPackets = [];
     if (transitionRisk) {
-        riskPackets.push(applyRouterProfile({
-          family: 'session-risk',
+      riskPackets.push(applyRouterProfile({
+        family: 'session-risk',
         category: 'session',
         role: 'risk',
         label: 'Session transition',
@@ -4818,9 +4986,9 @@
         direction: 0,
         strength: session.current.label === 'Dead Zone' ? 0.82 : 0.58,
         freshness: 1,
-          trust: 0.86,
-          relevance: 0.86,
-        }, routerProfile));
+        trust: 0.86,
+        relevance: 0.86,
+      }, routerProfile));
     }
     if (bookLiquidity.state === 'thin') {
       riskPackets.push(applyRouterProfile({
@@ -4834,6 +5002,20 @@
         freshness: sourceFreshness,
         trust: 0.82,
         relevance: ultraFast ? 0.96 : shortBias ? 0.90 : 0.64,
+      }, routerProfile));
+    }
+    if ((model.indicators?.microstructure?.vacuum?.severity || 0) >= 0.62) {
+      riskPackets.push(applyRouterProfile({
+        family: 'vacuum-risk',
+        category: 'liquidity',
+        role: 'risk',
+        label: 'Liquidity vacuum',
+        detail: model.indicators?.microstructure?.vacuum?.label || 'Spread expansion + depth collapse',
+        direction: 0,
+        strength: clamp(model.indicators.microstructure.vacuum.severity, 0, 1),
+        freshness: sourceFreshness,
+        trust: 0.86,
+        relevance: ultraFast ? 0.98 : shortBias ? 0.86 : 0.66,
       }, routerProfile));
     }
     if (model.diagnostics?.conflict >= 0.34) {
@@ -4863,7 +5045,7 @@
         freshness: 1,
         trust: hardVeto ? 1 : 0.86,
         relevance: hardVeto ? 1 : 0.72,
-        }, routerProfile));
+      }, routerProfile));
     }
     const slideRisk = routerProfile.key === 'highBeta'
       && preferredHorizon >= 10
@@ -4956,12 +5138,19 @@
     const directionalConflict = modelDirection !== 0 && biasDirection !== 0 && modelDirection !== biasDirection;
     const hardVeto = !!context.model.diagnostics?.hardVeto;
     const softVeto = !!context.model.diagnostics?.softVeto;
+    const quantRegime = context.quantRegime || null;
+    const chopRegime = quantRegime?.state === 'chop';
+    const trendRegime = quantRegime?.state === 'trend';
+    const tradeNet = profile.tradeNet * (chopRegime ? 1.12 : trendRegime ? 0.94 : 1);
+    const tradeRisk = profile.tradeRisk * (chopRegime ? 0.90 : trendRegime ? 1.05 : 1);
+    const watchNet = profile.watchNet * (chopRegime ? 1.08 : trendRegime ? 0.96 : 1);
     let action = 'watch';
     if (hardVeto || riskScore >= profile.invalidateRisk) action = 'invalidated';
     else if (directionalConflict) action = 'stand-aside';
-    else if (Math.abs(net) >= profile.tradeNet && riskScore <= profile.tradeRisk && !softVeto) action = 'trade';
-    else if (softVeto || Math.abs(net) < profile.watchNet || riskScore >= (profile.tradeRisk + 0.18)) action = 'stand-aside';
-    const confidenceMultiplier = action === 'trade' ? 1.05 : action === 'watch' ? 0.97 : action === 'stand-aside' ? 0.74 : 0.54;
+    else if (Math.abs(net) >= tradeNet && riskScore <= tradeRisk && !softVeto) action = 'trade';
+    else if (softVeto || Math.abs(net) < watchNet || riskScore >= (tradeRisk + 0.18)) action = 'stand-aside';
+    const baseConfidenceMultiplier = action === 'trade' ? 1.05 : action === 'watch' ? 0.97 : action === 'stand-aside' ? 0.74 : 0.54;
+    const confidenceMultiplier = baseConfidenceMultiplier * (chopRegime ? 0.92 : trendRegime ? 1.03 : 1.0);
     const topDrivers = drivers.slice(0, 3).map(packet => ({
       label: packet.label,
       detail: packet.detail,
@@ -4970,10 +5159,13 @@
     }));
     const riskFlags = risks.slice(0, 3).map(packet => packet.label);
     if (directionalConflict) riskFlags.unshift('Directional mismatch');
+    if (quantRegime?.state === 'chop') riskFlags.unshift('Quant regime: chop guard');
+    if (quantRegime?.state === 'transition') riskFlags.unshift('Quant regime: transition');
     const summaryText = [
       topDrivers.length ? topDrivers.map(packet => `${packet.label} ${packet.direction === 'up' ? 'supports UP' : 'leans DOWN'} (${packet.detail})`).join(' · ') : 'No dominant routed drivers',
       riskFlags.length ? `Risks: ${riskFlags.join(', ')}` : 'No elevated router risks',
-    ].join(' | ');
+      quantRegime ? `Regime: ${quantRegime.state} (${Math.round((quantRegime.confidence || 0) * 100)}% ${quantRegime.source})` : null,
+    ].filter(Boolean).join(' | ');
 
     return {
       packets,
@@ -4986,25 +5178,52 @@
       directionalConflict,
       action,
       confidenceMultiplier,
+      quantRegime,
       summaryText,
+    };
+  }
+
+  function buildExecutionGuard(model, cache) {
+    const closeTimeMs = model?.projections?.p15?.kalshiAlign?.closeTimeMs;
+    if (!Number.isFinite(closeTimeMs)) return null;
+    const now = Date.now();
+    const msToClose = closeTimeMs - now;
+    const dataAgeMs = Math.max(0, now - (cache?.ts || now));
+    const staleData = dataAgeMs > 45_000;
+    const hardLate = msToClose <= 18_000;
+    const cautionLate = msToClose <= 40_000;
+    const blocked = hardLate || (cautionLate && staleData);
+    return {
+      blocked,
+      hardLate,
+      cautionLate,
+      staleData,
+      msToClose,
+      dataAgeMs,
+      reason: blocked
+        ? (hardLate ? 'late-entry-window' : 'stale-data-near-close')
+        : (cautionLate ? 'late-window-caution' : null),
     };
   }
 
   function computePrediction(coin, backtest = null) {
     const cache = candleCache[coin.sym];
-    if (!cache || !cache.candles || cache.candles.length < 20) {
+    if (!cache || !cache.candles15m || cache.candles15m.length < 20) {
       return {
         sym: coin.sym, name: coin.name, color: coin.color, icon: coin.icon,
         price: cache?.ticker?.usd || 0,
         signal: 'neutral', confidence: 15, score: 0,
-        source: 'loading', candleCount: cache?.candles?.length || 0, updatedAt: '–',
+        source: 'loading', candleCount: cache?.candles15m?.length || 0, updatedAt: '–',
         error: 'Insufficient data',
         indicators: {}, diagnostics: {}, volatility: { label: 'Unknown', atrPct: 0 },
         projections: {}, reversalFlags: [], scalpSetups: [],
       };
     }
 
-    const baseModel = buildSignalModel(cache.candles, cache.book, cache.trades, {
+    // ★★★ CRITICAL FIX: Use 15-minute candles for h15 predictions (Kalshi contracts)
+    // Previously: buildSignalModel(cache.candles, ...) ← Was using 5-min data!
+    // Now: buildSignalModel(cache.candles15m, ...) ← Use 15-min data only
+    const baseModel = buildSignalModel(cache.candles15m, cache.book, cache.trades, {
       includeMicrostructure: true,
       includeSetups: true,
       sym: coin.sym,
@@ -5029,12 +5248,18 @@
 
     // Enrich with: CFM anchor packets + outcome calibration + singularity resolver
     const cfmEnrich = window.CFMRouter?.enrich(
-      coin.sym, routerContext, routedPackets, routed, baseScore, baseConf
+      coin.sym, routerContext, routedPackets, routed, baseScore, baseConf, routerContext.quantRegime
     ) || null;
 
-    const normalizedScore      = cfmEnrich?.finalScore     ?? baseScore;
-    const normalizedConfidence = cfmEnrich?.finalConf      ?? baseConf;
-    const resolvedRouterAction = cfmEnrich?.resolvedAction ?? routed.action;
+    let normalizedScore = cfmEnrich?.finalScore ?? baseScore;
+    let normalizedConfidence = cfmEnrich?.finalConf ?? baseConf;
+    let resolvedRouterAction = cfmEnrich?.resolvedAction ?? routed.action;
+    const executionGuard = buildExecutionGuard(timed, cache);
+    if (executionGuard?.blocked && resolvedRouterAction !== 'invalidated') {
+      resolvedRouterAction = 'stand-aside';
+      normalizedScore = clamp(normalizedScore * 0.45, -1, 1);
+      normalizedConfidence = Math.round(clamp(normalizedConfidence * 0.62, 0, 95));
+    }
     const normalizedSignal = resolvedRouterAction === 'invalidated' || resolvedRouterAction === 'stand-aside'
       ? 'neutral'
       : signalFromScore(normalizedScore);
@@ -5056,20 +5281,23 @@
       scalpSetups: timed.scalpSetups,
       diagnostics: {
         ...timed.diagnostics,
-        routedAction:        resolvedRouterAction,
-        routedBias:          routed.bias,
+        routedAction: resolvedRouterAction,
+        routedBias: routed.bias,
         directionalConflict: routed.directionalConflict,
-        routedRiskScore:     routed.riskScore,
-        routedRiskFlags:     routed.riskFlags,
+        routedRiskScore: routed.riskScore,
+        routedRiskFlags: routed.riskFlags,
         routedPackets,
-        routedSummary:       routed.summaryText,
+        routedSummary: routed.summaryText,
+        quantRegime: routerContext.quantRegime,
+        executionGuard,
         // CFM floating router diagnostics
-        cfmPackets:          cfmEnrich?.cfmPackets       || [],
-        cfmCalibration:      cfmEnrich?.calibration      || null,
-        cfmAnchor:           cfmEnrich?.anchor           || 0,
-        cfmOverride:         cfmEnrich?.cfmOverride      || false,
-        cfmOverrideReason:   cfmEnrich?.overrideReason   || null,
-        cfmEarlyExit:        cfmEnrich?.earlyExit        || null,
+        cfmPackets: cfmEnrich?.cfmPackets || [],
+        cfmCalibration: cfmEnrich?.calibration || null,
+        cfmRegimeGate: cfmEnrich?.regimeGate || null,
+        cfmAnchor: cfmEnrich?.anchor || 0,
+        cfmOverride: cfmEnrich?.cfmOverride || false,
+        cfmOverrideReason: cfmEnrich?.overrideReason || null,
+        cfmEarlyExit: cfmEnrich?.earlyExit || null,
       },
       backtest,
       // --- Derivatives: funding, OI, squeeze ---
@@ -5085,7 +5313,7 @@
 
     // PATCH1.10: attach signal quality gate
     result.gate = evaluateSignalGate(result, coin.sym);
-    
+
     // PATCH6: Attach entry delay based on volatility
     if (window._adaptiveTuner) {
       const entryDelayInfo = window._adaptiveTuner.getEntryDelay(coin.sym);
@@ -5093,7 +5321,7 @@
       result.entryDelayReason = entryDelayInfo.reason;
       result.entryDelayVolatility = entryDelayInfo.volatilityReason;
     }
-    
+
     // PATCH7: Integrate wallet intel (holder metrics) — use cached data synchronously
     if (window.HolderMetrics) {
       try {
@@ -5114,7 +5342,7 @@
         // Silently fail if metrics unavailable
       }
     }
-    
+
     return result;
   }
 
@@ -5130,7 +5358,7 @@
     try {
       const data = await fetchGeckoJSON('/derivatives?include_tickers=unexpired', { minGapMs: 1800, retries: 4 }).catch(() => null);
       if (!Array.isArray(data)) return;
-      const symMap = { BTCUSDT:'BTC', ETHUSDT:'ETH', SOLUSDT:'SOL', XRPUSDT:'XRP', DOGEUSDT:'DOGE', BNBUSDT:'BNB', HYPEUSDT:'HYPE' };
+      const symMap = { BTCUSDT: 'BTC', ETHUSDT: 'ETH', SOLUSDT: 'SOL', XRPUSDT: 'XRP', DOGEUSDT: 'DOGE', BNBUSDT: 'BNB', HYPEUSDT: 'HYPE' };
       data.forEach(d => {
         const sym = symMap[d.symbol];
         if (!sym) return;
@@ -5175,14 +5403,18 @@
     const oi = deriv.oi;
 
     if (funding < -0.5) {
-      return { type: 'short_squeeze', severity: Math.abs(funding) > 1 ? 'high' : 'medium',
+      return {
+        type: 'short_squeeze', severity: Math.abs(funding) > 1 ? 'high' : 'medium',
         desc: `Funding ${funding.toFixed(3)}% — shorts paying heavy. Squeeze risk if price bounces.`,
-        direction: 'up' };
+        direction: 'up'
+      };
     }
     if (funding > 0.3) {
-      return { type: 'long_squeeze', severity: funding > 0.5 ? 'high' : 'medium',
+      return {
+        type: 'long_squeeze', severity: funding > 0.5 ? 'high' : 'medium',
         desc: `Funding +${funding.toFixed(3)}% — longs overcrowded. Liquidation cascade risk on dip.`,
-        direction: 'down' };
+        direction: 'down'
+      };
     }
     return null;
   }
@@ -5200,20 +5432,85 @@
           ...PREDICTION_COINS.map(c => loadCoinData(c)),
           fetchDerivatives()
         ]);
-      } catch {}
+      } catch { }
     },
     forceReset() {
       // Unstick a hung predictionRunPromise so the next runAll() starts fresh.
       predictionRunPromise = null;
-      geckoRequestQueue  = Promise.resolve();  // abandon backed-up serial gecko chain
+      geckoRequestQueue = Promise.resolve();  // abandon backed-up serial gecko chain
       lastGeckoRequestAt = 0;
       window.throttledFetchReset?.();          // drain stale throttle waitQueue
+    },
+    applyOnlineWeightUpdate(sym, updates = {}, opts = {}) {
+      const state = _ensureOnlineState(sym);
+      const now = Date.now();
+      Object.entries(updates || {}).forEach(([signal, raw]) => {
+        const st = _ensureOnlineSignalState(sym, signal);
+        if (!st) return;
+        const explicitMult = typeof raw === 'number' ? null : Number(raw?.mult);
+        const delta = typeof raw === 'number' ? Number(raw) : Number(raw?.delta);
+        if (Number.isFinite(explicitMult)) {
+          st.mult = clamp(explicitMult, ONLINE_WEIGHT_BOUNDS.minMult, ONLINE_WEIGHT_BOUNDS.maxMult);
+        } else if (Number.isFinite(delta)) {
+          st.mult = clamp(st.mult + _clampOnlineStep(delta), ONLINE_WEIGHT_BOUNDS.minMult, ONLINE_WEIGHT_BOUNDS.maxMult);
+        }
+        st.updatedAt = now;
+      });
+      state.updatedAt = now;
+      if (opts.reason) state.reason = String(opts.reason);
+      return JSON.parse(JSON.stringify(state));
+    },
+    applyCorrelationPruning(sym, pruneMap = {}, opts = {}) {
+      const state = _ensureOnlineState(sym);
+      const now = Date.now();
+      Object.entries(pruneMap || {}).forEach(([signal, raw]) => {
+        const st = _ensureOnlineSignalState(sym, signal);
+        if (!st) return;
+        let pruneMult = 1;
+        if (typeof raw === 'boolean') {
+          pruneMult = raw ? ONLINE_WEIGHT_BOUNDS.minPruneMult : 1;
+        } else if (Number.isFinite(Number(raw))) {
+          pruneMult = Number(raw);
+        } else if (raw && Number.isFinite(Number(raw.mult))) {
+          pruneMult = Number(raw.mult);
+        }
+        st.pruneMult = clamp(pruneMult, ONLINE_WEIGHT_BOUNDS.minPruneMult, 1);
+        st.updatedAt = now;
+      });
+      state.updatedAt = now;
+      if (opts.reason) state.pruneReason = String(opts.reason);
+      return JSON.parse(JSON.stringify(state));
+    },
+    recordOnlineSignalOutcome(payload = {}) {
+      const st = _ensureOnlineSignalState(payload.sym, payload.signalKey);
+      if (!st) return null;
+
+      const pred = String(payload.predictedSign || '').toUpperCase();
+      const out = String(payload.outcomeSign || '').toUpperCase();
+      const correct = pred && out && pred === out;
+      const confidence = clamp(Number(payload.confidence) || 50, 0, 100);
+      const confScale = confidence / 100;
+      const delta = correct ? 0.015 + confScale * 0.015 : -(0.02 + confScale * 0.02);
+
+      st.mult = clamp(st.mult + _clampOnlineStep(delta), ONLINE_WEIGHT_BOUNDS.minMult, ONLINE_WEIGHT_BOUNDS.maxMult);
+      st.samples += 1;
+      if (correct) st.wins += 1;
+      else st.losses += 1;
+      st.updatedAt = Date.now();
+      return { ...st };
+    },
+    getWeightState(sym) {
+      return JSON.parse(JSON.stringify(_ensureOnlineState(sym)));
+    },
+    getEffectiveWeights(sym, regimeKey = 'neutral') {
+      const regimeWeights = applyRegimeMults(COMPOSITE_WEIGHTS, regimeKey);
+      return applyOnlineWeightOverlay(sym, regimeWeights);
     },
     async runAll() {
       if (predictionRunPromise) return predictionRunPromise;
       // Reset gecko serial queue and throttle waiters so stale calls from prior
       // runs (e.g. after Refresh clicks) don't block this fresh run.
-      geckoRequestQueue  = Promise.resolve();
+      geckoRequestQueue = Promise.resolve();
       lastGeckoRequestAt = 0;
       window.throttledFetchReset?.();
       predictionRunPromise = (async () => {
@@ -5239,7 +5536,7 @@
         PREDICTION_COINS.forEach(coin => {
           try {
             const basePrediction = computePrediction(coin, window._backtests[coin.sym]);
-            
+
             // ── h15-TUNER INTEGRATION ─────────────────────────────────────
             if (window._h15Tuner && typeof window._h15Tuner.getTunedBias === 'function') {
               try {
@@ -5248,7 +5545,7 @@
                   baseConfidence: basePrediction.confidence,
                   signal: basePrediction.signal,
                 });
-                
+
                 if (tunedBias) {
                   basePrediction.score = tunedBias.tunedScore ?? basePrediction.score;
                   basePrediction.confidence = tunedBias.tunedConfidence ?? basePrediction.confidence;
@@ -5263,7 +5560,7 @@
               // Log once per run if h15-tuner is not available
               console.log(`[runAll] h15-tuner skipped (window._h15Tuner not available)`);
             }
-            
+
             window._predictions[coin.sym] = basePrediction;
           } catch (cpErr) {
             console.error('[runAll] computePrediction crash:', coin.sym, cpErr);
@@ -5278,14 +5575,14 @@
             };
           }
         });
-        
+
         // ── ALLOCATION ENGINE INTEGRATION ─────────────────────────────────
         // Compute portfolio weights from final scores + ATR values
         try {
           if (window.allocationEngine && typeof window.allocationEngine === 'function') {
             const scores = {};
             const atr = {};
-            
+
             PREDICTION_COINS.forEach(coin => {
               const pred = window._predictions[coin.sym];
               if (pred && pred.score !== undefined) {
@@ -5299,39 +5596,39 @@
                 }
               }
             });
-            
+
             // Call allocation engine with current ATR smoothing state
             const allocResult = window.allocationEngine(scores, atr, {
               prevAtrSmooth: window._allocationState?.atrSmooth || null,
               maxWeight: 0.70,
               minWeight: 0.00,
             });
-            
+
             // Cache ATR smoothing state for next prediction cycle
             if (!window._allocationState) window._allocationState = {};
             window._allocationState.atrSmooth = allocResult.atrSmooth;
             window._allocationWeights = allocResult.final;
-            
+
             // Attach allocation weights to each prediction for UI reference
             PREDICTION_COINS.forEach(coin => {
               if (window._predictions[coin.sym]) {
                 window._predictions[coin.sym].allocationWeight = allocResult.final[coin.sym] || 0;
               }
             });
-            
+
             console.log('[allocationEngine] Weights computed:', window._allocationWeights);
           }
         } catch (allocErr) {
           console.error('[allocationEngine] Error:', allocErr);
         }
 
-        runInferenceOverlay(window._predictions).catch(() => {});
-        
-        warmAdvancedBacktests().catch(() => {});
+        runInferenceOverlay(window._predictions).catch(() => { });
+
+        warmAdvancedBacktests().catch(() => { });
         // Phase 2: enrich with slow proxy-routed sources 30 s after initial score.
         // Fires and forgets — each coin re-scores itself, then dispatches predictionsEnriched.
         setTimeout(() => {
-          Promise.allSettled(PREDICTION_COINS.map(c => enrichCoinDataBackground(c).catch(() => {})))
+          Promise.allSettled(PREDICTION_COINS.map(c => enrichCoinDataBackground(c).catch(() => { })))
             .then(() => { saveBtCache(); window.dispatchEvent(new CustomEvent('predictionsEnriched')); });
         }, 30000);
         return window._predictions;

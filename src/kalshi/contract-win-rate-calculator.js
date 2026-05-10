@@ -34,7 +34,7 @@ class ContractWinRateCalculator {
   async loadHistoricalContracts() {
     try {
       if (typeof window === 'undefined') return [];
-      
+
       if (!window.HistoricalSettlementFetcher) {
         console.warn('[WinRateCalc] HistoricalSettlementFetcher not loaded');
         return [];
@@ -42,7 +42,7 @@ class ContractWinRateCalculator {
 
       const fetcher = new window.HistoricalSettlementFetcher();
       const settled = await fetcher.fetchAllSettled();
-      
+
       const contracts = [
         ...settled.kalshi,
         ...settled.polymarket,
@@ -89,7 +89,7 @@ class ContractWinRateCalculator {
       const browserState = {
         resolutionLog: resolutionLog || window._15mResolutionLog || []
       };
-      
+
       const result = await window.electron.kalshi.loadCSVTrades(JSON.stringify(browserState));
       if (!result.success) {
         console.warn('[WinRateCalc] CSV load failed:', result.error);
@@ -97,11 +97,11 @@ class ContractWinRateCalculator {
       }
 
       console.log(`[WinRateCalc] Loaded ${result.count} CSV trades, ${result.resolutionCount} resolution records`);
-      
+
       // MERGE: CSV trades + resolution outcomes
       const csvTrades = result.trades || [];
       const resolution = result.resolution || [];
-      
+
       // Index resolution by market ticker for fast lookup
       const resIndex = new Map();
       resolution.forEach(res => {
@@ -118,7 +118,7 @@ class ContractWinRateCalculator {
         const resKey = `${trade.symbol}-${Math.floor(trade.timestamp / 60000)}`;
         const resMatches = resIndex.get(resKey) || [];
         const resMatch = resMatches.find(r => Math.abs(r.settledTs - trade.timestamp) < 120000); // 2 min window
-        
+
         return {
           symbol: trade.symbol,
           source: 'kalshi-csv',
@@ -140,7 +140,7 @@ class ContractWinRateCalculator {
     } catch (err) {
       console.warn('[WinRateCalc] CSV load failed:', err.message);
     }
-    
+
     return [];
   }
 
@@ -162,7 +162,7 @@ class ContractWinRateCalculator {
     } catch (err) {
       console.warn('[WinRateCalc] Kalshi API fetch failed:', err.message);
     }
-    
+
     return [];
   }
 
@@ -233,11 +233,15 @@ class ContractWinRateCalculator {
       // Determine model direction and outcome
       const pred = predictions[sym];
       const modelDir = pred?.direction; // 'UP' or 'DOWN'
-      
+
       let actualDir = null;
       if (contract.source === 'kalshi') {
-        // Kalshi: result is YES/NO; need to check strikeType to determine direction
-        actualDir = contract.result === 'YES' ? 'UP' : 'DOWN';
+        // Kalshi: YES direction depends on strike type ('above' vs 'below').
+        const strike = String(contract.strikeType ?? contract.raw?.strike_type ?? 'above').toLowerCase();
+        const yesDir = strike === 'below' ? 'DOWN' : 'UP';
+        const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+        const isYes = String(contract.result || '').toUpperCase() === 'YES';
+        actualDir = isYes ? yesDir : noDir;
       } else {
         // Polymarket/Coinbase: outcome is already YES/NO where YES = UP
         actualDir = contract.outcome === 'YES' ? 'UP' : 'DOWN';
@@ -248,7 +252,7 @@ class ContractWinRateCalculator {
 
       // Is this prediction correct?
       const isWin = modelDir && actualDir && modelDir === actualDir;
-      
+
       if (isWin) {
         stats.bySymbol[sym].wins++;
         stats.overall.wins++;
@@ -271,7 +275,7 @@ class ContractWinRateCalculator {
       const s = stats.bySymbol[sym];
       if (s.total > 0) {
         s.winRate = (s.wins / s.total * 100).toFixed(1);
-        
+
         // Recent win rate (last 10)
         if (s.recent.length > 0) {
           const recentWins = s.recent.slice(-10).reduce((a, b) => a + b, 0);
@@ -319,7 +323,7 @@ class ContractWinRateCalculator {
     try {
       if (typeof window === 'undefined' || !window.electron) return false;
 
-      const result = await window.electron.invoke('storage:writeContractCache', 
+      const result = await window.electron.invoke('storage:writeContractCache',
         this.contracts.map(c => ({
           ...c,
           modelCorrect: c.modelCorrect,
@@ -418,7 +422,7 @@ class ContractWinRateCalculator {
    */
   initializeFast() {
     console.log('[WinRateCalc] Fast init (from cache)...');
-    
+
     try {
       if (typeof localStorage === 'undefined') {
         console.warn('[WinRateCalc] localStorage unavailable');
@@ -441,7 +445,7 @@ class ContractWinRateCalculator {
 
       // Broadcast immediately so UI can use cached data
       this.broadcastStats();
-      
+
       console.log('[WinRateCalc] Fast init complete (<100ms)');
       return this.stats;
     } catch (err) {
@@ -456,21 +460,21 @@ class ContractWinRateCalculator {
    */
   async updateInBackground() {
     console.log('[WinRateCalc] Background update started (non-blocking)...');
-    
+
     try {
       // Load new contracts (but don't block on this)
       await this.loadAllContracts();
-      
+
       // Recalculate accuracy
       this.calculateAccuracy();
-      
+
       // Persist updates
       this.persistToStorage();
       await this.persistToElectronCache();
-      
+
       // Broadcast updated data
       this.broadcastStats();
-      
+
       console.log('[WinRateCalc] Background update complete');
       return this.stats;
     } catch (err) {
@@ -485,20 +489,20 @@ class ContractWinRateCalculator {
    */
   async initialize() {
     console.log('[WinRateCalc] Full init (SLOW - use initializeFast + updateInBackground instead)...');
-    
+
     // Load contracts from all sources
     await this.loadAllContracts();
-    
+
     // Calculate accuracy
     this.calculateAccuracy();
-    
+
     // Persist to both storage layers
     this.persistToStorage();
     await this.persistToElectronCache();
-    
+
     // Broadcast for UI components
     this.broadcastStats();
-    
+
     console.log('[WinRateCalc] Initialization complete');
     return this.stats;
   }
@@ -520,12 +524,12 @@ console.log('[ContractWinRateCalculator] Module loaded');
 // ──────────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.__WinRateCalculatorInstance = new ContractWinRateCalculator();
-  
+
   // Expose getter for debug panel to access historical contracts directly
   window.getHistoricalContracts = () => {
     return window.__WinRateCalculatorInstance?.contracts || [];
   };
-  
+
   // Expose getter for accuracy stats
   window.getAccuracyStats = () => {
     return window.__WinRateCalculatorInstance?.stats || {};

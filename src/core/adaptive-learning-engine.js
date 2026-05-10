@@ -22,7 +22,9 @@ class AdaptiveLearningEngine {
     this.snapshotHistory = [];
     this.realtimeHistory = [];
     this.lastFullCycleTime = null;
-    
+    this.signalStats = {};
+    this.tuneLog = [];
+
     console.log('[AdaptiveLearning] Engine initialized with snapshot + realtime tuners');
   }
 
@@ -258,13 +260,16 @@ class AdaptiveLearningEngine {
   async runRealtimePolling() {
     try {
       const pollData = this.realtimeTuner.pollRealtimeData();
-      
+
       if (!pollData) {
         return { status: 'poll_failed', timestamp: Date.now() };
       }
 
       // Make rapid decisions
       const decisions = this.realtimeTuner.makeRapidDecisions(pollData);
+
+      // Feed live scorer overlays when available.
+      this.applyRealtimeWeightDecisions(decisions);
 
       // Apply decisions to tuning systems
       const applied = this.realtimeTuner.applyDecisions(decisions, this);
@@ -315,7 +320,7 @@ class AdaptiveLearningEngine {
   getRealtimeUpdate() {
     const status = this.realtimeTuner.getStatus();
     const recent = this.realtimeHistory.slice(-3);
-    
+
     return {
       pollCount: status.pollCount,
       decisionsApplied: status.decisionsApplied,
@@ -323,6 +328,154 @@ class AdaptiveLearningEngine {
       lastPoll: recent[recent.length - 1] || null,
       decisionRate: status.decisionFrequency
     };
+  }
+
+  _ensureCoinSignal(coin, signal) {
+    const c = String(coin || '').toUpperCase();
+    const s = String(signal || '').trim();
+    if (!c || !s) return null;
+    if (!this.signalStats[c]) this.signalStats[c] = {};
+    if (!this.signalStats[c][s]) {
+      this.signalStats[c][s] = {
+        samples: 0,
+        wins: 0,
+        losses: 0,
+        accuracy: 0,
+        weight: 1,
+        updatedAt: Date.now(),
+      };
+    }
+    return this.signalStats[c][s];
+  }
+
+  recordSignalContribution(coin, signals = {}, weights = {}, actualDirection) {
+    const outcome = String(actualDirection || '').toUpperCase();
+    const validOutcome = outcome === 'UP' || outcome === 'DOWN';
+    Object.entries(signals || {}).forEach(([signal, raw]) => {
+      const st = this._ensureCoinSignal(coin, signal);
+      if (!st) return;
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v === 0) return;
+      const predicted = v > 0 ? 'UP' : 'DOWN';
+      const correct = validOutcome ? predicted === outcome : null;
+      st.samples += 1;
+      if (correct === true) st.wins += 1;
+      if (correct === false) st.losses += 1;
+      st.accuracy = st.samples > 0 ? st.wins / st.samples : 0;
+      const w = Number(weights?.[signal]);
+      if (Number.isFinite(w)) st.weight = w;
+      st.updatedAt = Date.now();
+    });
+  }
+
+  autoTuneWeights() {
+    const updatesByCoin = {};
+    Object.entries(this.signalStats).forEach(([coin, sigs]) => {
+      const updates = {};
+      Object.entries(sigs || {}).forEach(([signal, st]) => {
+        if (!st || st.samples < 6) return;
+        if (st.accuracy >= 0.6) updates[signal] = { delta: 0.02 };
+        else if (st.accuracy <= 0.45) updates[signal] = { delta: -0.03 };
+      });
+      if (Object.keys(updates).length) {
+        updatesByCoin[coin] = updates;
+        if (typeof window !== 'undefined' && window.PredictionEngine?.applyOnlineWeightUpdate) {
+          window.PredictionEngine.applyOnlineWeightUpdate(coin, updates, {
+            reason: 'autoTuneWeights',
+          });
+        }
+      }
+    });
+    if (Object.keys(updatesByCoin).length) {
+      this.tuneLog.push({ ts: Date.now(), source: 'auto', updates: updatesByCoin });
+      if (this.tuneLog.length > 200) this.tuneLog = this.tuneLog.slice(-200);
+    }
+    return updatesByCoin;
+  }
+
+  getAccuracy(coin, windowSize = 100) {
+    const c = String(coin || '').toUpperCase();
+    const signals = this.signalStats[c] || {};
+    const out = {};
+    Object.entries(signals).forEach(([k, st]) => {
+      out[k] = {
+        accuracy: st.accuracy,
+        samples: Math.min(st.samples, windowSize),
+        wins: st.wins,
+        losses: st.losses,
+      };
+    });
+    return out;
+  }
+
+  getWeights(coin) {
+    if (typeof window !== 'undefined' && window.PredictionEngine?.getWeightState) {
+      return window.PredictionEngine.getWeightState(coin);
+    }
+    return {
+      baseline: this.snapshotTuner?.currentCompositeWeights || {},
+      coin: String(coin || '').toUpperCase(),
+    };
+  }
+
+  tune(coin, direction) {
+    const delta = String(direction || '').toUpperCase() === 'UP' ? 0.02 : -0.02;
+    const signals = Object.keys(this.signalStats[String(coin || '').toUpperCase()] || {});
+    const updates = signals.reduce((acc, s) => {
+      acc[s] = { delta };
+      return acc;
+    }, {});
+    if (typeof window !== 'undefined' && window.PredictionEngine?.applyOnlineWeightUpdate) {
+      return window.PredictionEngine.applyOnlineWeightUpdate(coin, updates, { reason: 'manualTune' });
+    }
+    return updates;
+  }
+
+  getAccuracyReport() {
+    const report = {};
+    Object.entries(this.signalStats).forEach(([coin, sigs]) => {
+      let wins = 0;
+      let losses = 0;
+      const signals = {};
+      Object.entries(sigs).forEach(([signal, st]) => {
+        wins += st.wins;
+        losses += st.losses;
+        signals[signal] = {
+          accuracy: st.accuracy,
+          samples: st.samples,
+          weight: st.weight,
+        };
+      });
+      const samples = wins + losses;
+      report[coin] = {
+        accuracy: samples > 0 ? wins / samples : 0,
+        samples,
+        wins,
+        losses,
+        signals,
+      };
+    });
+    return report;
+  }
+
+  getAllReports() {
+    return this.getAccuracyReport();
+  }
+
+  applyRealtimeWeightDecisions(decisions = {}) {
+    const updates = decisions?.weightAdjustments || {};
+    if (!Object.keys(updates).length) return;
+    if (typeof window === 'undefined' || !window.PredictionEngine?.applyOnlineWeightUpdate) return;
+    const coins = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
+    const mapped = {};
+    Object.entries(updates).forEach(([signal, adj]) => {
+      if (adj?.action === 'UPWEIGHT_RAPID') mapped[signal] = { delta: 0.04 };
+      else if (adj?.action === 'DOWNWEIGHT_AGGRESSIVE') mapped[signal] = { delta: -0.06 };
+    });
+    if (!Object.keys(mapped).length) return;
+    coins.forEach((coin) => {
+      window.PredictionEngine.applyOnlineWeightUpdate(coin, mapped, { reason: 'realtimeDecision' });
+    });
   }
 
   /**

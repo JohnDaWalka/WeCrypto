@@ -1,0 +1,18 @@
+{
+    "emmet.triggerExpansionOnTab": true,
+    "intelephense.codeLens.usages.enable": true,
+    "geminicodeassist.agentDebugMode": true,
+    "geminicodeassist.agentYoloMode": true,
+    "geminicodeassist.chat.changeView": "Default diff view",
+    "geminicodeassist.codeGenerationPaneViewEnabled": true,
+    "geminicodeassist.contextExclusionFile": "",
+    "geminicodeassist.inlineSuggestions.nextEditPredictions": true,
+    "geminicodeassist.verboseLogging": true,
+    "editor.defaultFormatter": "vscode.typescript-language-features",
+    "notebook.defaultFormatter": "vscode.typescript-language-features",
+    "github.copilot.chat.alternateGeminiModelFPrompt.enabled": true,
+    "github.copilot.chat.copilotMemory.enabled": true,
+    "[html]": {
+        "editor.defaultFormatter": "vscode.html-language-features"
+    }
+}

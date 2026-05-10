@@ -26,13 +26,15 @@ function loadLLMEnv() {
     for (const envPath of candidatePaths) {
       try {
         if (!fs.existsSync(envPath)) continue;
-        const result = dotenv.config({ path: envPath });
+        const result = dotenv.config({ path: envPath, quiet: true });
         if (!result.error) loadedPaths.push(envPath);
-      } catch (_) {}
+      } catch (_) { }
     }
-  } catch (_) {}
 
-  return loadedPaths;
+    return [...new Set(loadedPaths)];
+  } catch (_) { }
+
+  return [];
 }
 
 const LLM_ENV_SOURCES = loadLLMEnv();
@@ -261,14 +263,14 @@ Use this recall only as context, and prioritize current market snapshot data if 
       this._googleClient = new GoogleGenAI({ apiKey: GOOGLE_API_KEY });
       this._googleClientKind = "genai";
       return { kind: this._googleClientKind, client: this._googleClient };
-    } catch (_) {}
+    } catch (_) { }
 
     try {
       const { GoogleGenerativeAI } = require("@google/generative-ai");
       this._googleClient = new GoogleGenerativeAI(GOOGLE_API_KEY);
       this._googleClientKind = "generative-ai";
       return { kind: this._googleClientKind, client: this._googleClient };
-    } catch (_) {}
+    } catch (_) { }
 
     throw new Error("Google provider selected but no supported SDK found (@google/genai or @google/generative-ai)");
   }
@@ -356,15 +358,15 @@ Use this recall only as context, and prioritize current market snapshot data if 
       increase_weight: increaseWeight.filter(s => typeof s === 'string'),
       decrease_weight: decreaseWeight.filter(s => typeof s === 'string'),
       notes: typeof raw.suggestions?.notes === 'string' ? raw.suggestions.notes :
-             typeof raw.suggestions?.reasoning === 'string' ? raw.suggestions.reasoning :
-             typeof raw.suggestions?.summary === 'string' ? raw.suggestions.summary : "",
+        typeof raw.suggestions?.reasoning === 'string' ? raw.suggestions.reasoning :
+          typeof raw.suggestions?.summary === 'string' ? raw.suggestions.summary : "",
     };
 
     const warnings = Array.isArray(raw.warnings)
       ? raw.warnings.map(String).filter(w => w.length > 0)
       : Array.isArray(raw.suggestions?.issues)
         ? raw.suggestions.issues.map(String).filter(w => w.length > 0)
-      : [];
+        : [];
 
     return {
       regime,

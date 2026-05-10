@@ -24,9 +24,9 @@
   const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
   const POLY_GAMMA  = 'https://gamma-api.polymarket.com';
   const POLY_CLOB   = 'https://clob.polymarket.com';
-  // 30-second refresh — Kalshi 15M windows are 15 min; 30s is granular enough
-  // while halving request rate to stay well under rate limits.
-  const POLL_MS = 30_000;
+  // 15-second refresh — keeps Yes/No vote initialization tightly synced to
+  // active 15M contracts, especially during boundary rollovers.
+  const POLL_MS = 15_000;
 
   // Direct 15-minute UP/DOWN series: YES = price higher in 15 min
   const KALSHI_15M_SERIES = {

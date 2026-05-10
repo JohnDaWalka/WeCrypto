@@ -20,10 +20,8 @@
 (function () {
   'use strict';
 
-  // Bird eye API docs: https://docs.birdeye.so/
-  // Get key from: https://birdeye.so/api
-  const BIRDEYE_BASE = 'https://api.birdeye.so/v1/token';
-  const BIRDEYE_KEY_URL = 'secrets/BIRDEYE-API-KEY.txt';
+  // Birdseye is intentionally disabled for this app runtime.
+  const BIRDEYE_ENABLED = false;
 
   // Fallback to chain-agnostic metrics if Birdeye unavailable
   const GECKO_BASE = 'https://api.coingecko.com/api/v3/coins';
@@ -49,6 +47,7 @@
 
   // ── Load Birdeye API key ────────────────────────────────────────────
   async function _loadBirdeyeKey() {
+    if (!BIRDEYE_ENABLED) return null;
     if (_birdeyeKey) return _birdeyeKey;
     try {
       const r = await fetch(BIRDEYE_KEY_URL);
@@ -67,6 +66,7 @@
 
   // ── Birdeye token holders endpoint ───────────────────────────────────
   async function _fetchBirdeyeHolders(sym) {
+    if (!BIRDEYE_ENABLED) return null;
     const key = await _loadBirdeyeKey();
     if (!key) return null;
 
@@ -153,6 +153,22 @@
   // ── Fetch & compute holder metrics ───────────────────────────────────
   async function _computeMetrics(sym) {
     _stats.requests++;
+
+    if (!BIRDEYE_ENABLED) {
+      return {
+        sym,
+        source: 'disabled',
+        concentration: {
+          top10Pct: 0,
+          top100Pct: 0,
+          giniApprox: 0,
+          whaleCount: 0,
+          maxHolderPct: 0,
+        },
+        holderCount: 0,
+        ts: Date.now(),
+      };
+    }
 
     // Try Birdeye first
     const holders = await _fetchBirdeyeHolders(sym);

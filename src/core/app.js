@@ -14,21 +14,21 @@
   const _iconFetchQueue = new Set();
 
   // ---- State ----
-  let currentView   = 'cfm';
+  let currentView = 'cfm';
   let _fetchAttempted = false;  // set after first fetchAll() completes (success or fail)
-  let coinFilter    = 'all';
-  let chartCoin     = 'SOLUSD';
-  let chartTf       = '1h';
-  let sortBy        = 'volume';
-  let sortDir       = -1;
-  let refreshTimer  = null;
-  let refreshSecs   = 15;
-  let tickers       = {};         // instrument_name → ticker data
-  let sparkData     = {};         // sym → [prices] for sparklines
-  let candleChart   = null;       // lightweight-charts instance
-  let donutChart    = null;       // Chart.js donut
-  let scanRunning   = false;
-  let cfmExpanded        = new Set();
+  let coinFilter = 'all';
+  let chartCoin = 'SOLUSD';
+  let chartTf = '1h';
+  let sortBy = 'volume';
+  let sortDir = -1;
+  let refreshTimer = null;
+  let refreshSecs = 15;
+  let tickers = {};         // instrument_name → ticker data
+  let sparkData = {};         // sym → [prices] for sparklines
+  let candleChart = null;       // lightweight-charts instance
+  let donutChart = null;       // Chart.js donut
+  let scanRunning = false;
+  let cfmExpanded = new Set();
   let predictionExpanded = new Set();
   let _universeActiveTab = 'table'; // persists across auto-refresh re-renders
   let screenerSortBy = 'marketCap';
@@ -40,7 +40,7 @@
   let _lastGeckoSupplementalTs = 0;
   let _lastGeckoSupplementalResult = [];
   // CoinGecko candle queue: serial dispatch + rate-limit gap (mirrors predictions.js)
-  let _geckoCandleQueue  = Promise.resolve();
+  let _geckoCandleQueue = Promise.resolve();
   let _lastGeckoCandleAt = 0;
   let chartResizeObserver = null;
   let chartSeries = {};
@@ -51,18 +51,20 @@
   let predictionRunTimeoutId = null;
   let _lastPredictionRunTs = 0;
   let _lastPredRenderTs = 0;
+  let _asyncRefreshEngineBooted = false;
   let orbitalAnimationFrame = null;   // rAF handle for Market Universe orbital canvas
   let _rv = 0; // render version counter — increment on every render/refresh call so stale async renders can self-cancel
+  let _observabilityCache = { sig: '', ts: 0, data: null };
 
   // ── Persistence keys ─────────────────────────────────────────────────────
-  const PRED_LOG_STORE      = 'beta1_pred_log';
-  const KALSHI_LOG_STORE    = 'beta1_kalshi_log';
-  const LAST_PRED_STORE     = 'beta1_last_pred';
-  const LAST_KALSHI_STORE   = 'beta1_last_kalshi';
-  const KALSHI_ERR_STORE    = 'beta1_kalshi_errors';
-  const ORCH_LOG_STORE      = 'beta1_orch_log';
-  const KALSHI_TRAIL_STORE  = 'beta1_kalshi_2m_trail';
-  const TRADE_BELL_STORE    = 'beta1_trade_setup_bell_v2';
+  const PRED_LOG_STORE = 'beta1_pred_log';
+  const KALSHI_LOG_STORE = 'beta1_kalshi_log';
+  const LAST_PRED_STORE = 'beta1_last_pred';
+  const LAST_KALSHI_STORE = 'beta1_last_kalshi';
+  const KALSHI_ERR_STORE = 'beta1_kalshi_errors';
+  const ORCH_LOG_STORE = 'beta1_orch_log';
+  const KALSHI_TRAIL_STORE = 'beta1_kalshi_2m_trail';
+  const TRADE_BELL_STORE = 'beta1_trade_setup_bell_v2';
   const LEGACY_TRADE_BELL_STORE = 'beta1_trade_setup_bell';
   const PREDICTION_RUN_TIMEOUT_MS = 25_000;
 
@@ -108,41 +110,41 @@
 
   // ── Prediction accuracy tracker ──────────────────────────────────────────
   // window._lastPrediction[sym] = { direction: 'UP'|'DOWN'|'FLAT', price, ts, signal }
-  window._lastPrediction     = window._lastPrediction     || {};
+  window._lastPrediction = window._lastPrediction || {};
   // Rolling log of evaluated results (capped at 200 entries)
-  window._predLog            = window._predLog            || [];
+  window._predLog = window._predLog || [];
   // Kalshi contract outcome log — builds model vs market confidence over time
-  window._kalshiLog          = window._kalshiLog          || [];
+  window._kalshiLog = window._kalshiLog || [];
   // Last Kalshi alignment snapshot per coin (for outcome evaluation on bucket close)
   window._lastKalshiSnapshot = window._lastKalshiSnapshot || {};
   // Per-contract prediction trail (2-minute cadence from contract open)
   window._kalshiPredictionTrail = window._kalshiPredictionTrail || {};
   // Contract-level error log — captures mismatches, wick events, fetch failures
-  window._kalshiErrors       = window._kalshiErrors       || [];
+  window._kalshiErrors = window._kalshiErrors || [];
   // Market Divergence: per-coin divergence timing state (model vs Kalshi crowd)
-  window._marketDivergence   = window._marketDivergence   || {};
+  window._marketDivergence = window._marketDivergence || {};
   // Orchestrator intent history — logs each actionable state change per coin
-  window._orchLog            = window._orchLog            || [];
+  window._orchLog = window._orchLog || [];
   // Trade setup bell preference + cooldown state
-  let _tradeBellEnabled      = true;
-  let _tradeBellCtx          = null;
+  let _tradeBellEnabled = true;
+  let _tradeBellCtx = null;
   let _tradeBellLastGlobalTs = 0;
-  let _tradeBellUnlockBound  = false;
+  let _tradeBellUnlockBound = false;
   let _tradeBellSessionPrimed = false;
-  let _contractBellCloseMs   = 0;
-  let _contractBellLastTs    = 0;
+  let _contractBellCloseMs = 0;
+  let _contractBellLastTs = 0;
   const _contractBellTickerBySym = new Map();
   let _signalAudioLastPingTs = 0;
 
   // Restore persisted logs from localStorage on startup
   (function restorePersistedData() {
-    try { const r = localStorage.getItem(PRED_LOG_STORE);    if (r) window._predLog            = JSON.parse(r); } catch(e) {}
-    try { const r = localStorage.getItem(KALSHI_LOG_STORE);  if (r) window._kalshiLog          = JSON.parse(r); } catch(e) {}
-    try { const r = localStorage.getItem(LAST_PRED_STORE);   if (r) window._lastPrediction     = JSON.parse(r); } catch(e) {}
-    try { const r = localStorage.getItem(LAST_KALSHI_STORE); if (r) window._lastKalshiSnapshot = JSON.parse(r); } catch(e) {}
-    try { const r = localStorage.getItem(KALSHI_ERR_STORE);  if (r) window._kalshiErrors       = JSON.parse(r); } catch(e) {}
-    try { const r = localStorage.getItem(ORCH_LOG_STORE);    if (r) window._orchLog            = JSON.parse(r); } catch(e) {}
-    try { const r = localStorage.getItem(KALSHI_TRAIL_STORE); if (r) window._kalshiPredictionTrail = JSON.parse(r); } catch(e) {}
+    try { const r = localStorage.getItem(PRED_LOG_STORE); if (r) window._predLog = JSON.parse(r); } catch (e) { }
+    try { const r = localStorage.getItem(KALSHI_LOG_STORE); if (r) window._kalshiLog = JSON.parse(r); } catch (e) { }
+    try { const r = localStorage.getItem(LAST_PRED_STORE); if (r) window._lastPrediction = JSON.parse(r); } catch (e) { }
+    try { const r = localStorage.getItem(LAST_KALSHI_STORE); if (r) window._lastKalshiSnapshot = JSON.parse(r); } catch (e) { }
+    try { const r = localStorage.getItem(KALSHI_ERR_STORE); if (r) window._kalshiErrors = JSON.parse(r); } catch (e) { }
+    try { const r = localStorage.getItem(ORCH_LOG_STORE); if (r) window._orchLog = JSON.parse(r); } catch (e) { }
+    try { const r = localStorage.getItem(KALSHI_TRAIL_STORE); if (r) window._kalshiPredictionTrail = JSON.parse(r); } catch (e) { }
     try {
       const r = localStorage.getItem(TRADE_BELL_STORE);
       if (r == null) {
@@ -152,8 +154,8 @@
       } else {
         _tradeBellEnabled = r === '1';
       }
-    } catch(e) {}
-    try { localStorage.removeItem(LEGACY_TRADE_BELL_STORE); } catch(e) {}
+    } catch (e) { }
+    try { localStorage.removeItem(LEGACY_TRADE_BELL_STORE); } catch (e) { }
   })();
 
   // ── Initialize 2-Hour Contract Cache + Multi-Drive Sync ──────────────────
@@ -216,14 +218,225 @@
     }
   })();
 
-  function savePredLog()      { try { localStorage.setItem(PRED_LOG_STORE,    JSON.stringify(window._predLog.slice(-200)));       } catch(e) {} }
-  function saveKalshiLog()    { try { localStorage.setItem(KALSHI_LOG_STORE,  JSON.stringify(window._kalshiLog.slice(-500)));     } catch(e) {} }
-  function saveLastPred()     { try { localStorage.setItem(LAST_PRED_STORE,   JSON.stringify(window._lastPrediction));            } catch(e) {} }
-  function saveLastKalshi()   { try { localStorage.setItem(LAST_KALSHI_STORE, JSON.stringify(window._lastKalshiSnapshot));        } catch(e) {} }
-  function saveKalshiErrors() { try { localStorage.setItem(KALSHI_ERR_STORE,  JSON.stringify(window._kalshiErrors.slice(-100))); } catch(e) {} }
-  function saveOrchLog()      { try { localStorage.setItem(ORCH_LOG_STORE,    JSON.stringify(window._orchLog.slice(-300)));       } catch(e) {} }
-  function saveKalshiTrail()  { try { localStorage.setItem(KALSHI_TRAIL_STORE, JSON.stringify(window._kalshiPredictionTrail));     } catch(e) {} }
-  function saveTradeBellPref(){ try { localStorage.setItem(TRADE_BELL_STORE, _tradeBellEnabled ? '1' : '0'); } catch(e) {} }
+  function savePredLog() { try { localStorage.setItem(PRED_LOG_STORE, JSON.stringify(window._predLog.slice(-200))); } catch (e) { } }
+  function saveKalshiLog() { try { localStorage.setItem(KALSHI_LOG_STORE, JSON.stringify(window._kalshiLog.slice(-500))); } catch (e) { } }
+  function saveLastPred() { try { localStorage.setItem(LAST_PRED_STORE, JSON.stringify(window._lastPrediction)); } catch (e) { } }
+  function saveLastKalshi() { try { localStorage.setItem(LAST_KALSHI_STORE, JSON.stringify(window._lastKalshiSnapshot)); } catch (e) { } }
+  function saveKalshiErrors() { try { localStorage.setItem(KALSHI_ERR_STORE, JSON.stringify(window._kalshiErrors.slice(-100))); } catch (e) { } }
+  function saveOrchLog() { try { localStorage.setItem(ORCH_LOG_STORE, JSON.stringify(window._orchLog.slice(-300))); } catch (e) { } }
+  function saveKalshiTrail() { try { localStorage.setItem(KALSHI_TRAIL_STORE, JSON.stringify(window._kalshiPredictionTrail)); } catch (e) { } }
+  function saveTradeBellPref() { try { localStorage.setItem(TRADE_BELL_STORE, _tradeBellEnabled ? '1' : '0'); } catch (e) { } }
+
+  window._journalPending = window._journalPending || {};
+
+  function _getTradeJournal() {
+    try {
+      if (window.QuantCore?.journal) return window.QuantCore.journal;
+      if (window._tradeJournal) return window._tradeJournal;
+      if (typeof window.TradeJournal === 'function') {
+        window._tradeJournal = new window.TradeJournal({ storage_key: 'beta1_trade_journal' });
+        return window._tradeJournal;
+      }
+    } catch (_) { }
+    return null;
+  }
+
+  function _normTradeConfidence(v) {
+    const n = Number(v || 0);
+    if (!Number.isFinite(n)) return 0;
+    return n > 1 ? Math.max(0, Math.min(1, n / 100)) : Math.max(0, Math.min(1, n));
+  }
+
+  function _oppositeDir(dir) {
+    return dir === 'UP' ? 'DOWN' : dir === 'DOWN' ? 'UP' : dir;
+  }
+
+  function _normProb(v, fallback = 0.5) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    if (n > 1) return Math.max(0, Math.min(1, n / 100));
+    return Math.max(0, Math.min(1, n));
+  }
+
+  function _getFillSimulator() {
+    try {
+      const sim = window.KalshiFillSimulator;
+      if (sim && typeof sim.estimateFill === 'function') return sim;
+    } catch (_) { }
+    return null;
+  }
+
+  function _estimateKalshiFillQuality(sym, pred, predictionDir) {
+    const simulator = _getFillSimulator();
+    if (!simulator || !pred || !sym || predictionDir === 'FLAT') return null;
+
+    try {
+      const executionGuard = pred?.diagnostics?.executionGuard || {};
+      const quoteProb = _normProb(
+        pred?.projections?.p15?.kalshiAlign?.yesProb ??
+        pred?.diagnostics?.kalshi?.yesProb ??
+        pred?.diagnostics?.kalshiYesProb ??
+        0.5
+      );
+
+      const sim = simulator.estimateFill({
+        deterministic: true,
+        side: predictionDir === 'UP' ? 'BUY_YES' : 'BUY_NO',
+        quotePrice: quoteProb,
+        midPrice: quoteProb,
+        spreadBps: Number(executionGuard?.spreadBps || executionGuard?.spread_bps || 90),
+        latencyMs: Number(executionGuard?.quoteToFillMs || executionGuard?.latencyMs || 250),
+        volatilityBpsPerSec: Number(pred?.diagnostics?.volatilityBpsPerSec || 35),
+        adverseSelection: 0.65,
+        queueAhead: Number(executionGuard?.queueAhead || 10),
+        queueOutflowPerSec: Number(executionGuard?.queueOutflowPerSec || 3),
+        orderSize: Number(executionGuard?.orderSize || 10),
+        visibleSize: Number(executionGuard?.visibleSize || executionGuard?.bookTopSize || 200),
+        liquidityScore: _normProb(executionGuard?.liquidityScore ?? 0.75, 0.75),
+        collapseProbability: _normProb(executionGuard?.liquidityCollapseProb ?? 0.04, 0.04),
+        collapseSeverity: _normProb(executionGuard?.liquidityCollapseSeverity ?? 0.5, 0.5),
+      });
+
+      return {
+        simulator_version: '1.0.0',
+        deterministic: true,
+        quote_price: quoteProb,
+        side: predictionDir === 'UP' ? 'BUY_YES' : 'BUY_NO',
+        fill_probability: Number(sim.expected.fillProbability || 0),
+        partial_fill_ratio: Number(sim.expected.partialFillRatio || 0),
+        slippage_bps: Number(sim.expected.slippageBps || 0),
+        spread_widen_bps: Number(sim.expected.spreadWidenBps || 0),
+        latency_drift_bps: Number(sim.expected.latencyDriftBps || 0),
+        expected_fill_price: Number(sim.expected.fillPrice || quoteProb),
+        warnings: sim.warnings || [],
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _buildRealizedFillQuality(meta = {}, pending = null) {
+    const expected = pending?.expectedFill || null;
+    const realizedFillPrice = Number.isFinite(Number(meta.realized_fill_price))
+      ? Number(meta.realized_fill_price)
+      : Number.isFinite(Number(meta.fill_price))
+        ? Number(meta.fill_price)
+        : null;
+    const expectedPrice = Number.isFinite(Number(expected?.expected_fill_price))
+      ? Number(expected.expected_fill_price)
+      : Number.isFinite(Number(expected?.quote_price))
+        ? Number(expected.quote_price)
+        : null;
+
+    let slippageBps = null;
+    if (Number.isFinite(realizedFillPrice) && Number.isFinite(expectedPrice) && Math.abs(expectedPrice) > 1e-9) {
+      slippageBps = ((realizedFillPrice - expectedPrice) / expectedPrice) * 10000;
+    }
+
+    const realizedRatio = Number.isFinite(Number(meta.realized_fill_ratio))
+      ? Math.max(0, Math.min(1, Number(meta.realized_fill_ratio)))
+      : null;
+    const realizedLatencyMs = Number.isFinite(Number(meta.realized_latency_ms))
+      ? Math.max(0, Number(meta.realized_latency_ms))
+      : null;
+
+    if (!Number.isFinite(realizedFillPrice) && !Number.isFinite(slippageBps) && realizedRatio === null && realizedLatencyMs === null) {
+      return null;
+    }
+
+    return {
+      realized_fill_price: Number.isFinite(realizedFillPrice) ? realizedFillPrice : null,
+      slippage_bps: Number.isFinite(slippageBps) ? slippageBps : null,
+      fill_ratio: realizedRatio,
+      latency_ms: realizedLatencyMs,
+      fill_probability_realized: Number.isFinite(Number(meta.realized_fill_probability))
+        ? Math.max(0, Math.min(1, Number(meta.realized_fill_probability)))
+        : null,
+      source: meta.source || 'unknown',
+    };
+  }
+
+  function _journalPrediction(sym, pred, predictionDir, bucketTs) {
+    const journal = _getTradeJournal();
+    if (!journal || !sym || !pred || predictionDir === 'FLAT') return;
+    const pending = window._journalPending[sym];
+    if (pending && pending.bucketTs === bucketTs) return;
+    try {
+      const expectedFillQuality = _estimateKalshiFillQuality(sym, pred, predictionDir);
+      const tradeId = journal.recordTrade({
+        asset: sym,
+        prediction: predictionDir,
+        confidence: _normTradeConfidence(pred.confidence),
+        regime: pred?.diagnostics?.quantRegime?.state || pred?.liveRegime?.regime || 'UNKNOWN',
+        signals: pred?.diagnostics?.components || {},
+        market_state: {
+          score: Number(pred?.score || 0),
+          price: Number(pred?.price || 0),
+          routed_action: pred?.diagnostics?.routedAction || null,
+          execution_guard: pred?.diagnostics?.executionGuard || null,
+        },
+        fill_price: Number((expectedFillQuality?.expected_fill_price ?? pred?.price) || 0),
+        expected_fill_quality: expectedFillQuality,
+        settled: false,
+        outcome: 'UNKNOWN',
+        metadata: {
+          source: 'snapshotPredictions',
+          bucketTs,
+          ticker: pred?.projections?.p15?.kalshiAlign?.ticker || null,
+          cfmCalibration: pred?.diagnostics?.cfmCalibration || null,
+        },
+      });
+      window._journalPending[sym] = {
+        tradeId,
+        bucketTs,
+        ticker: pred?.projections?.p15?.kalshiAlign?.ticker || null,
+        expectedFill: expectedFillQuality,
+      };
+    } catch (_) { }
+  }
+
+  function _journalSettlement(sym, outcomeUpDown, closePrice = null, meta = {}) {
+    const journal = _getTradeJournal();
+    if (!journal || !sym || (outcomeUpDown !== 'UP' && outcomeUpDown !== 'DOWN')) return;
+    try {
+      const pending = window._journalPending[sym];
+      const realizedFillQuality = _buildRealizedFillQuality(meta, pending);
+      if (pending?.tradeId) {
+        const ok = journal.updateTrade(pending.tradeId, {
+          close_price: Number.isFinite(closePrice) ? Number(closePrice) : undefined,
+          outcome: outcomeUpDown,
+          settled: true,
+          expected_fill_quality: pending.expectedFill || undefined,
+          realized_fill_quality: realizedFillQuality || undefined,
+        });
+        if (ok) {
+          delete window._journalPending[sym];
+          return;
+        }
+      }
+      const fallbackDir = meta.predictionDir || window._lastPrediction?.[sym]?.direction || 'UP';
+      journal.recordTrade({
+        asset: sym,
+        prediction: fallbackDir,
+        confidence: _normTradeConfidence(meta.confidence),
+        regime: meta.regime || 'UNKNOWN',
+        market_state: {
+          source: meta.source || 'settlement-fallback',
+          ticker: meta.ticker || null,
+        },
+        fill_price: Number(meta.fill_price || 0),
+        expected_fill_quality: pending?.expectedFill || null,
+        realized_fill_quality: realizedFillQuality,
+        close_price: Number.isFinite(closePrice) ? Number(closePrice) : null,
+        outcome: outcomeUpDown,
+        settled: true,
+        metadata: {
+          source: meta.source || 'settlement-fallback',
+          modelCorrect: meta.modelCorrect ?? null,
+        },
+      });
+    } catch (_) { }
+  }
 
   function isTradeBellOn() { return !!_tradeBellEnabled; }
   function setTradeBellOn(next) {
@@ -244,7 +457,7 @@
         shell.beep();
         return true;
       }
-    } catch (_) {}
+    } catch (_) { }
     return false;
   }
 
@@ -273,10 +486,10 @@
         osc.start(start);
         osc.stop(start + 0.05);
         _tradeBellSessionPrimed = true;
-      } catch (_) {}
+      } catch (_) { }
     };
 
-    if (ctx.state === 'suspended') ctx.resume().then(fire).catch(() => {});
+    if (ctx.state === 'suspended') ctx.resume().then(fire).catch(() => { });
     else fire();
   }
 
@@ -326,7 +539,7 @@
     const unlock = () => {
       const ctx = ensureTradeBellContext();
       if (!ctx) return;
-      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      if (ctx.state === 'suspended') ctx.resume().catch(() => { });
       if (isTradeBellOn()) {
         primeTradeBellSession();
         playSignalHealthPing('unlock');
@@ -555,7 +768,7 @@
   function directionFromYesPct(strikeDir, yesPct) {
     if (!Number.isFinite(yesPct)) return 'FLAT';
     const yesDir = strikeDir === 'below' ? 'DOWN' : 'UP';
-    const noDir  = yesDir === 'UP' ? 'DOWN' : 'UP';
+    const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
     return yesPct >= 50 ? yesDir : noDir;
   }
 
@@ -648,6 +861,562 @@
     }
   }
 
+  function _toMs(v) {
+    if (v == null) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+    const d = Date.parse(v);
+    return Number.isFinite(d) ? d : null;
+  }
+
+  function _toNum(v) {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function _normDir(v) {
+    const s = String(v || '').toUpperCase();
+    if (s === 'UP' || s === 'DOWN' || s === 'FLAT') return s;
+    if (s === 'YES') return 'UP';
+    if (s === 'NO') return 'DOWN';
+    if (s === 'BULL' || s === 'BULLISH') return 'UP';
+    if (s === 'BEAR' || s === 'BEARISH') return 'DOWN';
+    return null;
+  }
+
+  function _normOutcomeYN(v) {
+    const s = String(v || '').toUpperCase();
+    if (s === 'YES' || s === 'NO') return s;
+    if (s === 'UP') return 'YES';
+    if (s === 'DOWN') return 'NO';
+    return null;
+  }
+
+  function _normalizeConfidence(v) {
+    const n = _toNum(v);
+    if (n == null) return null;
+    if (n > 1) return Math.max(0, Math.min(1, n / 100));
+    return Math.max(0, Math.min(1, n));
+  }
+
+  function _triBool(v) {
+    if (v === true || v === false) return v;
+    if (v == null) return null;
+    const normalized = String(v).trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+    return null;
+  }
+
+  function _parseCsvLine(line) {
+    const out = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        const esc = inQuotes && line[i + 1] === '"';
+        if (esc) {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === ',' && !inQuotes) {
+        out.push(cur.trim());
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur.trim());
+    return out;
+  }
+
+  function parseForensicsCsv(csvText) {
+    const text = String(csvText || '').trim();
+    if (!text) return [];
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) return [];
+    const headers = _parseCsvLine(lines[0]).map(h => h.toLowerCase());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = _parseCsvLine(lines[i]);
+      const row = {};
+      headers.forEach((h, ix) => {
+        row[h] = cols[ix] ?? '';
+      });
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function _csvRowToForensicsEntry(row) {
+    if (!row || typeof row !== 'object') return null;
+    const sym = String(
+      row.sym || row.symbol || row.coin || row.asset || row.ticker_symbol || ''
+    ).toUpperCase();
+    if (!sym) return null;
+
+    const ts = _toMs(row.ts ?? row.timestamp ?? row.entry_ts ?? row.open_ts ?? row.created_at);
+    const settledTs = _toMs(row.settledts ?? row.settled_ts ?? row.resolved_at ?? row.close_ts);
+    const modelDir = _normDir(row.modeldir ?? row.model_dir ?? row.direction ?? row.prediction);
+    const actualOutcome = _normDir(row.actualoutcome ?? row.actual_outcome ?? row.actual ?? row.outcome);
+    const outcomeYN = _normOutcomeYN(row.outcome ?? row.result ?? row.settle_result);
+
+    return {
+      source: 'csv',
+      sym,
+      ticker: row.ticker || row.contract || null,
+      ts,
+      settledTs,
+      modelDir,
+      actualOutcome: actualOutcome || (outcomeYN === 'YES' ? 'UP' : outcomeYN === 'NO' ? 'DOWN' : null),
+      outcomeYN,
+      modelCorrect: row.modelcorrect != null
+        ? (String(row.modelcorrect).toLowerCase() === 'true' ? true
+          : String(row.modelcorrect).toLowerCase() === 'false' ? false : null)
+        : null,
+      entryConfidence: _normalizeConfidence(row.entryprob ?? row.entry_prob ?? row.confidence ?? row.modelconf),
+      entryProb: _normalizeConfidence(row.entryprob ?? row.entry_prob ?? row.confidence),
+      dirConflict: String(row.dirconflict ?? row.dir_conflict ?? '').toLowerCase() === 'true',
+      wickStraddle: String(row.wickstraddle ?? row.wick_straddle ?? '').toLowerCase() === 'true',
+      nearRef: String(row.nearref ?? row.near_ref ?? '').toLowerCase() === 'true',
+      proxyMismatch: _triBool(row.proxymismatch ?? row.proxy_mismatch),
+      refDiffPct: _toNum(row.refdiffpct ?? row.ref_diff_pct),
+      wickSize: _toNum(row.wicksize ?? row.wick_size),
+      modelScore: _toNum(row.modelscore ?? row.model_score),
+      modelConf: _normalizeConfidence(row.modelconf ?? row.model_conf),
+      executionGuard: row.execution_guard || row.executionguard || null,
+      predictionTrail2m: Array.isArray(row.predictiontrail2m) ? row.predictiontrail2m : [],
+      closeSnapshots: Array.isArray(row.closesnapshots) ? row.closesnapshots : [],
+      _raw: row,
+    };
+  }
+
+  function _logEntryToForensicsEntry(e) {
+    if (!e || typeof e !== 'object') return null;
+    const sym = String(e.sym || e.coin || '').toUpperCase();
+    if (!sym) return null;
+    const modelDir = _normDir(e.modelDir ?? e.direction ?? e.predDir);
+    const outcomeYN = _normOutcomeYN(e.outcome ?? e.kalshiResult ?? e._kalshiResult);
+    const actualOutcome = _normDir(e.actualOutcome) || (outcomeYN === 'YES' ? 'UP' : outcomeYN === 'NO' ? 'DOWN' : null);
+    const entryProb = _normalizeConfidence(e.entryProb ?? e.confidence ?? e.modelConf);
+    const entryConf = _normalizeConfidence(e.modelConf ?? e.confidence ?? e.entryProb);
+    return {
+      source: 'kalshi-log',
+      sym,
+      ticker: e.ticker ?? null,
+      ts: _toMs(e.ts),
+      settledTs: _toMs(e.settledTs ?? e.resolved_at),
+      modelDir,
+      actualOutcome,
+      outcomeYN,
+      modelCorrect: e.modelCorrect === true ? true : e.modelCorrect === false ? false : null,
+      marketCorrect: e.marketCorrect === true ? true : e.marketCorrect === false ? false : null,
+      entryConfidence: entryConf,
+      entryProb,
+      dirConflict: !!(e._dirConflict ?? e.dirConflict),
+      wickStraddle: !!(e._wickStraddle ?? e.wickStraddle),
+      nearRef: !!(e._nearRef ?? e.nearRef),
+      proxyMismatch: _triBool(e._proxyMismatch ?? e.proxyMismatch),
+      pendingAuth: !!(e._pendingAuth),
+      refDiffPct: _toNum(e.refDiffPct),
+      wickSize: _toNum(e.wickSize),
+      ref: _toNum(e.ref ?? e._refPrice),
+      closePrice: _toNum(e.closePrice ?? e._cbSettlePrice),
+      modelScore: _toNum(e.modelScore),
+      modelConf: _normalizeConfidence(e.modelConf),
+      executionGuard: e.executionGuard ?? null,
+      mYesPct: _toNum(e.mYesPct),
+      kYesPct: _toNum(e.kYesPct),
+      predictionTrail2m: Array.isArray(e.predictionTrail2m) ? e.predictionTrail2m : [],
+      closeSnapshots: Array.isArray(e.closeSnapshots) ? e.closeSnapshots : [],
+      _raw: e,
+    };
+  }
+
+  function _resolutionEntryToForensicsEntry(e) {
+    if (!e || typeof e !== 'object') return null;
+    const sym = String(e.sym || e.coin || '').toUpperCase();
+    if (!sym) return null;
+    const modelDir = _normDir(e.modelDir ?? e.direction ?? e.predDir);
+    const actualOutcome = _normDir(e.actualOutcome ?? e.outcome);
+    const outcomeYN = _normOutcomeYN(e.kalshiResult ?? e.outcome ?? e.actualOutcome);
+    return {
+      source: '15m-resolution',
+      sym,
+      ticker: e.ticker ?? null,
+      ts: _toMs(e.ts),
+      settledTs: _toMs(e.settledTs ?? e.resolved_at),
+      modelDir,
+      actualOutcome: actualOutcome || (outcomeYN === 'YES' ? 'UP' : outcomeYN === 'NO' ? 'DOWN' : null),
+      outcomeYN,
+      modelCorrect: e.modelCorrect === true ? true : e.modelCorrect === false ? false : null,
+      marketCorrect: e.marketCorrect === true ? true : e.marketCorrect === false ? false : null,
+      entryConfidence: _normalizeConfidence(e.entryProb ?? e.confidence),
+      entryProb: _normalizeConfidence(e.entryProb ?? e.confidence),
+      dirConflict: !!(e._dirConflict ?? e.dirConflict),
+      wickStraddle: !!(e._wickStraddle ?? e.wickStraddle),
+      nearRef: !!(e._nearRef ?? e.nearRef),
+      proxyMismatch: _triBool(e._proxyMismatch ?? e.proxyMismatch),
+      pendingAuth: !!(e._pendingAuth),
+      refDiffPct: _toNum(e.refDiffPct),
+      wickSize: _toNum(e.wickSize),
+      ref: _toNum(e.refPrice ?? e.floorPrice ?? e.ref),
+      closePrice: _toNum(e.cbSettlePrice ?? e.closePrice),
+      modelScore: _toNum(e.modelScore),
+      modelConf: _normalizeConfidence(e.modelConf ?? e.confidence),
+      executionGuard: e.executionGuard ?? null,
+      mYesPct: _toNum(e.mYesPct),
+      kYesPct: _toNum(e.kYesPct),
+      predictionTrail2m: Array.isArray(e.predictionTrail2m) ? e.predictionTrail2m : [],
+      closeSnapshots: Array.isArray(e.closeSnapshots) ? e.closeSnapshots : [],
+      _raw: e,
+    };
+  }
+
+  function _computeSuspectSignals(entry) {
+    const settleLatencyMs = (entry.settledTs != null && entry.ts != null)
+      ? Math.max(0, entry.settledTs - entry.ts)
+      : null;
+    const rapidCollapse = settleLatencyMs != null && settleLatencyMs <= 30_000;
+    const predActualConflict =
+      entry.modelDir && entry.actualOutcome && entry.modelDir !== 'FLAT'
+        ? entry.modelDir !== entry.actualOutcome
+        : entry.modelCorrect === false;
+
+    const highConfidence = (entry.entryConfidence ?? entry.entryProb ?? entry.modelConf ?? 0) >= 0.60;
+    const confDropSignal = highConfidence && predActualConflict;
+
+    let suspectScore = 0;
+    if (confDropSignal) suspectScore += 36;
+    if (rapidCollapse) suspectScore += 24;
+    if (entry.proxyMismatch === true) suspectScore += 24;
+    if (entry.dirConflict) suspectScore += 18;
+    if (entry.wickStraddle) suspectScore += 16;
+    if (entry.nearRef) suspectScore += 10;
+    if (entry.pendingAuth) suspectScore += 8;
+    if ((entry.refDiffPct ?? 999) < 0.15) suspectScore += 8;
+    if (entry.executionGuard?.blocked || entry.executionGuard?.hardLate) suspectScore += 14;
+
+    const latencyContributionPct = Math.max(0, Math.min(100,
+      (rapidCollapse ? 45 : 10)
+      + ((entry.executionGuard?.blocked || entry.executionGuard?.hardLate) ? 35 : 0)
+      + ((settleLatencyMs != null && settleLatencyMs <= 18_000) ? 20 : 0)
+    ));
+
+    const slippageContributionPct = Math.max(0, Math.min(100,
+      (entry.wickStraddle ? 40 : 0)
+      + (entry.nearRef ? 20 : 0)
+      + (entry.proxyMismatch === true ? 22 : 0)
+      + (entry.refDiffPct != null ? Math.min(18, Math.max(0, (0.18 - entry.refDiffPct) * 100)) : 0)
+      + (entry.wickSize != null ? Math.min(18, entry.wickSize * 8) : 0)
+    ));
+
+    return {
+      settleLatencyMs,
+      rapidCollapse,
+      predActualConflict,
+      highConfidence,
+      confDropSignal,
+      suspectScore,
+      latencyContributionPct,
+      slippageContributionPct,
+    };
+  }
+
+  function classifyForensicTrade(entry) {
+    const sig = _computeSuspectSignals(entry);
+    const conf = entry.entryConfidence ?? entry.entryProb ?? entry.modelConf;
+
+    if (entry.proxyMismatch === true && (entry.wickStraddle || entry.nearRef)) {
+      return {
+        key: 'SETTLEMENT_PROXY_MISMATCH',
+        label: 'Settlement proxy mismatch near reference',
+        severity: 'high',
+        reason: `Proxy disagreed with authoritative result under wick/near-ref conditions${conf != null ? ` (entryConf=${Math.round(conf * 100)}%)` : ''}.`,
+      };
+    }
+
+    if (sig.rapidCollapse && sig.confDropSignal) {
+      return {
+        key: 'LATENCY_COMPRESSION',
+        label: 'Latency/compression collapse',
+        severity: 'high',
+        reason: `High-confidence position reversed within ${Math.round((sig.settleLatencyMs || 0) / 1000)}s close window.`,
+      };
+    }
+
+    if (entry.dirConflict && sig.predActualConflict) {
+      return {
+        key: 'DIRECTION_CONFLICT',
+        label: 'Momentum vs CDF direction conflict',
+        severity: 'medium',
+        reason: 'Model momentum and contract-implied direction diverged before settlement.',
+      };
+    }
+
+    if (entry.wickStraddle || entry.nearRef || (entry.refDiffPct != null && entry.refDiffPct < 0.15)) {
+      return {
+        key: 'CLOSE_SLIPPAGE',
+        label: 'Close-window slippage/precision risk',
+        severity: 'medium',
+        reason: 'Close price was near or through reference threshold, increasing settlement ambiguity risk.',
+      };
+    }
+
+    if (sig.predActualConflict) {
+      return {
+        key: 'MODEL_CONFIDENCE_BREAKDOWN',
+        label: 'Model confidence breakdown',
+        severity: 'medium',
+        reason: 'Predicted direction diverged from resolved outcome without strong structural flags.',
+      };
+    }
+
+    return {
+      key: 'WATCHLIST_ANOMALY',
+      label: 'Watchlist anomaly',
+      severity: 'low',
+      reason: 'Flagged for review due to timing/quality characteristics, not a confirmed mismatch.',
+    };
+  }
+
+  function _collectNearCloseTimeline(entry) {
+    const timeline = [];
+    const pushEvent = (ev) => {
+      if (!ev || ev.ts == null) return;
+      timeline.push(ev);
+    };
+
+    if (entry.ts != null) {
+      pushEvent({
+        ts: entry.ts,
+        type: 'entry',
+        confidence: entry.entryConfidence ?? entry.entryProb ?? entry.modelConf ?? null,
+        modelDir: entry.modelDir ?? null,
+        modelScore: entry.modelScore ?? null,
+      });
+    }
+
+    (entry.predictionTrail2m || []).forEach(p => {
+      const ts = _toMs(p.ts);
+      const secsToClose = _toNum(p.secsToClose);
+      if (secsToClose != null && secsToClose > 190) return;
+      pushEvent({
+        ts,
+        type: 'trail-2m',
+        secsToClose,
+        modelDir: _normDir(p.modelDir),
+        modelYesPct: _toNum(p.modelYesPct),
+        kalshiYesPct: _toNum(p.kalshiYesPct),
+        modelScore: _toNum(p.modelScore),
+        dirConflict: !!p.dirConflict,
+      });
+    });
+
+    (entry.closeSnapshots || []).forEach(s => {
+      const ts = _toMs(s.ts ?? s.timestamp);
+      const secsToClose = _toNum(s.secsLeft ?? s.secsToClose);
+      if (secsToClose != null && secsToClose > 190) return;
+      pushEvent({
+        ts,
+        type: 'close-snapshot',
+        secsToClose,
+        kalshiProb: _toNum(s.kalshiProb ?? s.kYesPct),
+        modelProb: _toNum(s.modelProb ?? s.modelYesPct),
+      });
+    });
+
+    if (entry.settledTs != null) {
+      pushEvent({
+        ts: entry.settledTs,
+        type: 'settled',
+        outcome: entry.actualOutcome ?? null,
+        outcomeYN: entry.outcomeYN ?? null,
+        proxyMismatch: entry.proxyMismatch ?? null,
+      });
+    }
+
+    timeline.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    return timeline;
+  }
+
+  function _getForensicsDataset(options = {}) {
+    const out = [];
+    (window._kalshiLog || []).forEach(e => {
+      const n = _logEntryToForensicsEntry(e);
+      if (n) out.push(n);
+    });
+    (window._15mResolutionLog || []).forEach(e => {
+      const n = _resolutionEntryToForensicsEntry(e);
+      if (n) out.push(n);
+    });
+
+    let csvRows = [];
+    if (Array.isArray(options.csvRows)) csvRows = options.csvRows;
+    else if (typeof options.csvText === 'string' && options.csvText.trim()) csvRows = parseForensicsCsv(options.csvText);
+
+    csvRows.forEach(row => {
+      const n = _csvRowToForensicsEntry(row);
+      if (n) out.push(n);
+    });
+
+    const dedup = new Map();
+    out.forEach(e => {
+      const id = [e.source, e.sym, e.ticker || '', e.ts || '', e.settledTs || '', e.modelDir || ''].join('|');
+      if (!dedup.has(id)) dedup.set(id, e);
+    });
+
+    return Array.from(dedup.values());
+  }
+
+  function identifySuspectContracts(options = {}) {
+    const minScore = Number.isFinite(Number(options.minScore)) ? Number(options.minScore) : 45;
+    const topN = Number.isFinite(Number(options.topN)) ? Math.max(1, Number(options.topN)) : 12;
+    const now = Date.now();
+    const lookbackMs = Number.isFinite(Number(options.lookbackMs)) ? Number(options.lookbackMs) : 24 * 3600 * 1000;
+    const cutoff = now - lookbackMs;
+
+    const data = _getForensicsDataset(options)
+      .filter(e => (e.ts || e.settledTs || 0) >= cutoff)
+      .map(e => {
+        const sig = _computeSuspectSignals(e);
+        const classification = classifyForensicTrade(e);
+        return {
+          ...e,
+          ...sig,
+          classification,
+        };
+      })
+      .filter(e => e.suspectScore >= minScore)
+      .sort((a, b) => {
+        if ((b.suspectScore || 0) !== (a.suspectScore || 0)) return (b.suspectScore || 0) - (a.suspectScore || 0);
+        return (b.settledTs || b.ts || 0) - (a.settledTs || a.ts || 0);
+      });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      scanned: _getForensicsDataset(options).length,
+      suspects: data.slice(0, topN).map(e => ({
+        sym: e.sym,
+        source: e.source,
+        ticker: e.ticker,
+        ts: e.ts,
+        settledTs: e.settledTs,
+        entryConfidence: e.entryConfidence,
+        modelDir: e.modelDir,
+        actualOutcome: e.actualOutcome,
+        modelCorrect: e.modelCorrect,
+        suspectScore: e.suspectScore,
+        flags: {
+          dirConflict: e.dirConflict,
+          wickStraddle: e.wickStraddle,
+          nearRef: e.nearRef,
+          proxyMismatch: e.proxyMismatch,
+          pendingAuth: e.pendingAuth,
+          rapidCollapse: e.rapidCollapse,
+        },
+        settleLatencyMs: e.settleLatencyMs,
+        classification: e.classification,
+      })),
+    };
+  }
+
+  function replaySuspectTimeline(suspect, options = {}) {
+    if (!suspect) return null;
+    const base = {
+      ...suspect,
+      ..._computeSuspectSignals(suspect),
+    };
+    const classification = classifyForensicTrade(base);
+    const timeline = _collectNearCloseTimeline(base);
+    const settlementSource = base.source === 'kalshi-log'
+      ? (base.pendingAuth ? 'proxy_then_authoritative' : 'authoritative_or_proxy')
+      : base.source === '15m-resolution'
+        ? 'resolution_event'
+        : 'csv';
+
+    return {
+      sym: base.sym,
+      ticker: base.ticker || null,
+      source: base.source,
+      entry: {
+        ts: base.ts,
+        confidence: base.entryConfidence ?? base.entryProb ?? base.modelConf ?? null,
+        modelDir: base.modelDir ?? null,
+        modelScore: base.modelScore ?? null,
+      },
+      nearCloseSnapshots: timeline.filter(t => t.type !== 'entry' && t.type !== 'settled'),
+      settlement: {
+        ts: base.settledTs,
+        source: settlementSource,
+        outcome: base.actualOutcome ?? null,
+        outcomeYN: base.outcomeYN ?? null,
+        modelCorrect: base.modelCorrect,
+        mismatch: base.proxyMismatch === true,
+        modelConflict: base.predActualConflict === true,
+      },
+      indicators: {
+        directionConflict: !!base.dirConflict,
+        wickStraddle: !!base.wickStraddle,
+        nearRef: !!base.nearRef,
+        refDiffPct: base.refDiffPct,
+        wickSizePct: base.wickSize,
+      },
+      estimatedContribution: {
+        latencyPct: base.latencyContributionPct,
+        slippagePct: base.slippageContributionPct,
+        settleLatencyMs: base.settleLatencyMs,
+      },
+      classification,
+      conciseRootCause: `${classification.label}: ${classification.reason}`,
+      timeline,
+      includeRaw: options.includeRaw ? base._raw : undefined,
+    };
+  }
+
+  function replayCollapsedContractsIncident(options = {}) {
+    const suspects = identifySuspectContracts({ ...options, topN: options.topN || 2 });
+    const data = _getForensicsDataset(options).map(e => ({ ...e, ..._computeSuspectSignals(e) }));
+
+    const suspectReplays = suspects.suspects.map(s => {
+      const match = data.find(e =>
+        e.sym === s.sym
+        && (e.ticker || '') === (s.ticker || '')
+        && (e.ts || 0) === (s.ts || 0)
+      );
+      return replaySuspectTimeline(match || s, options);
+    }).filter(Boolean);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      incident: {
+        label: options.label || 'collapsed-contracts-60-to-2',
+        targetCollapse: options.targetCollapse || '60%->2% in ~18s',
+      },
+      suspects: suspectReplays,
+      rootCauseSummary: suspectReplays.map(r => ({
+        sym: r.sym,
+        ticker: r.ticker,
+        classification: r.classification.key,
+        severity: r.classification.severity,
+        concise: r.conciseRootCause,
+      })),
+    };
+  }
+
+  window.KalshiForensics = {
+    parseCsv: parseForensicsCsv,
+    identifySuspects: identifySuspectContracts,
+    replay: replayCollapsedContractsIncident,
+    classify: classifyForensicTrade,
+    replayTrade: replaySuspectTimeline,
+  };
+
   // ── Clock-aligned quarter-hour scheduler ─────────────────────────────────
   // Returns ms until the next :00/:15/:30/:45 boundary, minimum 500ms.
   function msUntilNextQuarter() {
@@ -701,7 +1470,7 @@
         predictionOnlyActionable,
         predictionCompact,
       }));
-    } catch {}
+    } catch { }
   }
   const SCREENER_GECKO_IDS = {
     BTC: 'bitcoin', ETH: 'ethereum', LTC: 'litecoin', SOL: 'solana', AVAX: 'avalanche-2',
@@ -717,12 +1486,12 @@
 
   // ---- DOM refs ----
   const $ = (s, c) => (c || document).querySelector(s);
-  const content     = $('#content');
-  const feedStatus  = $('#feedStatus');
-  const feedDot     = feedStatus ? feedStatus.querySelector('.pulse-dot') : null;
-  const feedText    = $('#feedStatusText');
-  const lastUpdate  = $('#lastUpdate');
-  const pageTitle   = $('#pageTitle');
+  const content = $('#content');
+  const feedStatus = $('#feedStatus');
+  const feedDot = feedStatus ? feedStatus.querySelector('.pulse-dot') : null;
+  const feedText = $('#feedStatusText');
+  const lastUpdate = $('#lastUpdate');
+  const pageTitle = $('#pageTitle');
 
   function activateNav(view) {
     document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -786,35 +1555,35 @@
   // API LAYER — Crypto.com Exchange public endpoints (no auth)
   // ================================================================
 
-  const CDC_BASE      = 'https://api.crypto.com/exchange/v1/public';
-  const GECKO_BASE    = 'https://api.coingecko.com/api/v3';
-  const BIN_BASE      = 'https://api.binance.us/api/v3';   // .com → 451 from US
-  const MEXC_BASE     = 'https://api.mexc.com/api/v3';
-  const PYTH_HERMES   = 'https://hermes.pyth.network';
+  const CDC_BASE = 'https://api.crypto.com/exchange/v1/public';
+  const GECKO_BASE = 'https://api.coingecko.com/api/v3';
+  const BIN_BASE = 'https://api.binance.us/api/v3';   // .com → 451 from US
+  const MEXC_BASE = 'https://api.mexc.com/api/v3';
+  const PYTH_HERMES = 'https://hermes.pyth.network';
   const PYTH_LAZER_PROXIES = [
     'pyth-lazer-proxy-1.dourolabs.app',
     'pyth-lazer-proxy-2.dourolabs.app',
     'pyth-lazer-proxy-3.dourolabs.app',
   ];
-  const PYTH_HISTORY_BASE  = 'https://pyth.dourolabs.app';
-  const HL_BASE       = 'https://api.hyperliquid.xyz';
-  const CB_BASE       = 'https://api.exchange.coinbase.com';
+  const PYTH_HISTORY_BASE = 'https://pyth.dourolabs.app';
+  const HL_BASE = 'https://api.hyperliquid.xyz';
+  const CB_BASE = 'https://api.exchange.coinbase.com';
 
   // Binance: instrument → Binance USDT symbol (covers all 37 WATCHLIST coins)
   const BIN_ALL_SYMS = {
-    'BTCUSD':'BTCUSDT',    'ETHUSD':'ETHUSDT',    'LTCUSD':'LTCUSDT',
-    'SOLUSD':'SOLUSDT',    'AVAXUSD':'AVAXUSDT',  'DOTUSD':'DOTUSDT',
-    'ATOMUSD':'ATOMUSDT',  'POLUSD':'POLUSDT',    'ADAUSD':'ADAUSDT',
-    'XTZUSD':'XTZUSDT',    'ARBUSD':'ARBUSDT',    'OPUSD':'OPUSDT',
-    'SUIUSD':'SUIUSDT',    'APTUSD':'APTUSDT',    'SEIUSD':'SEIUSDT',
-    'NEARUSD':'NEARUSDT',  'BONKUSD':'BONKUSDT',  'PEPEUSD':'PEPEUSDT',
-    'WIFUSD':'WIFUSDT',    'FLOKIUSD':'FLOKIUSDT','JUPUSD':'JUPUSDT',
-    'AEROUSD':'AEROUSDT',  'DYDXUSD':'DYDXUSDT',  'PYTHUSD':'PYTHUSDT',
-    'RENDERUSD':'RENDERUSDT','FETUSD':'FETUSDT',  'TAOUSD':'TAOUSDT',
-    'XLMUSD':'XLMUSDT',    'LINKUSD':'LINKUSDT',  'UNIUSD':'UNIUSDT',
-    'AAVEUSD':'AAVEUSDT',  'ICPUSD':'ICPUSDT',    'HBARUSD':'HBARUSDT',
-    'XRPUSD':'XRPUSDT',    'DOGEUSD':'DOGEUSDT',  'HYPEUSD':'HYPEUSDT',
-    'BNBUSD':'BNBUSDT',
+    'BTCUSD': 'BTCUSDT', 'ETHUSD': 'ETHUSDT', 'LTCUSD': 'LTCUSDT',
+    'SOLUSD': 'SOLUSDT', 'AVAXUSD': 'AVAXUSDT', 'DOTUSD': 'DOTUSDT',
+    'ATOMUSD': 'ATOMUSDT', 'POLUSD': 'POLUSDT', 'ADAUSD': 'ADAUSDT',
+    'XTZUSD': 'XTZUSDT', 'ARBUSD': 'ARBUSDT', 'OPUSD': 'OPUSDT',
+    'SUIUSD': 'SUIUSDT', 'APTUSD': 'APTUSDT', 'SEIUSD': 'SEIUSDT',
+    'NEARUSD': 'NEARUSDT', 'BONKUSD': 'BONKUSDT', 'PEPEUSD': 'PEPEUSDT',
+    'WIFUSD': 'WIFUSDT', 'FLOKIUSD': 'FLOKIUSDT', 'JUPUSD': 'JUPUSDT',
+    'AEROUSD': 'AEROUSDT', 'DYDXUSD': 'DYDXUSDT', 'PYTHUSD': 'PYTHUSDT',
+    'RENDERUSD': 'RENDERUSDT', 'FETUSD': 'FETUSDT', 'TAOUSD': 'TAOUSDT',
+    'XLMUSD': 'XLMUSDT', 'LINKUSD': 'LINKUSDT', 'UNIUSD': 'UNIUSDT',
+    'AAVEUSD': 'AAVEUSDT', 'ICPUSD': 'ICPUSDT', 'HBARUSD': 'HBARUSDT',
+    'XRPUSD': 'XRPUSDT', 'DOGEUSD': 'DOGEUSDT', 'HYPEUSD': 'HYPEUSDT',
+    'BNBUSD': 'BNBUSDT',
   };
   const BIN_ALL_SYM_TO_INSTRUMENT = Object.fromEntries(
     Object.entries(BIN_ALL_SYMS).map(([instr, binSym]) => [binSym, instr])
@@ -822,102 +1591,102 @@
 
   // Coinbase Exchange products (expanded — 404s caught gracefully per-coin)
   const COINBASE_PRODUCTS = {
-    'BTC-USD':'BTCUSD',   'ETH-USD':'ETHUSD',   'SOL-USD':'SOLUSD',
-    'XRP-USD':'XRPUSD',   'DOGE-USD':'DOGEUSD', 'BNB-USD':'BNBUSD',
-    'HYPE-USD':'HYPEUSD', 'LTC-USD':'LTCUSD',   'AVAX-USD':'AVAXUSD',
-    'LINK-USD':'LINKUSD', 'UNI-USD':'UNIUSD',   'AAVE-USD':'AAVEUSD',
-    'DOT-USD':'DOTUSD',   'ATOM-USD':'ATOMUSD', 'NEAR-USD':'NEARUSD',
-    'ADA-USD':'ADAUSD',   'XLM-USD':'XLMUSD',   'ICP-USD':'ICPUSD',
-    'ARB-USD':'ARBUSD',   'OP-USD':'OPUSD',     'SUI-USD':'SUIUSD',
-    'APT-USD':'APTUSD',   'RENDER-USD':'RENDERUSD',
+    'BTC-USD': 'BTCUSD', 'ETH-USD': 'ETHUSD', 'SOL-USD': 'SOLUSD',
+    'XRP-USD': 'XRPUSD', 'DOGE-USD': 'DOGEUSD', 'BNB-USD': 'BNBUSD',
+    'HYPE-USD': 'HYPEUSD', 'LTC-USD': 'LTCUSD', 'AVAX-USD': 'AVAXUSD',
+    'LINK-USD': 'LINKUSD', 'UNI-USD': 'UNIUSD', 'AAVE-USD': 'AAVEUSD',
+    'DOT-USD': 'DOTUSD', 'ATOM-USD': 'ATOMUSD', 'NEAR-USD': 'NEARUSD',
+    'ADA-USD': 'ADAUSD', 'XLM-USD': 'XLMUSD', 'ICP-USD': 'ICPUSD',
+    'ARB-USD': 'ARBUSD', 'OP-USD': 'OPUSD', 'SUI-USD': 'SUIUSD',
+    'APT-USD': 'APTUSD', 'RENDER-USD': 'RENDERUSD',
   };
 
   // Kraken response key → instrument (Kraken uses nonstandard pair names)
   const KRAKEN_RESPONSE_MAP = {
-    'XXBTZUSD':'BTCUSD', 'XBTUSD':'BTCUSD',
-    'XETHZUSD':'ETHUSD', 'ETHUSD':'ETHUSD',
-    'SOLUSD':'SOLUSD',   'XSOLUSD':'SOLUSD',
-    'XXRPZUSD':'XRPUSD', 'XRPUSD':'XRPUSD',
-    'XDGEUSD':'DOGEUSD', 'DOGEUSD':'DOGEUSD',
-    'BNBUSD':'BNBUSD',   'HYPEUSD':'HYPEUSD',
-    'XLTCZUSD':'LTCUSD', 'LTCUSD':'LTCUSD',
-    'XXLMZUSD':'XLMUSD', 'XLMUSD':'XLMUSD',
-    'LINKUSD':'LINKUSD', 'XTZUSD':'XTZUSD',
-    'ADAUSD':'ADAUSD',   'ATOMUSD':'ATOMUSD',
-    'DOTUSD':'DOTUSD',   'NEARUSD':'NEARUSD',
-    'AVAXUSD':'AVAXUSD', 'UNIUSD':'UNIUSD',
-    'AAVEUSD':'AAVEUSD',
+    'XXBTZUSD': 'BTCUSD', 'XBTUSD': 'BTCUSD',
+    'XETHZUSD': 'ETHUSD', 'ETHUSD': 'ETHUSD',
+    'SOLUSD': 'SOLUSD', 'XSOLUSD': 'SOLUSD',
+    'XXRPZUSD': 'XRPUSD', 'XRPUSD': 'XRPUSD',
+    'XDGEUSD': 'DOGEUSD', 'DOGEUSD': 'DOGEUSD',
+    'BNBUSD': 'BNBUSD', 'HYPEUSD': 'HYPEUSD',
+    'XLTCZUSD': 'LTCUSD', 'LTCUSD': 'LTCUSD',
+    'XXLMZUSD': 'XLMUSD', 'XLMUSD': 'XLMUSD',
+    'LINKUSD': 'LINKUSD', 'XTZUSD': 'XTZUSD',
+    'ADAUSD': 'ADAUSD', 'ATOMUSD': 'ATOMUSD',
+    'DOTUSD': 'DOTUSD', 'NEARUSD': 'NEARUSD',
+    'AVAXUSD': 'AVAXUSD', 'UNIUSD': 'UNIUSD',
+    'AAVEUSD': 'AAVEUSD',
   };
 
   // Pyth Network feed IDs — confirmed via hermes.pyth.network/v2/price_feeds
   // Covers 33/37 WATCHLIST coins. Missing: XTZUSD, PEPEUSD, AEROUSD, HYPEUSD → Binance/Gecko fills
   const PYTH_FEEDS = {
-    'BTCUSD':  'e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
-    'ETHUSD':  'ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
-    'SOLUSD':  'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
-    'XRPUSD':  'ec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8',
+    'BTCUSD': 'e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
+    'ETHUSD': 'ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
+    'SOLUSD': 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+    'XRPUSD': 'ec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8',
     'DOGEUSD': 'dcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c',
-    'BNBUSD':  '2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f',
+    'BNBUSD': '2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f',
     'AVAXUSD': '93da3352f9f1d105fdfe4971cfa80e9dd777bfc5d0f683ebb6e1294b92137bb7',
-    'DOTUSD':  'ca3eed9b267293f6595901c734c7525ce8ef49adafe8284606ceb307afa2ca5b',
+    'DOTUSD': 'ca3eed9b267293f6595901c734c7525ce8ef49adafe8284606ceb307afa2ca5b',
     'ATOMUSD': 'b00b60f88b03a6a625a8d1c048c3f66653edf217439983d037e7222c4e612819',
-    'LTCUSD':  '6e3f3fa8253588df9326580180233eb791e03b443a3ba7a1d892e73874e19a54',
-    'XLMUSD':  'b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850',
+    'LTCUSD': '6e3f3fa8253588df9326580180233eb791e03b443a3ba7a1d892e73874e19a54',
+    'XLMUSD': 'b7a8eba68a997cd0210c2e1e4ee811ad2d174b3611c22d9ebf16f4cb7e9ba850',
     'LINKUSD': '8ac0c70fff57e9aefdf5edf44b51d62c2d433653cbb2cf5cc06bb115af04d221',
-    'ADAUSD':  '2a01deaec9e51a579277b34b122399984d0bbf57e2458a7e42fecd2829867a0d',
-    'UNIUSD':  '78d185a741d07edb3412b09008b7c5cfb9bbbd7d568bf00ba737b456ba171501',
+    'ADAUSD': '2a01deaec9e51a579277b34b122399984d0bbf57e2458a7e42fecd2829867a0d',
+    'UNIUSD': '78d185a741d07edb3412b09008b7c5cfb9bbbd7d568bf00ba737b456ba171501',
     'AAVEUSD': '2b9ab1e972a281585084148ba1389800799bd4be63b957507db1349314e47445',
     'NEARUSD': 'c415de8d2eba7db216527dff4b60e8f3a5311c740dadb233e13e12547e226750',
-    'ARBUSD':  '3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5',
-    'OPUSD':   '385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf',
-    'SUIUSD':  '23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744',
-    'APTUSD':  '03ae4db29ed4ae33d323568895aa00337e658e348b37509f5372ae51f0af00d5',
-    'SEIUSD':  '53614f1cb0c031d4af66c04cb9c756234adad0e1cee85303795091499a4084eb',
+    'ARBUSD': '3fa4252848f9f0a1480be62745a4629d9eb1322aebab8a791e344b3b9c1adcf5',
+    'OPUSD': '385f64d993f7b77d8182ed5003d97c60aa3361f3cecfe711544d2d59165e9bdf',
+    'SUIUSD': '23d7315113f5b1d3ba7a83604c44b94d79f4fd69af77f804fc7f920a6dc65744',
+    'APTUSD': '03ae4db29ed4ae33d323568895aa00337e658e348b37509f5372ae51f0af00d5',
+    'SEIUSD': '53614f1cb0c031d4af66c04cb9c756234adad0e1cee85303795091499a4084eb',
     'BONKUSD': '72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419',
-    'WIFUSD':  '4ca4beeca86f0d164160323817a4e42b10010a724c2217c6ee41b54cd4cc61fc',
-    'JUPUSD':  '0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996',
-    'FLOKIUSD':'6b1381ce7e874dc5410b197ac8348162c0dd6c0d4c9cd6322672d6c2b1d58293',
-    'RENDERUSD':'3d4a2bd9535be6ce8059d75eadeba507b043257321aa544717c56fa19b49e35d',
+    'WIFUSD': '4ca4beeca86f0d164160323817a4e42b10010a724c2217c6ee41b54cd4cc61fc',
+    'JUPUSD': '0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996',
+    'FLOKIUSD': '6b1381ce7e874dc5410b197ac8348162c0dd6c0d4c9cd6322672d6c2b1d58293',
+    'RENDERUSD': '3d4a2bd9535be6ce8059d75eadeba507b043257321aa544717c56fa19b49e35d',
     'DYDXUSD': '6489800bb8974169adfe35937bf6736507097d13c190d760c557108c7e93a81b',
     'PYTHUSD': '0bbf28e9a841a1cc788f6a361b17ca072d0ea3098a1e5df1c3922d06719579ff',
-    'FETUSD':  '7da003ada32eabbac855af3d22fcf0fe692cc589f0cfd5ced63cf0bdcc742efe',
-    'TAOUSD':  '410f41de235f2db824e562ea7ab2d3d3d4ff048316c61d629c0b93f58584e1af',
+    'FETUSD': '7da003ada32eabbac855af3d22fcf0fe692cc589f0cfd5ced63cf0bdcc742efe',
+    'TAOUSD': '410f41de235f2db824e562ea7ab2d3d3d4ff048316c61d629c0b93f58584e1af',
     'HBARUSD': '3728e591097635310e6341af53db8b7ee42da9b3a8d918f9463ce9cca886dfbd',
-    'ICPUSD':  'c9907d786c5821547777780a1e4f89484f3417cb14dd244f2b0a34ea7a554d67',
-    'POLUSD':  'ffd11c5a1cfd42f80afb2df4d9f264c15f956d68153335374ec10722edd70472',
+    'ICPUSD': 'c9907d786c5821547777780a1e4f89484f3417cb14dd244f2b0a34ea7a554d67',
+    'POLUSD': 'ffd11c5a1cfd42f80afb2df4d9f264c15f956d68153335374ec10722edd70472',
   };
   const PYTH_ID_TO_INSTRUMENT = Object.fromEntries(
     Object.entries(PYTH_FEEDS).map(([instr, id]) => [id, instr])
   );
   // Pyth Lazer numeric feed IDs → instrument (IDs confirmed via proxy scan)
-  const LAZER_ID_INSTR = { 1:'BTCUSD', 2:'ETHUSD', 6:'SOLUSD', 10:'DOGEUSD', 14:'XRPUSD', 15:'BNBUSD' };
+  const LAZER_ID_INSTR = { 1: 'BTCUSD', 2: 'ETHUSD', 6: 'SOLUSD', 10: 'DOGEUSD', 14: 'XRPUSD', 15: 'BNBUSD' };
   // History API symbol strings for OHLC candle fetching
   const INSTR_TO_PYTH_SYM = {
-    'BTCUSD':'Crypto.BTC/USD',    'ETHUSD':'Crypto.ETH/USD',    'SOLUSD':'Crypto.SOL/USD',
-    'XRPUSD':'Crypto.XRP/USD',    'DOGEUSD':'Crypto.DOGE/USD',  'BNBUSD':'Crypto.BNB/USD',
-    'AVAXUSD':'Crypto.AVAX/USD',  'LINKUSD':'Crypto.LINK/USD',  'ADAUSD':'Crypto.ADA/USD',
-    'LTCUSD':'Crypto.LTC/USD',    'DOTUSD':'Crypto.DOT/USD',    'UNIUSD':'Crypto.UNI/USD',
-    'NEARUSD':'Crypto.NEAR/USD',  'ARBUSD':'Crypto.ARB/USD',    'OPUSD':'Crypto.OP/USD',
-    'SUIUSD':'Crypto.SUI/USD',    'APTUSD':'Crypto.APT/USD',    'ATOMUSD':'Crypto.ATOM/USD',
-    'XLMUSD':'Crypto.XLM/USD',    'AAVEUSD':'Crypto.AAVE/USD',  'PYTHUSD':'Crypto.PYTH/USD',
-    'SEIUSD':'Crypto.SEI/USD',    'BONKUSD':'Crypto.BONK/USD',  'WIFUSD':'Crypto.WIF/USD',
-    'JUPUSD':'Crypto.JUP/USD',    'DYDXUSD':'Crypto.DYDX/USD',  'FETUSD':'Crypto.FET/USD',
-    'ICPUSD':'Crypto.ICP/USD',    'HBARUSD':'Crypto.HBAR/USD',  'POLUSD':'Crypto.POL/USD',
-    'RENDERUSD':'Crypto.RENDER/USD','TAOUSD':'Crypto.TAO/USD',  'FLOKIUSD':'Crypto.FLOKI/USD',
+    'BTCUSD': 'Crypto.BTC/USD', 'ETHUSD': 'Crypto.ETH/USD', 'SOLUSD': 'Crypto.SOL/USD',
+    'XRPUSD': 'Crypto.XRP/USD', 'DOGEUSD': 'Crypto.DOGE/USD', 'BNBUSD': 'Crypto.BNB/USD',
+    'AVAXUSD': 'Crypto.AVAX/USD', 'LINKUSD': 'Crypto.LINK/USD', 'ADAUSD': 'Crypto.ADA/USD',
+    'LTCUSD': 'Crypto.LTC/USD', 'DOTUSD': 'Crypto.DOT/USD', 'UNIUSD': 'Crypto.UNI/USD',
+    'NEARUSD': 'Crypto.NEAR/USD', 'ARBUSD': 'Crypto.ARB/USD', 'OPUSD': 'Crypto.OP/USD',
+    'SUIUSD': 'Crypto.SUI/USD', 'APTUSD': 'Crypto.APT/USD', 'ATOMUSD': 'Crypto.ATOM/USD',
+    'XLMUSD': 'Crypto.XLM/USD', 'AAVEUSD': 'Crypto.AAVE/USD', 'PYTHUSD': 'Crypto.PYTH/USD',
+    'SEIUSD': 'Crypto.SEI/USD', 'BONKUSD': 'Crypto.BONK/USD', 'WIFUSD': 'Crypto.WIF/USD',
+    'JUPUSD': 'Crypto.JUP/USD', 'DYDXUSD': 'Crypto.DYDX/USD', 'FETUSD': 'Crypto.FET/USD',
+    'ICPUSD': 'Crypto.ICP/USD', 'HBARUSD': 'Crypto.HBAR/USD', 'POLUSD': 'Crypto.POL/USD',
+    'RENDERUSD': 'Crypto.RENDER/USD', 'TAOUSD': 'Crypto.TAO/USD', 'FLOKIUSD': 'Crypto.FLOKI/USD',
   };
 
   // Hyperliquid sym → instrument. kXXX = 1000x contracts (price * 0.001 = real price)
   const HL_SYM_MAP = {
-    'BTC':'BTCUSD',  'ETH':'ETHUSD',   'SOL':'SOLUSD',   'XRP':'XRPUSD',
-    'DOGE':'DOGEUSD','BNB':'BNBUSD',   'HYPE':'HYPEUSD', 'AVAX':'AVAXUSD',
-    'DOT':'DOTUSD',  'ATOM':'ATOMUSD', 'ADA':'ADAUSD',   'ARB':'ARBUSD',
-    'OP':'OPUSD',    'SUI':'SUIUSD',   'APT':'APTUSD',   'SEI':'SEIUSD',
-    'NEAR':'NEARUSD','WIF':'WIFUSD',   'JUP':'JUPUSD',   'DYDX':'DYDXUSD',
-    'PYTH':'PYTHUSD','RENDER':'RENDERUSD','FET':'FETUSD', 'TAO':'TAOUSD',
-    'XLM':'XLMUSD',  'LINK':'LINKUSD', 'UNI':'UNIUSD',   'AAVE':'AAVEUSD',
-    'ICP':'ICPUSD',  'HBAR':'HBARUSD', 'POL':'POLUSD',   'LTC':'LTCUSD',
-    'XTZ':'XTZUSD',  'AERO':'AEROUSD',
-    'kBONK':'BONKUSD','kPEPE':'PEPEUSD','kFLOKI':'FLOKIUSD',
+    'BTC': 'BTCUSD', 'ETH': 'ETHUSD', 'SOL': 'SOLUSD', 'XRP': 'XRPUSD',
+    'DOGE': 'DOGEUSD', 'BNB': 'BNBUSD', 'HYPE': 'HYPEUSD', 'AVAX': 'AVAXUSD',
+    'DOT': 'DOTUSD', 'ATOM': 'ATOMUSD', 'ADA': 'ADAUSD', 'ARB': 'ARBUSD',
+    'OP': 'OPUSD', 'SUI': 'SUIUSD', 'APT': 'APTUSD', 'SEI': 'SEIUSD',
+    'NEAR': 'NEARUSD', 'WIF': 'WIFUSD', 'JUP': 'JUPUSD', 'DYDX': 'DYDXUSD',
+    'PYTH': 'PYTHUSD', 'RENDER': 'RENDERUSD', 'FET': 'FETUSD', 'TAO': 'TAOUSD',
+    'XLM': 'XLMUSD', 'LINK': 'LINKUSD', 'UNI': 'UNIUSD', 'AAVE': 'AAVEUSD',
+    'ICP': 'ICPUSD', 'HBAR': 'HBARUSD', 'POL': 'POLUSD', 'LTC': 'LTCUSD',
+    'XTZ': 'XTZUSD', 'AERO': 'AEROUSD',
+    'kBONK': 'BONKUSD', 'kPEPE': 'PEPEUSD', 'kFLOKI': 'FLOKIUSD',
   };
   const HL_K_COINS = new Set(['kBONK', 'kPEPE', 'kFLOKI']);
 
@@ -930,18 +1699,18 @@
   function normalizeTicker(t) {
     return {
       instrument_name: (t.i || t.instrument_name || '').replace(/_/g, ''),
-      last:            t.a  ?? t.last,
-      high:            t.h  ?? t.high,
-      low:             t.l  ?? t.low,
-      change:          t.c  ?? t.change,
-      best_bid:        t.b  ?? t.best_bid,
-      best_ask:        t.k  ?? t.best_ask,
-      best_bid_size:   t.bs ?? t.best_bid_size,
-      best_ask_size:   t.ks ?? t.best_ask_size,
-      volume:          t.v  ?? t.volume,
-      volume_value:    t.vv ?? t.volume_value,
-      timestamp:       t.t  ?? t.timestamp,
-      source:          'crypto.com',
+      last: t.a ?? t.last,
+      high: t.h ?? t.high,
+      low: t.l ?? t.low,
+      change: t.c ?? t.change,
+      best_bid: t.b ?? t.best_bid,
+      best_ask: t.k ?? t.best_ask,
+      best_bid_size: t.bs ?? t.best_bid_size,
+      best_ask_size: t.ks ?? t.best_ask_size,
+      volume: t.v ?? t.volume,
+      volume_value: t.vv ?? t.volume_value,
+      timestamp: t.t ?? t.timestamp,
+      source: 'crypto.com',
     };
   }
 
@@ -1145,18 +1914,18 @@
       .filter(r => inv[r.symbol])
       .map(r => ({
         instrument_name: inv[r.symbol],
-        last:          parseFloat(r.lastPrice),
-        high:          parseFloat(r.highPrice),
-        low:           parseFloat(r.lowPrice),
-        change:        parseFloat(r.priceChangePercent) / 100,
-        best_bid:      parseFloat(r.bidPrice),
-        best_ask:      parseFloat(r.askPrice),
+        last: parseFloat(r.lastPrice),
+        high: parseFloat(r.highPrice),
+        low: parseFloat(r.lowPrice),
+        change: parseFloat(r.priceChangePercent) / 100,
+        best_bid: parseFloat(r.bidPrice),
+        best_ask: parseFloat(r.askPrice),
         best_bid_size: '',
         best_ask_size: '',
-        volume:        parseFloat(r.volume),
-        volume_value:  parseFloat(r.quoteVolume),
-        timestamp:     Date.now(),
-        source:        'binance',
+        volume: parseFloat(r.volume),
+        volume_value: parseFloat(r.quoteVolume),
+        timestamp: Date.now(),
+        source: 'binance',
       }));
     if (!result.length) throw new Error('Binance returned no usable tickers');
     return result;
@@ -1190,17 +1959,17 @@
       result.push({
         instrument_name: instrument,
         last,
-        high:          parseFloat(data.h[1]),
-        low:           parseFloat(data.l[1]),
-        change:        open > 0 ? (last - open) / open : 0,
-        best_bid:      parseFloat(data.b[0]),
-        best_ask:      parseFloat(data.a[0]),
+        high: parseFloat(data.h[1]),
+        low: parseFloat(data.l[1]),
+        change: open > 0 ? (last - open) / open : 0,
+        best_bid: parseFloat(data.b[0]),
+        best_ask: parseFloat(data.a[0]),
         best_bid_size: data.b[1] || '',
         best_ask_size: data.a[1] || '',
-        volume:        parseFloat(data.v[1]),
-        volume_value:  parseFloat(data.v[1]) * last,
-        timestamp:     Date.now(),
-        source:        'kraken',
+        volume: parseFloat(data.v[1]),
+        volume_value: parseFloat(data.v[1]) * last,
+        timestamp: Date.now(),
+        source: 'kraken',
       });
     }
     if (!result.length) throw new Error('Kraken returned no usable tickers');
@@ -1228,17 +1997,17 @@
             return {
               instrument_name: instrument,
               last,
-              high:          parseFloat(data.high),
-              low:           parseFloat(data.low),
-              change:        open > 0 ? (last - open) / open : 0,
-              best_bid:      null,
-              best_ask:      null,
+              high: parseFloat(data.high),
+              low: parseFloat(data.low),
+              change: open > 0 ? (last - open) / open : 0,
+              best_bid: null,
+              best_ask: null,
               best_bid_size: '',
               best_ask_size: '',
-              volume:        parseFloat(data.volume),
-              volume_value:  parseFloat(data.volume) * last,
-              timestamp:     Date.now(),
-              source:        'coinbase',
+              volume: parseFloat(data.volume),
+              volume_value: parseFloat(data.volume) * last,
+              timestamp: Date.now(),
+              source: 'coinbase',
             };
           })
           .catch(() => null)
@@ -1257,9 +2026,9 @@
         let received = false;
         return await new Promise((resolve, reject) => {
           const timeout = setTimeout(() => {
-            if (!received) reject(new Error('Pyth Lazer WS timeout'));
-          }, 3000);
-          
+            if (!received) reject(new Error('Pyth Lazer WS timeout (1000ms)'));
+          }, 1000);
+
           window.pythLazer.onTickers((prices) => {
             clearTimeout(timeout);
             received = true;
@@ -1286,14 +2055,14 @@
         console.warn('[PythTickers] WS stream failed:', e.message);
       }
     }
-    
+
     // ★ FALLBACK 1: Try Lazer proxy REST (no-auth, faster than Hermes)
     try {
       return await fetchPythLazerProxyTickers();
     } catch (e) {
       console.warn('[PythTickers] Lazer proxy failed:', e.message);
     }
-    
+
     // ★ FALLBACK 2: Pyth Hermes (standard, wider coin coverage)
     const feedIds = Object.values(PYTH_FEEDS);
     const params = feedIds.map(id => `ids[]=${id}`).join('&');
@@ -1310,17 +2079,17 @@
       result.push({
         instrument_name: instrument,
         last,
-        high:          last,  // Pyth spot only — 24h stats overlaid async by fetchBinanceTickers
-        low:           last,
-        change:        0,
-        best_bid:      null,
-        best_ask:      null,
+        high: last,  // Pyth spot only — 24h stats overlaid async by fetchBinanceTickers
+        low: last,
+        change: 0,
+        best_bid: null,
+        best_ask: null,
         best_bid_size: '',
         best_ask_size: '',
-        volume:        0,
-        volume_value:  0,
-        timestamp:     Date.now(),
-        source:        'pyth',
+        volume: 0,
+        volume_value: 0,
+        timestamp: Date.now(),
+        source: 'pyth',
       });
     }
     if (!result.length) throw new Error('Pyth returned no usable feeds');
@@ -1339,15 +2108,15 @@
         for (const f of j.priceFeeds || []) {
           const instr = LAZER_ID_INSTR[f.priceFeedId];
           if (!instr) continue;
-          const exp   = f.exponent ?? -8;
+          const exp = f.exponent ?? -8;
           const scale = Math.pow(10, exp);
-          const px    = Number(f.price) * scale;
+          const px = Number(f.price) * scale;
           if (!px || px <= 0 || isNaN(px)) continue;
           result.push({
             instrument_name: instr, last: px,
             high: px, low: px, change: 0,
-            best_bid:      f.bestBidPrice != null ? Number(f.bestBidPrice) * scale : null,
-            best_ask:      f.bestAskPrice != null ? Number(f.bestAskPrice) * scale : null,
+            best_bid: f.bestBidPrice != null ? Number(f.bestBidPrice) * scale : null,
+            best_ask: f.bestAskPrice != null ? Number(f.bestAskPrice) * scale : null,
             best_bid_size: '', best_ask_size: '',
             volume: 0, volume_value: 0,
             timestamp: Date.now(),
@@ -1355,7 +2124,7 @@
           });
         }
         if (result.length >= 4) return result;
-      } catch (_) {}
+      } catch (_) { }
     }
     throw new Error('Pyth Lazer proxies unavailable');
   }
@@ -1378,17 +2147,17 @@
       result.push({
         instrument_name: instrument,
         last,
-        high:          last,
-        low:           last,
-        change:        0,
-        best_bid:      null,
-        best_ask:      null,
+        high: last,
+        low: last,
+        change: 0,
+        best_bid: null,
+        best_ask: null,
         best_bid_size: '',
         best_ask_size: '',
-        volume:        0,
-        volume_value:  0,
-        timestamp:     Date.now(),
-        source:        'hyperliquid',
+        volume: 0,
+        volume_value: 0,
+        timestamp: Date.now(),
+        source: 'hyperliquid',
       });
     }
     if (!result.length) throw new Error('Hyperliquid returned no usable mids');
@@ -1404,13 +2173,13 @@
         const t = tickers[s.instrument_name];
         if (!t) return;
         // Overwrite 24h stats regardless of source — Binance has the authoritative 24h window
-        t.high         = s.high;
-        t.low          = s.low;
-        t.change       = s.change;
-        t.volume       = s.volume;
+        t.high = s.high;
+        t.low = s.low;
+        t.change = s.change;
+        t.volume = s.volume;
         t.volume_value = s.volume_value;
-        t.best_bid     = t.best_bid ?? s.best_bid;
-        t.best_ask     = t.best_ask ?? s.best_ask;
+        t.best_bid = t.best_bid ?? s.best_bid;
+        t.best_ask = t.best_ask ?? s.best_ask;
         updated++;
       });
       if (updated) refreshActiveView();
@@ -1421,13 +2190,13 @@
 
   function geckoTimeframeConfig(timeframe) {
     switch (timeframe) {
-      case '1m':  return null;  // CoinGecko has no 1-minute resolution
-      case '3m':  return null;  // CoinGecko has no 3-minute resolution
-      case '5m':  return { days: 1,   bucketMs: 5  * 60 * 1000 };
-      case '15m': return { days: 1,   bucketMs: 15 * 60 * 1000 };
-      case '1h':  return { days: 7,   bucketMs: 60 * 60 * 1000 };
-      case '4h':  return { days: 30,  bucketMs: 4  * 60 * 60 * 1000 };
-      case '1W':  return { days: 365, bucketMs: 7  * 24 * 60 * 60 * 1000 };
+      case '1m': return null;  // CoinGecko has no 1-minute resolution
+      case '3m': return null;  // CoinGecko has no 3-minute resolution
+      case '5m': return { days: 1, bucketMs: 5 * 60 * 1000 };
+      case '15m': return { days: 1, bucketMs: 15 * 60 * 1000 };
+      case '1h': return { days: 7, bucketMs: 60 * 60 * 1000 };
+      case '4h': return { days: 30, bucketMs: 4 * 60 * 60 * 1000 };
+      case '1W': return { days: 365, bucketMs: 7 * 24 * 60 * 60 * 1000 };
       case '1D':
       default:
         return { days: 365, bucketMs: 24 * 60 * 60 * 1000 };
@@ -1449,16 +2218,16 @@
   // MEXC uses slightly different interval strings; returns null for unsupported TFs
   function mexcInterval(timeframe) {
     switch (timeframe) {
-      case '1m':  return '1m';
-      case '3m':  return null;   // MEXC has no 3m
-      case '5m':  return '5m';
+      case '1m': return '1m';
+      case '3m': return null;   // MEXC has no 3m
+      case '5m': return '5m';
       case '15m': return '15m';
       case '30m': return '30m';
-      case '1h':  return '60m';  // MEXC uses 60m not 1h
-      case '4h':  return '4h';
-      case '1D':  return '1d';
-      case '1W':  return '1W';
-      default:    return null;
+      case '1h': return '60m';  // MEXC uses 60m not 1h
+      case '4h': return '4h';
+      case '1D': return '1d';
+      case '1W': return '1W';
+      default: return null;
     }
   }
 
@@ -1528,7 +2297,7 @@
 
       const { days, bucketMs } = cfg;
       let lastErr;
-      
+
       // Try CoinGecko first
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -1539,15 +2308,15 @@
           }
           if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
           const json = await res.json();
-          const prices  = Array.isArray(json.prices)         ? json.prices         : [];
-          const volumes = Array.isArray(json.total_volumes)  ? json.total_volumes  : [];
+          const prices = Array.isArray(json.prices) ? json.prices : [];
+          const volumes = Array.isArray(json.total_volumes) ? json.total_volumes : [];
           if (!prices.length) throw new Error(`No CoinGecko chart data for ${instrument}`);
 
           const buckets = new Map();
           prices.forEach((point, idx) => {
-            const ts         = Number(point[0]);
-            const priceVal   = Number(point[1]);
-            const volumeVal  = Number(volumes[idx]?.[1] || 0);
+            const ts = Number(point[0]);
+            const priceVal = Number(point[1]);
+            const volumeVal = Number(volumes[idx]?.[1] || 0);
             if (!Number.isFinite(ts) || !Number.isFinite(priceVal)) return;
             const bucketStart = Math.floor(ts / bucketMs) * bucketMs;
             const bucket = buckets.get(bucketStart) || {
@@ -1569,7 +2338,7 @@
           lastErr = e;
         }
       }
-      
+
       // Fallback: CoinCap API (free, no auth)
       console.warn(`[Chart] CoinGecko failed (${lastErr?.message}); trying CoinCap...`);
       try {
@@ -1611,7 +2380,7 @@
   }
 
   async function fetchCandlesticks(instrument, timeframe) {
-    const geckoId    = geckoIdForInstrument(instrument);
+    const geckoId = geckoIdForInstrument(instrument);
     const prefersGecko = tickers[instrument]?.source === 'coingecko';
 
     if (prefersGecko && geckoId) {
@@ -1658,21 +2427,27 @@
 
   // ---- Pyth History API OHLC — official candles, real_time channel ----
   async function fetchPythHistoryCandles(instrument, timeframe) {
-    const sym  = INSTR_TO_PYTH_SYM[instrument];
-    const TF_RES = { '1m':'1','3m':'5','5m':'5','15m':'15','30m':'30',
-                     '1h':'60','2h':'120','4h':'240','6h':'360','12h':'720','1d':'D','1w':'W' };
-    const res  = TF_RES[timeframe];
+    const sym = INSTR_TO_PYTH_SYM[instrument];
+    const TF_RES = {
+      '1m': '1', '3m': '5', '5m': '5', '15m': '15', '30m': '30',
+      '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720', '1d': 'D', '1w': 'W'
+    };
+    const res = TF_RES[timeframe];
     if (!sym || !res) throw new Error(`No Pyth History mapping for ${instrument}/${timeframe}`);
-    const SEC  = { '1':60,'5':300,'15':900,'30':1800,'60':3600,'120':7200,
-                   '240':14400,'360':21600,'720':43200,'D':86400,'W':604800 };
-    const BARS = { '1':300,'5':300,'15':200,'30':200,'60':168,'120':100,
-                   '240':90,'360':72,'720':60,'D':30,'W':26 };
-    const now  = Math.floor(Date.now() / 1000);
+    const SEC = {
+      '1': 60, '5': 300, '15': 900, '30': 1800, '60': 3600, '120': 7200,
+      '240': 14400, '360': 21600, '720': 43200, 'D': 86400, 'W': 604800
+    };
+    const BARS = {
+      '1': 300, '5': 300, '15': 200, '30': 200, '60': 168, '120': 100,
+      '240': 90, '360': 72, '720': 60, 'D': 30, 'W': 26
+    };
+    const now = Math.floor(Date.now() / 1000);
     const from = now - (SEC[res] || 3600) * (BARS[res] || 100);
-    const url  = `${PYTH_HISTORY_BASE}/v1/real_time/history?symbol=${encodeURIComponent(sym)}&from=${from}&to=${now}&resolution=${res}`;
-    const r    = await fetchWithTimeout(url, 8000);
+    const url = `${PYTH_HISTORY_BASE}/v1/real_time/history?symbol=${encodeURIComponent(sym)}&from=${from}&to=${now}&resolution=${res}`;
+    const r = await fetchWithTimeout(url, 8000);
     if (!r.ok) throw new Error(`Pyth History HTTP ${r.status}`);
-    const d    = await r.json();
+    const d = await r.json();
     if (d.s !== 'ok' || !d.c?.length) throw new Error(`Pyth History no data (s=${d.s})`);
     return d.t.map((ts, i) => [ts * 1000, +d.o[i], +d.h[i], +d.l[i], +d.c[i], +(d.v?.[i] ?? 0)]);
   }
@@ -1683,18 +2458,18 @@
       if (!window.pythLazer?.getCandles) {
         throw new Error('Pyth Lazer IPC not available');
       }
-      
+
       const result = await window.pythLazer.getCandles({
         symbol,
         resolution,
         from: Math.floor(from / 1000),  // convert ms to seconds
         to: Math.floor(to / 1000),
       });
-      
+
       if (!result.success) {
         throw new Error(result.error || 'Pyth Lazer failed');
       }
-      
+
       // Transform to [timestamp, o, h, l, c, v] format
       return result.candles.map(c => [c.t * 1000, c.o, c.h, c.l, c.c, c.v || 0]);
     } catch (e) {
@@ -1715,7 +2490,7 @@
     }
     // Fallback: original inline logic if WalletCache not loaded
     const ctrl = new AbortController();
-    const tid  = setTimeout(() => ctrl.abort(), 8000);
+    const tid = setTimeout(() => ctrl.abort(), 8000);
     try {
       const res = await fetch(`https://eth.blockscout.com/api/v2/addresses/${address}/token-balances`, { signal: ctrl.signal });
       if (res.ok) { window._walletDataSource = 'blockscout'; return res.json(); }
@@ -1726,7 +2501,7 @@
       try {
         const res = await fetch(`https://api.etherscan.io/api?module=account&action=tokenlist&address=${address}&apikey=${esKey}`);
         if (res.ok) { const d = await res.json(); if (d.status === '1') { window._walletDataSource = 'etherscan'; return normalizeEtherscanTokens(d); } }
-      } catch (_) {}
+      } catch (_) { }
     }
     throw new Error('All wallet data sources unavailable');
   }
@@ -1740,44 +2515,52 @@
     try {
       const res = await fetch(`https://eth.blockscout.com/api/v2/addresses/${address}/transactions?limit=10`);
       if (res.ok) return res.json();
-    } catch (_) {}
+    } catch (_) { }
     return { items: [] };
   }
 
   function normalizeEthplorerTokens(data) {
     const out = [];
     if (data.ETH?.balance) {
-      out.push({ token: { symbol: 'ETH', name: 'Ether', decimals: '18', address: '' },
-        value: String(Math.round(data.ETH.balance * 1e18)) });
+      out.push({
+        token: { symbol: 'ETH', name: 'Ether', decimals: '18', address: '' },
+        value: String(Math.round(data.ETH.balance * 1e18))
+      });
     }
     (data.tokens || []).forEach(t => {
       if (!t.tokenInfo) return;
-      out.push({ token: {
-        symbol: t.tokenInfo.symbol || '?', name: t.tokenInfo.name || '?',
-        decimals: String(t.tokenInfo.decimals ?? 18), address: t.tokenInfo.address || '',
-      }, value: String(t.balance ?? 0) });
+      out.push({
+        token: {
+          symbol: t.tokenInfo.symbol || '?', name: t.tokenInfo.name || '?',
+          decimals: String(t.tokenInfo.decimals ?? 18), address: t.tokenInfo.address || '',
+        }, value: String(t.balance ?? 0)
+      });
     });
     return out;
   }
 
   function normalizeEtherscanTokens(data) {
     return (data.result || []).map(t => ({
-      token: { symbol: t.tokenSymbol || '?', name: t.tokenName || '?',
-        decimals: String(t.tokenDecimal ?? 18), address: t.contractAddress || '' },
+      token: {
+        symbol: t.tokenSymbol || '?', name: t.tokenName || '?',
+        decimals: String(t.tokenDecimal ?? 18), address: t.contractAddress || ''
+      },
       value: t.value || '0',
     }));
   }
 
   function normalizeEtherscanTxs(data, address) {
-    return { items: (data.result || []).map(tx => ({
-      hash: tx.hash,
-      to:   { hash: tx.to },
-      from: { hash: tx.from },
-      value: tx.value,
-      timestamp: new Date(parseInt(tx.timeStamp) * 1000).toISOString(),
-      method: tx.functionName ? tx.functionName.split('(')[0] : 'transfer',
-      gas_used: tx.gasUsed,
-    })) };
+    return {
+      items: (data.result || []).map(tx => ({
+        hash: tx.hash,
+        to: { hash: tx.to },
+        from: { hash: tx.from },
+        value: tx.value,
+        timestamp: new Date(parseInt(tx.timeStamp) * 1000).toISOString(),
+        method: tx.functionName ? tx.functionName.split('(')[0] : 'transfer',
+        gas_used: tx.gasUsed,
+      }))
+    };
   }
 
   async function fetchBlockscoutPolygon(address) {
@@ -1839,10 +2622,11 @@
   // Hits ALL 6 CEXes simultaneously alongside chain intel + prediction markets.
   // Streaming via resetTimer() continues uninterrupted between pulses.
   async function settlementPull() {
-    const now = new Date();
-    const label = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-    console.info(`[WE] ⚡ Settlement pulse ${label} — blasting all CEXes + chain + markets`);
-    if (feedText) feedText.textContent = `⚡ ${label} settlement…`;
+    const easternStamp = window.WeCryptoClock?.formatEasternTime?.() ||
+      new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    const label = easternStamp.match(/\b\d{2}:\d{2}\b/)?.[0] || easternStamp;
+    console.info(`[WE] ⚡ Settlement pulse ${label} ET — blasting all CEXes + chain + markets`);
+    if (feedText) feedText.textContent = `⚡ ${label} ET settlement…`;
 
     // Fire everything simultaneously — price blast + supporting data
     await Promise.allSettled([
@@ -1869,11 +2653,11 @@
         if (!tickers[instr]) continue;    // only overlay known instruments
         tickers[instr] = {
           ...tickers[instr],
-          last:      data.last,
-          best_bid:  data.best_bid  ?? tickers[instr].best_bid,
-          best_ask:  data.best_ask  ?? tickers[instr].best_ask,
+          last: data.last,
+          best_bid: data.best_bid ?? tickers[instr].best_bid,
+          best_ask: data.best_ask ?? tickers[instr].best_ask,
           timestamp: data.timestamp,
-          source:    'pyth-lazer',
+          source: 'pyth-lazer',
         };
         updated = true;
       }
@@ -1882,7 +2666,7 @@
       if (!startPythLazerStream._debounce) {
         startPythLazerStream._debounce = setTimeout(() => {
           startPythLazerStream._debounce = null;
-          if (['cfm','predictions','universe'].includes(currentView)) refreshActiveView();
+          if (['cfm', 'predictions', 'universe'].includes(currentView)) refreshActiveView();
         }, 500);
       }
     });
@@ -1975,7 +2759,7 @@
 
       // Pyth/HL give spot price only (no 24h change%/high/low) — overlay async
       if (dataSource === 'pyth' || dataSource === 'pyth-lazer' || dataSource === 'hyperliquid') {
-        overlayBinance24hStats().catch(() => {});
+        overlayBinance24hStats().catch(() => { });
       }
 
       // Supplemental: fill coins not covered by primary source.
@@ -2032,7 +2816,7 @@
       }
     } finally {
       _fetchAttempted = true;
-      
+
       // ── ACTIVATE CMC POLLING ON FIRST APP STARTUP ────────────────
       if (window._cmcProFeed && typeof window._cmcProFeed.startPolling === 'function' && !window._cmcPollingStarted) {
         try {
@@ -2043,7 +2827,7 @@
           console.warn('[App] Failed to start CMC polling:', cmcErr.message);
         }
       }
-      
+
       // ── ACTIVATE PYTH CLIENT ON FIRST APP STARTUP ──────────────────
       if (window.PythClient && typeof window.PythClient.startPolling === 'function' && !window._pythClientStarted) {
         try {
@@ -2063,53 +2847,92 @@
     if (!feedDot || !feedText) return;
     feedDot.className = 'pulse-dot';
     const src = source && source !== 'cdc' && source !== 'cache' ? ` · ${source.toUpperCase()}` : '';
-    if (state === 'loading')      { feedDot.classList.add('loading');   feedText.textContent = 'Refreshing...'; }
-    else if (state === 'live')    { feedDot.classList.add('live');      feedText.textContent = `Live${src}`; }
-    else if (state === 'degraded'){ feedDot.classList.add('degraded'); feedText.textContent = 'Stale ⚠'; }
-    else                          { feedDot.classList.add('error');     feedText.textContent = 'Error'; }
+    if (state === 'loading') { feedDot.classList.add('loading'); feedText.textContent = 'Refreshing...'; }
+    else if (state === 'live') { feedDot.classList.add('live'); feedText.textContent = `Live${src}`; }
+    else if (state === 'degraded') { feedDot.classList.add('degraded'); feedText.textContent = 'Stale ⚠'; }
+    else { feedDot.classList.add('error'); feedText.textContent = 'Error'; }
   }
 
   function resetTimer() {
     if (refreshTimer) clearInterval(refreshTimer);
-    if (refreshSecs > 0) refreshTimer = setInterval(() => fetchAll(), refreshSecs * 1000);
+    // Fallback to interval-based refresh if async engine not available
+    const interval = Math.max(15000, (refreshSecs || 15) * 1000);
+    refreshTimer = setInterval(() => {
+      void fetchAll();
+    }, interval);
+    console.log(`[WE] Refresh timer set to ${interval}ms`);
   }
 
-  // ── Kalshi background polling ─────────────────────────────────────
-  let kalshiPollTimer = null;
+  // Countdown ticker — updates status badge every second to show seconds until next refresh
+  let countdownTicker = null;
+  function startCountdownTicker() {
+    if (countdownTicker) clearInterval(countdownTicker);
+    countdownTicker = setInterval(() => {
+      updateMarketSummary(); // Re-render the countdown every second
+    }, 1000);
+  }
+
+  // ── Kalshi background polling (ASYNC ENGINE) ─────────────────────────────
+  // ★ NEW: Replaced with async engine event listeners
+  // Listens to 'kalshi:balance-updated' event instead of polling manually
+  let kalshiPollTimer = null; // kept for compatibility, but unused
+
   function startKalshiPolling() {
-    if (kalshiPollTimer) return; // already running
-    kalshiPollTimer = setInterval(async () => {
-      try {
-        if (!window.Kalshi) return;
-        const res = await window.Kalshi.getBalance();
-        if (res.success && res.data) {
-          window._kalshiBalance = {
-            balance: res.data.balance,
-            portfolio_value: res.data.portfolio_value,
-            timestamp: Date.now(),
-          };
-          
-          // Update UI badge
-          const badge = document.getElementById('kalshiBadge');
-          const balanceEl = document.getElementById('kalshiBalance');
-          if (badge && balanceEl) {
-            badge.style.display = 'flex';
-            const cents = parseInt(res.data.balance);
-            const dollars = (cents / 100).toFixed(2);
-            balanceEl.textContent = `$${dollars}`;
-            balanceEl.classList.add('updating');
-            setTimeout(() => balanceEl.classList.remove('updating'), 300);
-          }
-          
-          console.log(`[Kalshi] Balance: $${dollars}`);
-        }
-      } catch (err) {
-        console.warn('[Kalshi] Balance poll error:', err.message);
+    if (!window._asyncRefreshEngine) {
+      console.warn('[WE] Async engine not loaded yet — skipping Kalshi polling setup');
+      return;
+    }
+
+    // Subscribe to balance updates from async engine
+    const unsub = window._asyncRefreshEngine.on('kalshi:balance-updated', (data) => {
+      // Update UI badge with new balance
+      const badge = document.getElementById('kalshiBadge');
+      const balanceEl = document.getElementById('kalshiBalance');
+      if (badge && balanceEl) {
+        badge.hidden = false;
+        const dollars = (data.balance / 100).toFixed(2);
+        balanceEl.textContent = `$${dollars}`;
+        balanceEl.classList.add('updating');
+        setTimeout(() => balanceEl.classList.remove('updating'), 300);
       }
-    }, 5000); // poll every 5 seconds
+      console.log(`[Kalshi] Balance updated: $${(data.balance / 100).toFixed(2)}`);
+    });
+
+    console.log('[WE] Kalshi polling connected to async engine');
+    return unsub;
+  }
+
+  function startAsyncRefreshEngine() {
+    if (_asyncRefreshEngineBooted) return;
+    if (!window._asyncRefreshEngine?.start) {
+      console.warn('[WE] Async refresh engine unavailable — keeping legacy timers active');
+      return;
+    }
+
+    _asyncRefreshEngineBooted = true;
+
+    window._asyncRefreshEngine.on('predictions:updated', () => {
+      if (['predictions', 'cfm', 'universe'].includes(currentView)) refreshActiveView();
+    });
+
+    window._asyncRefreshEngine.on('market:data-updated', () => {
+      if (['cfm', 'predictions', 'universe', 'markets5m', 'charts'].includes(currentView)) {
+        refreshActiveView();
+      }
+    });
+
+    window._asyncRefreshEngine.on('settlement:pulse', () => {
+      refreshActiveView();
+    });
+
+    void window._asyncRefreshEngine.start().catch(err => {
+      console.warn('[WE] Async refresh engine start failed:', err.message);
+      _asyncRefreshEngineBooted = false;
+    });
   }
 
   function stopKalshiPolling() {
+    // Unsubscribe handled via returned unsub function from startKalshiPolling()
     if (kalshiPollTimer) {
       clearInterval(kalshiPollTimer);
       kalshiPollTimer = null;
@@ -2137,9 +2960,9 @@
 
   function startHistoricalPolling() {
     if (historicalPollTimer) return; // already running
-    
+
     initHistoricalLearning();
-    
+
     historicalPollTimer = setInterval(async () => {
       try {
         if (!settledFetcher || !learningEngine) {
@@ -2149,76 +2972,96 @@
 
         // Fetch settled contracts from historical market data
         const { settled, errors } = await settledFetcher.fetchSettledContracts();
-        
+
         if (settled && settled.length > 0) {
           console.log(`[Historical] Fetched ${settled.length} settled contracts`);
-          
+
           // Add historical settlements to _kalshiLog for scorecard display
           settled.forEach(contract => {
             // Check if already in log (avoid duplicates)
-            const isDuplicate = window._kalshiLog.some(e => 
-              e.sym === contract.symbol && 
+            const isDuplicate = window._kalshiLog.some(e =>
+              e.sym === contract.symbol &&
               e.resolved_at === contract.resolvedAt
             );
-            
+
             if (!isDuplicate) {
+              const _actualOutcome = String(contract.result).toUpperCase() === 'YES' ? 'UP' : 'DOWN';
+              const _predictionDir = contract.modelCorrect === true
+                ? _actualOutcome
+                : contract.modelCorrect === false
+                  ? _oppositeDir(_actualOutcome)
+                  : (window._lastPrediction?.[contract.symbol]?.direction || null);
               window._kalshiLog.push({
                 sym: contract.symbol,
                 outcome: contract.result,  // 'YES' or 'NO'
+                actualOutcome: _actualOutcome,
                 modelCorrect: contract.modelCorrect ?? null,
                 marketCorrect: contract.marketCorrect ?? null,
+                settledTs: contract.resolvedAt ? new Date(contract.resolvedAt).getTime() : Date.now(),
+                ts: contract.openTime ? new Date(contract.openTime).getTime() : Date.now(),
                 resolved_at: contract.resolvedAt,
                 created_at: contract.openTime,
                 _settled: true,
                 _historical: true  // Mark as loaded from historical fetcher
               });
+
+              _journalSettlement(contract.symbol, _actualOutcome, null, {
+                source: 'historical-fetcher',
+                modelCorrect: contract.modelCorrect ?? null,
+                predictionDir: _predictionDir,
+              });
             }
           });
-          
+
           // Keep _kalshiLog limited to 500 entries
           if (window._kalshiLog.length > 500) {
             window._kalshiLog = window._kalshiLog.slice(-500);
           }
           saveKalshiLog();
-          
+          if (currentView === 'log' || currentView === 'debuglog') render();
+
           // Record outcomes for learning engine
           for (const contract of settled) {
             if (contract.symbol && contract.result) {
               // Simulate prediction from model at contract open time
               const prediction = await getPredictionForCoin(contract.symbol, contract.openTime);
-              
+
               if (prediction) {
-                learningEngine.recordSignalContribution(
-                  contract.symbol,
-                  prediction.signals, // { RSI, MACD, CCI, ... }
-                  prediction.weights, // { RSI: 1.2, MACD: 0.9, ... }
-                  (() => {
-                    const strike = String(contract?.raw?.strikeType ?? contract?.raw?.strike_type ?? 'above').toLowerCase();
-                    const yesDir = strike === 'below' ? 'DOWN' : 'UP';
-                    const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
-                    return String(contract.result).toUpperCase() === 'YES' ? yesDir : noDir;
-                  })()
-                );
+                if (typeof learningEngine.recordSignalContribution === 'function') {
+                  learningEngine.recordSignalContribution(
+                    contract.symbol,
+                    prediction.signals, // { RSI, MACD, CCI, ... }
+                    prediction.weights, // { RSI: 1.2, MACD: 0.9, ... }
+                    (() => {
+                      const strike = String(contract?.raw?.strikeType ?? contract?.raw?.strike_type ?? 'above').toLowerCase();
+                      const yesDir = strike === 'below' ? 'DOWN' : 'UP';
+                      const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+                      return String(contract.result).toUpperCase() === 'YES' ? yesDir : noDir;
+                    })()
+                  );
+                }
               }
             }
           }
-          
+
           // Auto-tune weights every 2 minutes if enough samples
           const shouldTune = Date.now() % 120000 < 30000; // tune every 2 min window
-          if (shouldTune) {
+          if (shouldTune && typeof learningEngine.autoTuneWeights === 'function') {
             const tuned = learningEngine.autoTuneWeights();
             if (tuned && Object.keys(tuned).length > 0) {
               console.log('[Learning] Weights auto-tuned:', tuned);
               // TODO: Apply new weights to PredictionEngine
             }
           }
-          
+
           // Display scorecard
-          const scorecard = learningEngine.getAccuracyReport();
-          window._accuracyScorecard = scorecard;
-          console.log('[Accuracy]', scorecard);
+          if (typeof learningEngine.getAccuracyReport === 'function') {
+            const scorecard = learningEngine.getAccuracyReport();
+            window._accuracyScorecard = scorecard;
+            console.log('[Accuracy]', scorecard);
+          }
         }
-        
+
         if (errors && errors.length > 0) {
           console.warn('[Historical] Fetch errors:', errors);
         }
@@ -2247,11 +3090,11 @@
 
   // Start historical learning on app init
   startHistoricalPolling();
-  
+
   // Sync cached contracts from drive to memory (Kalshi debug panel accuracy scorecard)
   if (typeof KalshiAccuracyDebug !== 'undefined' && KalshiAccuracyDebug.syncDriveCacheToMemory) {
     setTimeout(() => {
-      KalshiAccuracyDebug.syncDriveCacheToMemory().catch(err => 
+      KalshiAccuracyDebug.syncDriveCacheToMemory().catch(err =>
         console.warn('[App] Drive cache sync failed:', err.message)
       );
     }, 2000); // defer slightly to let app settle
@@ -2274,11 +3117,11 @@
           : msToBoundary + 15 * 60 * 1000 - PREFETCH_LEAD_MS;
         prefetchTimer = setTimeout(() => {
           if (window.PredictionEngine && PredictionEngine.warmCache) {
-            PredictionEngine.warmCache().catch(() => {});
+            PredictionEngine.warmCache().catch(() => { });
           }
           // Also pre-fetch X sentiment so SNT orbital is warm at boundary
           if (window.SocialSentiment && SocialSentiment.hasKey()) {
-            SocialSentiment.fetchAll().catch(() => {});
+            SocialSentiment.fetchAll().catch(() => { });
           }
           schedulePrefetch(); // reschedule for the boundary after next
         }, Math.max(500, lead));
@@ -2298,7 +3141,7 @@
           // Bug fix: re-check currentView after the async gap
           if (currentView === 'universe') renderUniverse();
           else if (['predictions', 'cfm'].includes(currentView)) renderPredictions();
-        } catch {}
+        } catch { }
       });
 
       predictionRefreshHandle = {
@@ -2342,7 +3185,7 @@
   // MIN_FLIP_STREAK consecutive opposing snapshots (~45s at 15s refresh)
   // before accepting a direction change. A single wick candle is ignored.
   if (!window._predLock) window._predLock = {};
-  const _BUCKET_MS    = 15 * 60 * 1000;
+  const _BUCKET_MS = 15 * 60 * 1000;
   const MIN_FLIP_STREAK = 5; // 5 × 15s refresh = 75s of sustained opposing signal required (no fast-path)
 
   // Call after every PredictionEngine.runAll() to capture the current signal per coin
@@ -2353,7 +3196,7 @@
 
     PREDICTION_COINS.forEach(coin => {
       const p = preds[coin.sym];
-      
+
       // ── Record missing or disabled prediction as error ─────────────────────
       if (!p || !p.price) {
         if (window._aggregator) {
@@ -2375,8 +3218,8 @@
       }
 
       const signalDir = p.signal === 'strong_bull' || p.signal === 'bullish' ? 'UP'
-                      : p.signal === 'strong_bear' || p.signal === 'bearish' ? 'DOWN'
-                      : 'FLAT';
+        : p.signal === 'strong_bear' || p.signal === 'bearish' ? 'DOWN'
+          : 'FLAT';
       const scoreDir = p.score > 0.08 ? 'UP' : p.score < -0.08 ? 'DOWN' : 'FLAT';
       if (signalDir !== 'FLAT' && scoreDir !== 'FLAT' && signalDir !== scoreDir) {
         logContractError('signal_score_mismatch', coin.sym, {
@@ -2408,45 +3251,47 @@
       } else if (rawDir === 'FLAT' || rawDir === lock.lockedDir) {
         // Agrees with locked direction (or flat): reinforce, clear any flip streak
         lock.flipStreak = 0;
-        lock.flipDir    = null;
+        lock.flipDir = null;
       } else {
         // Opposing signal: accumulate streak
         if (lock.flipDir === rawDir) {
           lock.flipStreak++;
         } else {
-          lock.flipDir    = rawDir;
+          lock.flipDir = rawDir;
           lock.flipStreak = 1;
         }
         // ── Fast-path: pure drift flip needs only 1 snapshot ───────────────
         // If the proprietary momentum gate shows a hardGated clean flip
         // (driftPurity >= 0.60, streak confirmed), don't wait 45s — exit now.
-        const ft         = p.diagnostics?.fastTiming;
-        const pureFlip   = ft?.hardGated && ft?.momentumQuality >= 0.60
-                           && Math.sign(ft?.score || 0) !== 0
-                           && Math.sign(ft?.score || 0) !== (rawDir === 'UP' ? -1 : 1);
+        const ft = p.diagnostics?.fastTiming;
+        const pureFlip = ft?.hardGated && ft?.momentumQuality >= 0.60
+          && Math.sign(ft?.score || 0) !== 0
+          && Math.sign(ft?.score || 0) !== (rawDir === 'UP' ? -1 : 1);
         const requiredStreak = pureFlip ? 1 : MIN_FLIP_STREAK;
 
         if (lock.flipStreak >= requiredStreak) {
           // Sustained reversal confirmed — accept flip
           const oldDir = lock.lockedDir;
-          lock.lockedDir  = rawDir;
+          lock.lockedDir = rawDir;
           lock.flipStreak = 0;
-          lock.flipDir    = null;
+          lock.flipDir = null;
           if (oldDir !== 'FLAT') {
             const flipReason = pureFlip
               ? `Pure thin drift flip detected · ${(ft.momentumQuality * 100).toFixed(0)}% quality`
               : `${coin.sym} ${oldDir}→${rawDir} confirmed (${requiredStreak}× sustained)`;
             try {
-              window.dispatchEvent(new CustomEvent('cfm:earlyExit', { detail: {
-                sym:        coin.sym,
-                reason:     flipReason,
-                strength:   pureFlip ? Math.min(0.95, 0.70 + ft.momentumQuality * 0.25) : 0.8,
-                prediction: oldDir,
-                type:       pureFlip ? 'pure_drift_flip' : 'confirmed_prediction_flip',
-                severity:   'high',
-                shouldExit: true,
-                driftQuality: ft?.momentumQuality ?? null,
-              }}));
+              window.dispatchEvent(new CustomEvent('cfm:earlyExit', {
+                detail: {
+                  sym: coin.sym,
+                  reason: flipReason,
+                  strength: pureFlip ? Math.min(0.95, 0.70 + ft.momentumQuality * 0.25) : 0.8,
+                  prediction: oldDir,
+                  type: pureFlip ? 'pure_drift_flip' : 'confirmed_prediction_flip',
+                  severity: 'high',
+                  shouldExit: true,
+                  driftQuality: ft?.momentumQuality ?? null,
+                }
+              }));
             } catch (_e) { /* non-critical */ }
           }
         }
@@ -2458,6 +3303,8 @@
         direction: dir, price: p.price, signal: p.signal, ts: nowMs,
         rawDir, flipStreak: lock.flipStreak, bucketTs: currentBucket,
       };
+
+      _journalPrediction(coin.sym, p, dir, currentBucket);
 
       // ── Record prediction in scorecard aggregator ───────────────────────
       if (window._aggregator) {
@@ -2484,10 +3331,10 @@
         try {
           const topDrivers = Array.isArray(p.diagnostics?.topDrivers)
             ? p.diagnostics.topDrivers.slice(0, 3).map(driver => ({
-                name: driver?.name || '',
-                value: Number(driver?.value || 0),
-                weight: Number(driver?.weight || 0),
-              }))
+              name: driver?.name || '',
+              value: Number(driver?.value || 0),
+              weight: Number(driver?.weight || 0),
+            }))
             : [];
           const kaCtx = p.projections?.p15?.kalshiAlign || null;
 
@@ -2516,53 +3363,56 @@
       const ka = p.projections?.p15?.kalshiAlign ?? null;
       if (ka?.ref != null && ka.kalshiYesPct != null) {
         // ── Compute fade state ───────────────────────────────────────────────
-        const _strikeDir   = ka.strikeDir === 'below' ? 'below' : 'above';
-        const _yesDir      = _strikeDir === 'below' ? 'down' : 'up';
-        const _noDir       = _yesDir === 'up' ? 'down' : 'up';
-        const _modelScore  = p.score ?? 0;
-        const _modelConf   = p.confidence ?? null;
+        const _strikeDir = ka.strikeDir === 'below' ? 'below' : 'above';
+        const _yesDir = _strikeDir === 'below' ? 'down' : 'up';
+        const _noDir = _yesDir === 'up' ? 'down' : 'up';
+        const _modelScore = p.score ?? 0;
+        const _modelConf = p.confidence ?? null;
         const _modelDirRaw = _modelScore > 0.08 ? 'up' : _modelScore < -0.08 ? 'down' : 'wait';
-        const _modelDir    = (ka.modelYesPct ?? 50) >= 58 ? _yesDir
-                           : (ka.modelYesPct ?? 50) <= 42 ? _noDir
-                           : _modelDirRaw;
-        const _kalshiDir   = ka.kalshiYesPct >= 50 ? _yesDir : _noDir;
-        const _fadeActive  = _modelDir !== 'wait' && _modelDir !== _kalshiDir;
-        const _fadeSolid   = _fadeActive && Math.abs(_modelScore) >= 0.20;
+        const _modelDir = (ka.modelYesPct ?? 50) >= 58 ? _yesDir
+          : (ka.modelYesPct ?? 50) <= 42 ? _noDir
+            : _modelDirRaw;
+        const _kalshiDir = ka.kalshiYesPct >= 50 ? _yesDir : _noDir;
+        const _fadeActive = _modelDir !== 'wait' && _modelDir !== _kalshiDir;
+        const _fadeSolid = _fadeActive && Math.abs(_modelScore) >= 0.20;
         // betAction: same priority as prediction card — Kalshi certainty → CDF yesPct → raw score
-        const _snapDir     = ka.kalshiYesPct >= 90 ? _yesDir
-                           : ka.kalshiYesPct <= 10 ? _noDir
-                           : (ka.modelYesPct ?? 50) >= 58 ? _yesDir
-                           : (ka.modelYesPct ?? 50) <= 42 ? _noDir
-                           : _modelDirRaw;
-        const _betAction   = _snapDir === _yesDir ? 'YES' : _snapDir === _noDir ? 'NO' : null;
+        const _snapDir = ka.kalshiYesPct >= 90 ? _yesDir
+          : ka.kalshiYesPct <= 10 ? _noDir
+            : (ka.modelYesPct ?? 50) >= 58 ? _yesDir
+              : (ka.modelYesPct ?? 50) <= 42 ? _noDir
+                : _modelDirRaw;
+        const _betAction = _snapDir === _yesDir ? 'YES' : _snapDir === _noDir ? 'NO' : null;
 
         // ── Update Market Divergence tracker for this coin ──────────────────
         const _mdiv = updateMarketDivergence(coin.sym, _modelDir, _kalshiDir, ka.kalshiYesPct, _modelScore);
 
         window._lastKalshiSnapshot[coin.sym] = {
-          ref:          ka.ref,
-          kYesPct:      ka.kalshiYesPct,
-          mYesPct:      ka.modelYesPct,
-          modelDir:     _snapDir,
-          ts:           nowMs,
+          ref: ka.ref,
+          kYesPct: ka.kalshiYesPct,
+          mYesPct: ka.modelYesPct,
+          modelDir: _snapDir,
+          ts: nowMs,
           // Contract structural fields — now passed through from prediction-markets.js
-          floorPrice:   ka.floorPrice    ?? ka.ref,
-          capPrice:     ka.capPrice      ?? null,
-          strikeDir:    _strikeDir,
-          strikeType:   ka.strikeType    ?? null,
-          ticker:       ka.ticker        ?? null,
-          closeTimeMs:  ka.closeTimeMs   ?? null,
+          floorPrice: ka.floorPrice ?? ka.ref,
+          capPrice: ka.capPrice ?? null,
+          strikeDir: _strikeDir,
+          strikeType: ka.strikeType ?? null,
+          ticker: ka.ticker ?? null,
+          closeTimeMs: ka.closeTimeMs ?? null,
           // Diagnostic flags
-          dirConflict:  ka.dirConflict   ?? false,
+          dirConflict: ka.dirConflict ?? false,
           cdfImpliedDir: ka.cdfImpliedDir ?? null,
           // Fade & model state
-          fadeActive:   _fadeActive,
-          fadeSolid:    _fadeSolid,
-          betAction:    _betAction,
-          modelScore:   _modelScore,
-          modelConf:    _modelConf,
+          fadeActive: _fadeActive,
+          fadeSolid: _fadeSolid,
+          betAction: _betAction,
+          modelScore: _modelScore,
+          modelConf: _modelConf,
+          quantRegime: p.diagnostics?.quantRegime || null,
+          cfmCalibration: p.diagnostics?.cfmCalibration || null,
+          executionGuard: p.diagnostics?.executionGuard || null,
           // Market Divergence state
-          mdivPhase:     _mdiv.phase     ?? 'STALE',
+          mdivPhase: _mdiv.phase ?? 'STALE',
           mdivDurationMs: _mdiv.durationMs ?? 0,
           mdivCatchupDelta: _mdiv.catchupDelta ?? 0,
           // Signal components for per-indicator gradient descent retuner
@@ -2583,7 +3433,7 @@
     // TODO: re-enable with 4+ coin threshold and MIN_FLIP_STREAK=7
 
     if (window._contractCache?.flushSync) {
-      try { window._contractCache.flushSync(); } catch (_) {}
+      try { window._contractCache.flushSync(); } catch (_) { }
     }
     saveLastPred();
     saveLastKalshi();
@@ -2608,41 +3458,41 @@
 
     if (isDiverging) {
       if (!buf.active || !buf.firstDivTs) {
-        buf.active         = true;
-        buf.firstDivTs     = now;
+        buf.active = true;
+        buf.firstDivTs = now;
         buf.entryKalshiPct = kalshiPct ?? 50;
-        buf.entryScore     = score;
-        buf.entryModelDir  = modelDir;
-        buf.peakScore      = Math.abs(score);
+        buf.entryScore = score;
+        buf.entryModelDir = modelDir;
+        buf.peakScore = Math.abs(score);
       }
-      buf.durationMs       = now - buf.firstDivTs;
+      buf.durationMs = now - buf.firstDivTs;
       buf.currentKalshiPct = kalshiPct ?? 50;
-      buf.currentScore     = score;
-      buf.peakScore        = Math.max(buf.peakScore ?? 0, Math.abs(score));
+      buf.currentScore = score;
+      buf.peakScore = Math.max(buf.peakScore ?? 0, Math.abs(score));
 
       // catchupDelta > 0 means Kalshi is moving TOWARD the model's direction
       // (market catching up). Negative means diverging further.
       const catchupDelta = modelDir === 'up'
         ? buf.currentKalshiPct - buf.entryKalshiPct   // UP call → want YES% to rise
-        : buf.entryKalshiPct   - buf.currentKalshiPct; // DOWN call → want YES% to fall
+        : buf.entryKalshiPct - buf.currentKalshiPct; // DOWN call → want YES% to fall
       buf.catchupDelta = catchupDelta;
 
       const sec = buf.durationMs / 1000;
-      if      (catchupDelta >= 5)                              buf.phase = 'CATCHING';
-      else if (catchupDelta <= -8)                             buf.phase = 'DIVERGING';
-      else if (sec < 60 && Math.abs(score) >= 0.20)           buf.phase = 'PRIME';
-      else if (sec < 150)                                      buf.phase = 'ACTIVE';
-      else                                                     buf.phase = 'LATE';
+      if (catchupDelta >= 5) buf.phase = 'CATCHING';
+      else if (catchupDelta <= -8) buf.phase = 'DIVERGING';
+      else if (sec < 60 && Math.abs(score) >= 0.20) buf.phase = 'PRIME';
+      else if (sec < 150) buf.phase = 'ACTIVE';
+      else buf.phase = 'LATE';
     } else {
       if (buf.active && buf.firstDivTs) {
-        buf.resolvedTs    = now;
-        buf.resolvedInMs  = now - buf.firstDivTs;
+        buf.resolvedTs = now;
+        buf.resolvedInMs = now - buf.firstDivTs;
         buf.resolvedPhase = buf.phase;
       }
-      buf.active       = false;
-      buf.firstDivTs   = null;
-      buf.phase        = 'STALE';
-      buf.durationMs   = 0;
+      buf.active = false;
+      buf.firstDivTs = null;
+      buf.phase = 'STALE';
+      buf.durationMs = 0;
       buf.catchupDelta = 0;
     }
     window._marketDivergence[sym] = buf;
@@ -2658,15 +3508,17 @@
     if (!recent.length) return null;
     const correct = recent.filter(e => e.correct).length;
     return {
-      total:    recent.length,
+      total: recent.length,
       correct,
       accuracy: (correct / recent.length) * 100,
-      avgMove:  recent.reduce((s, e) => s + Math.abs(e.pctMove), 0) / recent.length,
-      perCoin:  PREDICTION_COINS.map(c => {
+      avgMove: recent.reduce((s, e) => s + Math.abs(e.pctMove), 0) / recent.length,
+      perCoin: PREDICTION_COINS.map(c => {
         const coinLog = recent.filter(e => e.sym === c.sym);
         const cc = coinLog.filter(e => e.correct).length;
-        return { sym: c.sym, total: coinLog.length, correct: cc,
-                 accuracy: coinLog.length ? (cc / coinLog.length) * 100 : null };
+        return {
+          sym: c.sym, total: coinLog.length, correct: cc,
+          accuracy: coinLog.length ? (cc / coinLog.length) * 100 : null
+        };
       }).filter(x => x.total > 0)
     };
   }
@@ -2681,7 +3533,7 @@
     const bucketClose = bucket.t + 15 * 60 * 1000;
     if (stored.ts > bucketClose) return;
 
-    const actual  = bucket.c > bucket.o ? 'UP' : bucket.c < bucket.o ? 'DOWN' : 'FLAT';
+    const actual = bucket.c > bucket.o ? 'UP' : bucket.c < bucket.o ? 'DOWN' : 'FLAT';
     const pctMove = stored.price > 0
       ? ((bucket.c - stored.price) / stored.price) * 100
       : ((bucket.c - bucket.o) / bucket.o) * 100;
@@ -2703,8 +3555,8 @@
     if (kSnap?.ref != null && kSnap.ts <= bucketClose) {
       // Guard: verify this snapshot's Kalshi contract belongs to THIS 15m bucket.
       const bucketOpen = bucketClose - 15 * 60_000;
-      const kCloseMs   = kSnap.closeTimeMs;
-      const windowOk   = kCloseMs == null
+      const kCloseMs = kSnap.closeTimeMs;
+      const windowOk = kCloseMs == null
         || (kCloseMs >= bucketOpen - 120_000 && kCloseMs <= bucketClose + 120_000);
       if (!windowOk) {
         console.warn(`[KalshiTracker] ${sym} ticker=${kSnap.ticker} closeTime=${kCloseMs} outside bucket [${bucketOpen}–${bucketClose}] — skipped`);
@@ -2712,13 +3564,13 @@
           ticker: kSnap.ticker, kCloseMs, bucketOpen, bucketClose,
         });
       } else {
-        const refPrice     = (kSnap.floorPrice > 0 ? kSnap.floorPrice : null) ?? kSnap.ref;
-        const strikeDir    = kSnap.strikeDir ?? 'above';
+        const refPrice = (kSnap.floorPrice > 0 ? kSnap.floorPrice : null) ?? kSnap.ref;
+        const strikeDir = kSnap.strikeDir ?? 'above';
         const isBelowContract = strikeDir === 'below';
 
         // Direction-aware resolution: below contracts flip the yes/no comparison
-        const yesResolved  = isBelowContract ? (bucket.c < refPrice) : (bucket.c >= refPrice);
-        const refDiffPct   = Math.abs(bucket.c - refPrice) / refPrice * 100;
+        const yesResolved = isBelowContract ? (bucket.c < refPrice) : (bucket.c >= refPrice);
+        const refDiffPct = Math.abs(bucket.c - refPrice) / refPrice * 100;
         // Wick detection: candle H/L straddles the ref price — close is unreliable
         // proxy for CF Benchmarks 60s TWAP. Flag and defer to authoritative result.
         const wickStraddle = bucket.l != null && bucket.h != null
@@ -2728,8 +3580,8 @@
           ? Math.max(bucket.h - refPrice, refPrice - bucket.l) / refPrice * 100
           : 0;
         // Near-ref: within 0.15% — TWAP and single-price can diverge on thin wicks
-        const nearRef      = refDiffPct < 0.15;
-        const pendingAuth  = wickStraddle || nearRef;
+        const nearRef = refDiffPct < 0.15;
+        const pendingAuth = wickStraddle || nearRef;
 
         // Proxy confidence: lower when wick straddles ref or price is very close
         const proxyConfidence = wickStraddle ? 45 : (refDiffPct < 0.30 ? 72 : 88);
@@ -2764,38 +3616,42 @@
         }
 
         const kEntry = {
-          sym, ts: Date.now(), ref: refPrice,
-          ticker:          kSnap.ticker ?? null,
+          sym, ts: Date.now(), settledTs: Date.now(), ref: refPrice,
+          ticker: kSnap.ticker ?? null,
           strikeDir,
-          outcome:         yesResolved ? 'YES' : 'NO',
-          proxyOutcome:    yesResolved ? 'YES' : 'NO',
+          outcome: yesResolved ? 'YES' : 'NO',
+          actualOutcome: yesResolved ? 'UP' : 'DOWN',
+          proxyOutcome: yesResolved ? 'YES' : 'NO',
           proxyConfidence,
-          kYesPct:         kSnap.kYesPct,
-          mYesPct:         kSnap.mYesPct,
-          modelDir:        kSnap.modelDir,
-          cdfImpliedDir:   kSnap.cdfImpliedDir ?? null,
+          kYesPct: kSnap.kYesPct,
+          mYesPct: kSnap.mYesPct,
+          modelDir: kSnap.modelDir,
+          cdfImpliedDir: kSnap.cdfImpliedDir ?? null,
           dirConflict,
-          closePrice:      +bucket.c.toFixed(6),
-          candleH:         bucket.h != null ? +bucket.h.toFixed(6) : null,
-          candleL:         bucket.l != null ? +bucket.l.toFixed(6) : null,
-          refDiffPct:      +refDiffPct.toFixed(4),
-          wickSize:        +wickSize.toFixed(4),
-          marketCorrect:   (kSnap.kYesPct >= 50) === yesResolved,
-          modelCorrect:    kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
-          _pendingAuth:    pendingAuth || dirConflict,
-          _wickStraddle:   wickStraddle,
-          _nearRef:        nearRef,
-          _dirConflict:    dirConflict,
+          closePrice: +bucket.c.toFixed(6),
+          candleH: bucket.h != null ? +bucket.h.toFixed(6) : null,
+          candleL: bucket.l != null ? +bucket.l.toFixed(6) : null,
+          refDiffPct: +refDiffPct.toFixed(4),
+          wickSize: +wickSize.toFixed(4),
+          marketCorrect: (kSnap.kYesPct >= 50) === yesResolved,
+          modelCorrect: kSnap.mYesPct != null ? (kSnap.mYesPct >= 50) === yesResolved : null,
+          _pendingAuth: pendingAuth || dirConflict,
+          _wickStraddle: wickStraddle,
+          _nearRef: nearRef,
+          _dirConflict: dirConflict,
           // Fade & market divergence state (filled from snapshot; fadeCorrect back-filled on authoritative settle)
-          fadeActive:      kSnap.fadeActive      ?? false,
-          fadeSolid:       kSnap.fadeSolid       ?? false,
-          betAction:       kSnap.betAction       ?? null,
-          modelScore:      kSnap.modelScore      ?? null,
-          modelConf:       kSnap.modelConf       ?? null,
-          mdivPhase:       kSnap.mdivPhase       ?? 'STALE',
-          mdivDurationMs:  kSnap.mdivDurationMs  ?? 0,
+          fadeActive: kSnap.fadeActive ?? false,
+          fadeSolid: kSnap.fadeSolid ?? false,
+          betAction: kSnap.betAction ?? null,
+          modelScore: kSnap.modelScore ?? null,
+          modelConf: kSnap.modelConf ?? null,
+          quantRegime: kSnap.quantRegime ?? null,
+          cfmCalibration: kSnap.cfmCalibration ?? null,
+          executionGuard: kSnap.executionGuard ?? null,
+          mdivPhase: kSnap.mdivPhase ?? 'STALE',
+          mdivDurationMs: kSnap.mdivDurationMs ?? 0,
           mdivCatchupDelta: kSnap.mdivCatchupDelta ?? 0,
-          fadeCorrect:     null, // back-filled by market15m:resolved
+          fadeCorrect: null, // back-filled by market15m:resolved
           // Signal components for per-indicator gradient descent retuner
           signalComponents: kSnap.signalComponents ?? null,
           // 2-minute prediction trail from this contract window
@@ -2817,7 +3673,7 @@
               confidence: proxyConfidence,
             });
             console.log(`[Settlement] ✓ Recorded ${sym}`);
-          } catch (e) { 
+          } catch (e) {
             console.error(`[Settlement] ✗ Error recording ${sym}:`, e);
           }
         } else {
@@ -2868,23 +3724,23 @@
     const coin = WATCHLIST.find(c => c.sym === sym);
     if (!coin || coin.instrument !== chartCoin) return;
     const bar = {
-      time:  Math.floor(bucket.t / 1000),
-      open:  bucket.o,
-      high:  bucket.h,
-      low:   bucket.l,
+      time: Math.floor(bucket.t / 1000),
+      open: bucket.o,
+      high: bucket.h,
+      low: bucket.l,
       close: bucket.c,
     };
     try {
       chartSeries.candles.update(bar);
       chartSeries.volume.update({
-        time:  bar.time,
+        time: bar.time,
         value: bucket.v,
         color: bucket.c >= bucket.o ? 'rgba(38,212,126,0.3)' : 'rgba(255,75,110,0.3)',
       });
     } catch (_) { /* lightweight-charts may reject out-of-order bars */ }
   }
 
-  window.addEventListener('candleWS:1mTick',   (e) => { if (e.detail) _push1mToChart(e.detail.sym, e.detail.bucket); });
+  window.addEventListener('candleWS:1mTick', (e) => { if (e.detail) _push1mToChart(e.detail.sym, e.detail.bucket); });
   window.addEventListener('candleWS:1mClosed', (e) => { if (e.detail) _push1mToChart(e.detail.sym, e.detail.bucket); });
 
   // ── Authoritative Kalshi settlement back-fill ─────────────────────────────
@@ -2895,6 +3751,7 @@
     const {
       sym, outcome, kalshiResult, modelCorrect, marketCorrect, ticker,
       refPrice, floorPrice, strikeDir, cbSettlePrice,
+      settlementAuthority, canonical, schemaVersion,
     } = e.detail || {};
     if (!sym || !outcome) return;
 
@@ -2931,18 +3788,18 @@
         logContractError('proxy_mismatch', sym, {
           ticker, proxy: entry.outcome, authoritative: authOutcomeYN,
           kalshiResult,
-          refPrice:        floorPrice ?? refPrice ?? entry.ref,  // floor_price preferred
-          floorPrice:      floorPrice ?? null,
-          strikeDir:       strikeDir  ?? 'above',
+          refPrice: floorPrice ?? refPrice ?? entry.ref,  // floor_price preferred
+          floorPrice: floorPrice ?? null,
+          strikeDir: strikeDir ?? 'above',
           proxyClosePrice: entry.closePrice, cbSettlePrice,
           refDiffPct: entry.refDiffPct, wickStraddle: entry._wickStraddle,
           nearRef: entry._nearRef, kYesPct: entry.kYesPct, mYesPct: entry.mYesPct,
         });
       }
 
-      entry.outcome        = authOutcomeYN;          // canonical YES/NO
-      entry.modelCorrect   = modelCorrect  ?? entry.modelCorrect;
-      entry.marketCorrect  = marketCorrect ?? entry.marketCorrect;
+      entry.outcome = authOutcomeYN;          // canonical YES/NO
+      entry.modelCorrect = modelCorrect ?? entry.modelCorrect;
+      entry.marketCorrect = marketCorrect ?? entry.marketCorrect;
       // Back-fill fadeCorrect: was the model's fade bet right?
       if (entry.fadeActive && entry.betAction) {
         entry.fadeCorrect = entry.betAction === authOutcomeYN;
@@ -2952,14 +3809,28 @@
           `mdivPhase=${entry.mdivPhase ?? '?'}`
         );
       }
-      entry._settled       = true;
+      entry._settled = true;
       entry._proxyMismatch = proxyMismatch;
-      entry._refPrice      = floorPrice ?? refPrice ?? entry.ref;  // floor_price preferred
-      entry._floorPrice    = floorPrice   ?? null;
-      entry._strikeDir     = strikeDir    ?? 'above';
+      entry._refPrice = floorPrice ?? refPrice ?? entry.ref;  // floor_price preferred
+      entry._floorPrice = floorPrice ?? null;
+      entry._strikeDir = strikeDir ?? 'above';
       entry._cbSettlePrice = cbSettlePrice ?? null;
-      entry._kalshiResult  = kalshiResult  ?? null;  // raw 'yes'/'no'
-      
+      entry._kalshiResult = kalshiResult ?? null;  // raw 'yes'/'no'
+      entry._settlementAuthority = settlementAuthority || 'kalshi_api';
+      entry._canonical = canonical === true;
+      entry._resolverSchemaVersion = schemaVersion || 'resolver.v1';
+      entry.settledTs = entry.settledTs || Date.now();
+      entry.actualOutcome = authOutcomeYN === 'YES' ? 'UP' : 'DOWN';
+
+      _journalSettlement(sym, entry.actualOutcome, cbSettlePrice ?? entry.closePrice ?? null, {
+        source: 'market15m:resolved',
+        ticker: entry.ticker || ticker || null,
+        modelCorrect: entry.modelCorrect,
+        confidence: entry.modelConf ?? null,
+        regime: entry.quantRegime?.state || 'UNKNOWN',
+        predictionDir: entry.modelDir || null,
+      });
+
       // ── Record trade for adaptive tuning ─────────────────────────
       if (window._adaptiveTuner && entry.modelScore != null && entry.modelCorrect != null) {
         window._adaptiveTuner.recordTrade(sym, {
@@ -2985,7 +3856,7 @@
           } catch (_) { /* non-blocking */ }
         }
       }
-      
+
       saveKalshiLog();
       if (currentView === 'predictions' && predsLoaded) updateAccuracyBadge();
       break;
@@ -2997,7 +3868,7 @@
     if (!window._kalshiLog || !Array.isArray(window._kalshiLog)) return;
     const seen = new Set();
     let loaded = 0;
-    
+
     window._kalshiLog.forEach(contract => {
       // Deduplicate by sym + resolved_at
       const key = `${contract.sym}|${contract.resolved_at}`;
@@ -3007,7 +3878,7 @@
         if (contract.outcome && contract._settled) {
           // Ensure contractCache exists
           if (!window.contractCache) window.contractCache = [];
-          
+
           window.contractCache.push({
             sym: contract.sym,
             direction: contract.direction,
@@ -3026,7 +3897,7 @@
         }
       }
     });
-    
+
     if (loaded > 0) {
       console.log(`✅ [KalshiHistoricalLoader] Loaded ${loaded} historical contracts from _kalshiLog`);
     }
@@ -3055,34 +3926,34 @@
       activeToasts.get(sym).remove();
       activeToasts.delete(sym);
     }
-    const strPct    = Math.round((strength || 0) * 100);
-    const isMacro   = type === 'macro_market_move';
-    const isPure    = type === 'pure_drift_flip';
-    const isFlip    = type === 'confirmed_prediction_flip' || isPure || isMacro;
-    const isWall    = type === 'coordinated_sell' || (!isMacro && !isPure && isFlip);
-    const coin      = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
-    const icon      = coin?.icon || sym;
+    const strPct = Math.round((strength || 0) * 100);
+    const isMacro = type === 'macro_market_move';
+    const isPure = type === 'pure_drift_flip';
+    const isFlip = type === 'confirmed_prediction_flip' || isPure || isMacro;
+    const isWall = type === 'coordinated_sell' || (!isMacro && !isPure && isFlip);
+    const coin = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
+    const icon = coin?.icon || sym;
 
     const label = isMacro ? '🚨 EXIT NOW — MARKET WIDE'
-                : isPure  ? '🔄 DRIFT FLIP — EXIT NOW'
-                : isFlip  ? '🔄 SIGNAL FLIP'
-                : isWall  ? '⚠️ WALL EVENT'
-                          : '⚡ EARLY EXIT';
+      : isPure ? '🔄 DRIFT FLIP — EXIT NOW'
+        : isFlip ? '🔄 SIGNAL FLIP'
+          : isWall ? '⚠️ WALL EVENT'
+            : '⚡ EARLY EXIT';
 
     const bdrColor = isMacro ? '#ff2222'
-                   : isPure  ? 'var(--color-down,#f45)'
-                   : isWall  ? 'var(--color-gold,#f90)'
-                             : 'var(--color-down,#f45)';
+      : isPure ? 'var(--color-down,#f45)'
+        : isWall ? 'var(--color-gold,#f90)'
+          : 'var(--color-down,#f45)';
 
     const strColor = strength >= 0.7 ? bdrColor : strength >= 0.45 ? 'var(--color-gold)' : 'var(--color-text-muted)';
 
     const bodyText = isMacro
       ? `${detail.macroCoins ?? '3+'}/${(typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS.length : '?')} coins moving <b>${detail.macroDir || ''}</b> — your <b>${prediction}</b> contract is wrong side`
       : isPure
-      ? `Pure thin drift flip · ${(detail.driftQuality != null ? Math.round(detail.driftQuality * 100) + '% quality' : '')} · exit your <b>${prediction}</b> now`
-      : isWall && !isFlip
-      ? `Cross-coin sell detected · exit ${prediction} bet now`
-      : `${prediction} call reversed · momentum flip`;
+        ? `Pure thin drift flip · ${(detail.driftQuality != null ? Math.round(detail.driftQuality * 100) + '% quality' : '')} · exit your <b>${prediction}</b> now`
+        : isWall && !isFlip
+          ? `Cross-coin sell detected · exit ${prediction} bet now`
+          : `${prediction} call reversed · momentum flip`;
 
     const toast = document.createElement('div');
     toast.setAttribute('data-exit-toast', sym);
@@ -3118,7 +3989,7 @@
   }
 
 
-  function price(ticker)  { return ticker ? parseFloat(ticker.last || 0) : 0; }
+  function price(ticker) { return ticker ? parseFloat(ticker.last || 0) : 0; }
   function change(ticker) { return ticker ? parseFloat(ticker.change) * 100 : 0; }
   function volume(ticker) { return ticker ? parseFloat(ticker.volume_value || 0) : 0; }
   function high(ticker) { return ticker ? parseFloat(ticker.high) : 0; }
@@ -3181,7 +4052,7 @@
   function coinIcon(sym) {
     if (_iconCache.has(sym)) return _iconCache.get(sym);
 
-    const pc   = PREDICTION_COINS?.find(c => c.sym === sym);
+    const pc = PREDICTION_COINS?.find(c => c.sym === sym);
     const hold = typeof PORTFOLIO_HOLDINGS !== 'undefined' ? PORTFOLIO_HOLDINGS?.find(h => h.sym === sym) : null;
     const textFb = pc?.icon || hold?.icon || sym.slice(0, 2);
 
@@ -3341,7 +4212,8 @@
     if (currentView === 'screener') { renderScreener(); return; }
     if (currentView === 'universe') { renderUniverse(); return; }
     if (currentView === 'markets5m') { renderMarkets5M(); return; }
-    if (currentView === 'debuglog')  { renderDebugLog();  return; }
+    if (currentView === 'debuglog') { renderDebugLog(); return; }
+    if (currentView === 'observability') { renderObservability(); return; }
     render();
   }
 
@@ -3362,23 +4234,27 @@
     const doge = tickers['DOGEUSD'];
     if (!btc && !sol && !xrp) return;
     const cacheAge = Date.now() - (window._lastTickerFetchTs || Date.now());
-    const stalePart = cacheAge > 30000
-      ? `<span class="stale-badge">CACHED ${Math.floor(cacheAge/60000)}m ago</span>`
-      : '';
+    const asyncMode = !!window._asyncRefreshEngine;
+    // Calculate countdown to next refresh (shows how many seconds until next refresh)
+    const nextRefreshMs = Math.max(15000, (refreshSecs || 15) * 1000);
+    const countdownSecs = Math.max(0, Math.ceil((nextRefreshMs - cacheAge) / 1000));
+    const stalePart = cacheAge > 15000
+      ? `<span class="stale-badge">${asyncMode ? 'ASYNC' : 'LIVE'} ${Math.max(1, Math.ceil(cacheAge / 1000))}s ago</span>`
+      : `<span class="stale-badge">${asyncMode ? 'ASYNC' : 'LIVE'} ${countdownSecs}s</span>`;
     ms.innerHTML = [
       `<div class="ms-item"><span>Targets</span> <span class="ms-val">${PREDICTION_COINS.length}</span></div>`,
       `<div class="ms-item"><span>Feeds</span> <span class="ms-val">4</span></div>`,
       `<div class="ms-item"><span>Cadence</span> <span class="ms-val">15s</span></div>`,
       window.CandleWS
-        ? `<div class="ms-item"><span>15m</span> <span class="ms-val" style="color:${CandleWS.isConnected()?'var(--color-up)':'var(--color-muted)'}">` +
-          (CandleWS.isConnected()
-            ? `${Math.floor(CandleWS.getMsUntilClose()/1000)}s`
-            : 'WS…') +
-          `</span></div>`
+        ? `<div class="ms-item"><span>15m</span> <span class="ms-val" style="color:${CandleWS.isConnected() ? 'var(--color-up)' : 'var(--color-muted)'}">` +
+        (CandleWS.isConnected()
+          ? `${Math.floor(CandleWS.getMsUntilClose() / 1000)}s`
+          : 'WS…') +
+        `</span></div>`
         : '',
-      btc  ? `<div class="ms-item"><span>BTC</span> <span class="ms-val">${fmtPrice(price(btc))}</span> <span class="ms-chg ${posneg(change(btc))}">${fmtPct(change(btc))}</span></div>` : '',
-      sol  ? `<div class="ms-item"><span>SOL</span> <span class="ms-val">${fmtPrice(price(sol))}</span> <span class="ms-chg ${posneg(change(sol))}">${fmtPct(change(sol))}</span></div>` : '',
-      xrp  ? `<div class="ms-item"><span>XRP</span> <span class="ms-val">${fmtPrice(price(xrp))}</span> <span class="ms-chg ${posneg(change(xrp))}">${fmtPct(change(xrp))}</span></div>` : '',
+      btc ? `<div class="ms-item"><span>BTC</span> <span class="ms-val">${fmtPrice(price(btc))}</span> <span class="ms-chg ${posneg(change(btc))}">${fmtPct(change(btc))}</span></div>` : '',
+      sol ? `<div class="ms-item"><span>SOL</span> <span class="ms-val">${fmtPrice(price(sol))}</span> <span class="ms-chg ${posneg(change(sol))}">${fmtPct(change(sol))}</span></div>` : '',
+      xrp ? `<div class="ms-item"><span>XRP</span> <span class="ms-val">${fmtPrice(price(xrp))}</span> <span class="ms-chg ${posneg(change(xrp))}">${fmtPct(change(xrp))}</span></div>` : '',
       doge ? `<div class="ms-item"><span>DOGE</span> <span class="ms-val">${fmtPrice(price(doge))}</span> <span class="ms-chg ${posneg(change(doge))}">${fmtPct(change(doge))}</span></div>` : '',
       stalePart,
     ].join('');
@@ -3404,8 +4280,8 @@
   let _markets5mCountdown = null;
   function renderMarkets5M() {
     if (_markets5mCountdown) { clearInterval(_markets5mCountdown); _markets5mCountdown = null; }
-    const pm     = window.PredictionMarkets?.getAll() || {};
-    const pred   = window.PredictionEngine?.getAll() || {};
+    const pm = window.PredictionMarkets?.getAll() || {};
+    const pred = window.PredictionEngine?.getAll() || {};
     const snipes = window.PredictionMarkets?.getSnipes?.() || [];
     const COINS_5M = ['BTC', 'ETH', 'XRP', 'DOGE', 'BNB'];  // ★ REMOVED HYPE (48%) and SOL (52%)
 
@@ -3473,16 +4349,16 @@
       if (!p) return null;
       const conf = p.confidence ?? 0;
       const score = Math.abs(p.score ?? 0);
-      
+
       // High confidence (>70%) + Strong signal = SCALP opportunity
       if (conf > 70 && score > 0.65) return { type: 'SCALP_HIGH', msg: '⚡ SCALP 3-5m', color: '#4caf50' };
-      
+
       // Medium-high confidence + Moderate signal = Watch for exit
       if (conf > 60 && score > 0.55) return { type: 'SCALP_MED', msg: '📍 Watch exit 7-10m', color: '#ff9800' };
-      
+
       // Low confidence = Reversal risk
       if (conf < 45) return { type: 'REVERSAL_RISK', msg: '⚠️ Reversal risk near 12m', color: '#f44336' };
-      
+
       return null;
     }
     function _marketNote(sym, kalshiProb) {
@@ -3492,7 +4368,7 @@
       const kYes = Math.round(kalshiProb * 100);
       const mYes = Math.round(modelOdds * 100);
       const divergence = _modelDivergence(sym, kalshiProb);
-      
+
       if (divergence === 'DIVERGENCE') {
         const dir = modelOdds > kalshiProb ? 'Model bullish' : 'Model bearish';
         return `🔴 ${divergence}: ${dir} vs Kalshi`;
@@ -3504,8 +4380,8 @@
     }
     function _fmtVol(v) {
       if (!v || v < 1) return '';
-      if (v >= 1_000_000) return `$${(v/1_000_000).toFixed(1)}M`;
-      if (v >= 1_000)     return `$${(v/1_000).toFixed(0)}K`;
+      if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+      if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
       return `$${v.toFixed(0)}`;
     }
 
@@ -3514,37 +4390,37 @@
       <div style="background:rgba(255,200,0,0.08);border:1px solid rgba(255,200,0,0.3);border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
         <span style="font-size:13px;font-weight:800;color:#ffd700;letter-spacing:0.04em;">⚡ SNIPE ALERTS</span>
         ${snipes.map(s => {
-          const secsLeft = Math.floor(s.ms / 1000);
-          const mLeft    = Math.floor(secsLeft / 60);
-          const ssLeft   = secsLeft % 60;
-          const col      = s.dir === 'UP' ? 'var(--color-green)' : 'var(--color-red)';
-          return `<span style="background:var(--color-surface-2);border-radius:5px;padding:3px 9px;font-size:12px;font-weight:700;">
+      const secsLeft = Math.floor(s.ms / 1000);
+      const mLeft = Math.floor(secsLeft / 60);
+      const ssLeft = secsLeft % 60;
+      const col = s.dir === 'UP' ? 'var(--color-green)' : 'var(--color-red)';
+      return `<span style="background:var(--color-surface-2);border-radius:5px;padding:3px 9px;font-size:12px;font-weight:700;">
             <span style="color:${col}">${s.sym} ${s.dir}</span>
             <span style="color:var(--color-text-muted);margin:0 4px;">·</span>
             <span>${Math.round(s.prob * 100)}% YES</span>
-            <span style="color:var(--color-text-faint);margin-left:4px;">⏱ ${mLeft}m${String(ssLeft).padStart(2,'0')}s</span>
+            <span style="color:var(--color-text-faint);margin-left:4px;">⏱ ${mLeft}m${String(ssLeft).padStart(2, '0')}s</span>
           </span>`;
-        }).join('')}
+    }).join('')}
       </div>` : '';
 
     // ── Per-coin cards ──────────────────────────────────────────────────
     const cards = COINS_5M.map(sym => {
-      const coin    = pm[sym] || {};
-      const k5      = coin.kalshi15m || coin.kalshi5m;
-      const p5      = coin.poly != null ? { probability: coin.poly } : coin.poly5m;
-      const polyAll = coin.polyMarkets   || [];   // all Poly markets for coin
-      const poly5m  = coin.poly5mMkts    || [];   // short-term Poly markets
-      const tick    = tickers[WATCHLIST.find(w => w.sym === sym)?.instrument] || null;
-      const curPx   = tick ? price(tick) : null;
-      const proj    = _modelProj(sym);
+      const coin = pm[sym] || {};
+      const k5 = coin.kalshi15m || coin.kalshi5m;
+      const p5 = coin.poly != null ? { probability: coin.poly } : coin.poly5m;
+      const polyAll = coin.polyMarkets || [];   // all Poly markets for coin
+      const poly5m = coin.poly5mMkts || [];   // short-term Poly markets
+      const tick = tickers[WATCHLIST.find(w => w.sym === sym)?.instrument] || null;
+      const curPx = tick ? price(tick) : null;
+      const proj = _modelProj(sym);
 
-      const k5prob  = k5?.probability ?? null;
-      const p5prob  = p5?.probability ?? null;
+      const k5prob = k5?.probability ?? null;
+      const p5prob = p5?.probability ?? null;
 
       let combined5m = null;
-      if (k5prob != null && p5prob != null)      combined5m = k5prob * 0.50 + p5prob * 0.50;
-      else if (k5prob != null)                   combined5m = k5prob;
-      else if (p5prob != null)                   combined5m = p5prob;
+      if (k5prob != null && p5prob != null) combined5m = k5prob * 0.50 + p5prob * 0.50;
+      else if (k5prob != null) combined5m = k5prob;
+      else if (p5prob != null) combined5m = p5prob;
 
       const coinColor = sym === 'BTC' ? '#f7931a' : sym === 'ETH' ? '#627eea' : sym === 'SOL' ? '#9945ff' : sym === 'XRP' ? '#0085c0' : sym === 'BNB' ? '#f3ba2f' : sym === 'HYPE' ? '#34d399' : '#ba9f33';
 
@@ -3570,28 +4446,28 @@
 
           <!-- Live Rationale Pre-Prediction Block -->
           ${(() => {
-            const p = pred[sym];
-            if (!p || !p.rationale) return '';
-            const r = p.rationale;
-            const locked = r.preLocked ? `<div class="rationale-lock">⚡ PRE-LOCKED ${r.dirLabel}</div>` : '';
-            const regimeBadge = `<div class="regime-badge regime-${r.regimeKey}">${(p.liveRegime && p.liveRegime.label) || ''}</div>`;
-            const conviction = `<div class="conviction-bar">
+          const p = pred[sym];
+          if (!p || !p.rationale) return '';
+          const r = p.rationale;
+          const locked = r.preLocked ? `<div class="rationale-lock">⚡ PRE-LOCKED ${r.dirLabel}</div>` : '';
+          const regimeBadge = `<div class="regime-badge regime-${r.regimeKey}">${(p.liveRegime && p.liveRegime.label) || ''}</div>`;
+          const conviction = `<div class="conviction-bar">
               <span class="conv-label ${r.convLabel.toLowerCase()}">${r.convLabel} CONVICTION</span>
               <span class="conv-pct" style="color:var(--color-text-faint);font-size:10px">${(r.conviction * 100).toFixed(0)}%</span>
             </div>`;
-            const drivers = r.lines.slice(1, 3).map(l => `<div class="rationale-line">${l}</div>`).join('');
-            return `<div class="rationale-block">${locked}${regimeBadge}${conviction}${drivers}</div>`;
-          })()}
+          const drivers = r.lines.slice(1, 3).map(l => `<div class="rationale-line">${l}</div>`).join('');
+          return `<div class="rationale-block">${locked}${regimeBadge}${conviction}${drivers}</div>`;
+        })()}
 
           <!-- Market Divergence Alert -->
           ${k5prob != null ? (() => {
-            const note = _marketNote(sym, k5prob);
-            const isDivergent = note.includes('DIVERGENCE');
-            const isMismatch = note.includes('MISMATCH');
-            const bgColor = isDivergent ? 'rgba(255,77,77,0.1)' : isMismatch ? 'rgba(255,193,7,0.1)' : 'rgba(76,175,80,0.1)';
-            const borderColor = isDivergent ? 'rgba(255,77,77,0.4)' : isMismatch ? 'rgba(255,193,7,0.4)' : 'rgba(76,175,80,0.3)';
-            return `<div style="background:${bgColor};border:1px solid ${borderColor};border-radius:5px;padding:7px 10px;margin-bottom:8px;font-size:11px;color:var(--color-text);">${note}</div>`;
-          })() : ''}
+          const note = _marketNote(sym, k5prob);
+          const isDivergent = note.includes('DIVERGENCE');
+          const isMismatch = note.includes('MISMATCH');
+          const bgColor = isDivergent ? 'rgba(255,77,77,0.1)' : isMismatch ? 'rgba(255,193,7,0.1)' : 'rgba(76,175,80,0.1)';
+          const borderColor = isDivergent ? 'rgba(255,77,77,0.4)' : isMismatch ? 'rgba(255,193,7,0.4)' : 'rgba(76,175,80,0.3)';
+          return `<div style="background:${bgColor};border:1px solid ${borderColor};border-radius:5px;padding:7px 10px;margin-bottom:8px;font-size:11px;color:var(--color-text);">${note}</div>`;
+        })() : ''}
 
           <!-- Kalshi + Model row -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
@@ -3613,34 +4489,34 @@
             <div style="background:var(--color-surface-2);border-radius:6px;padding:10px;">
               <div style="font-size:10px;color:var(--color-text-faint);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Model Odds</div>
               ${(() => {
-                const modelOdds = _modelOdds(sym);
-                if (modelOdds == null) return `<span style="color:var(--color-text-faint);font-size:11px">Run predictions</span>`;
-                const action = modelOdds >= 0.55 ? '▲ BUY YES' : modelOdds <= 0.45 ? '▼ BUY NO' : '◆ WAIT';
-                const actionColor = modelOdds >= 0.55 ? 'var(--color-green)' : modelOdds <= 0.45 ? 'var(--color-red)' : 'var(--color-text-faint)';
-                return modelOdds != null ? `
+          const modelOdds = _modelOdds(sym);
+          if (modelOdds == null) return `<span style="color:var(--color-text-faint);font-size:11px">Run predictions</span>`;
+          const action = modelOdds >= 0.55 ? '▲ BUY YES' : modelOdds <= 0.45 ? '▼ BUY NO' : '◆ WAIT';
+          const actionColor = modelOdds >= 0.55 ? 'var(--color-green)' : modelOdds <= 0.45 ? 'var(--color-red)' : 'var(--color-text-faint)';
+          return modelOdds != null ? `
                   <div style="display:flex;gap:8px;align-items:baseline;margin-bottom:4px;">
                     <span style="color:${actionColor};font-size:14px;font-weight:700">${Math.round(modelOdds * 100)}%</span>
                     <span style="font-size:12px;color:var(--color-text-muted)">YES</span>
                   </div>
                   <div style="font-size:11px;color:var(--color-text-faint);margin-top:3px;">${action}</div>
                 ` : `<span style="color:var(--color-text-faint);font-size:11px">—</span>`;
-              })()}
+        })()}
             </div>
 
           </div>
 
           <!-- Scalp & Exit Timing -->
           ${(() => {
-            const scalpSig = _scalpSignal(sym);
-            if (!scalpSig) return '';
-            const bgColor = scalpSig.color === '#4caf50' ? 'rgba(76,175,80,0.15)' : scalpSig.color === '#ff9800' ? 'rgba(255,152,0,0.15)' : 'rgba(244,67,54,0.15)';
-            const borderCol = scalpSig.color;
-            return `
+          const scalpSig = _scalpSignal(sym);
+          if (!scalpSig) return '';
+          const bgColor = scalpSig.color === '#4caf50' ? 'rgba(76,175,80,0.15)' : scalpSig.color === '#ff9800' ? 'rgba(255,152,0,0.15)' : 'rgba(244,67,54,0.15)';
+          const borderCol = scalpSig.color;
+          return `
               <div style="background:${bgColor};border:2px solid ${borderCol};border-radius:6px;padding:9px 12px;margin-top:8px;font-size:12px;font-weight:700;color:${borderCol};text-align:center;box-shadow:0 0 12px ${borderCol}40;letter-spacing:0.5px;">
                 ${scalpSig.msg}
               </div>
             `;
-          })()}
+        })()}
 
           <!-- Polymarket markets list -->
           <div style="margin-top:10px;">
@@ -3650,16 +4526,16 @@
             ${displayPolyMkts.length ? `
               <div style="display:flex;flex-direction:column;gap:4px;">
                 ${displayPolyMkts.map(m => {
-                  const yes = m.yes;
-                  const col = yes >= 0.6 ? 'var(--color-green)' : yes <= 0.4 ? 'var(--color-red)' : 'var(--color-text-muted)';
-                  const endLabel = m.endDate ? (() => {
-                    const ms = new Date(m.endDate).getTime() - Date.now();
-                    if (ms <= 0) return 'closing';
-                    const h = Math.floor(ms / 3_600_000);
-                    const d = Math.floor(h / 24);
-                    return d > 0 ? `${d}d` : `${h}h`;
-                  })() : '';
-                  return `<div style="background:var(--color-surface-2);border-radius:5px;padding:7px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          const yes = m.yes;
+          const col = yes >= 0.6 ? 'var(--color-green)' : yes <= 0.4 ? 'var(--color-red)' : 'var(--color-text-muted)';
+          const endLabel = m.endDate ? (() => {
+            const ms = new Date(m.endDate).getTime() - Date.now();
+            if (ms <= 0) return 'closing';
+            const h = Math.floor(ms / 3_600_000);
+            const d = Math.floor(h / 24);
+            return d > 0 ? `${d}d` : `${h}h`;
+          })() : '';
+          return `<div style="background:var(--color-surface-2);border-radius:5px;padding:7px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
                     <span style="font-size:11px;color:var(--color-text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${m.question || ''}">${m.question || '—'}</span>
                     <span style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
                       <span style="font-size:13px;font-weight:700;color:${col}">${yes != null ? Math.round(yes * 100) + '¢' : '—'}</span>
@@ -3667,7 +4543,7 @@
                       ${m.vol24h > 0 ? `<span style="font-size:10px;color:var(--color-text-faint)">${_fmtVol(m.vol24h)}</span>` : ''}
                     </span>
                   </div>`;
-                }).join('')}
+        }).join('')}
               </div>
             ` : `<div style="color:var(--color-text-faint);font-size:11px;padding:4px 0">Fetching Polymarket data…</div>`}
           </div>
@@ -3710,20 +4586,20 @@
   // Shows Kalshi 15M settlement history, per-coin accuracy, missed
   // opportunities, edge buffer zone analysis, and live velocity table.
   function renderDebugLog() {
-    const log       = window.MarketResolver?.getLog?.()     || [];
+    const log = window.MarketResolver?.getLog?.() || [];
     const missedOps = window.MarketResolver?.getMissedOpps?.() || [];
-    const zones     = window.MarketResolver?.getBufferZones?.() || [];
-    const vels      = window.PredictionMarkets?.getAllVelocities?.() || {};
-    const pending   = window.MarketResolver?.getPending?.() || [];
-    
+    const zones = window.MarketResolver?.getBufferZones?.() || [];
+    const vels = window.PredictionMarkets?.getAllVelocities?.() || {};
+    const pending = window.MarketResolver?.getPending?.() || [];
+
     // ── CRITICAL: Merge historical contracts into settlement data ──
     const historical = window.getHistoricalContracts?.() || [];
     const mergedLog = [...log];
-    
+
     // Add historical contracts that aren't already in real-time log
     const existingKeys = new Set();
     log.forEach(e => existingKeys.add(`${e.settledTs || e.ts}-${e.sym}`));
-    
+
     historical.forEach(h => {
       const key = `${h.ts || h.settledTs}-${h.symbol}`;
       if (!existingKeys.has(key)) {
@@ -3737,21 +4613,21 @@
         });
       }
     });
-    
+
     // Sort by time
     const allData = mergedLog.sort((a, b) => (b.settledTs || 0) - (a.settledTs || 0));
-    
-    const COINS     = ['BTC','ETH','SOL','XRP','DOGE','BNB','HYPE'];
+
+    const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
 
     // ── Per-coin accuracy table ─────────────────────────────────────
     const accRows = COINS.map(sym => {
       const dataSource = window._accuracySource || 'auto';
-      
+
       // Force historical-only mode if user selected it
       if (dataSource === 'historical') {
         const stats = window.getAccuracyStats?.();
         const symStats = stats?.bySymbol?.[sym];
-        
+
         if (symStats && symStats.total > 0) {
           const acc = symStats.winRate / 100;
           const pct = symStats.winRate;
@@ -3765,17 +4641,17 @@
             <td style="color:var(--color-text-muted)">—</td>
           </tr>`;
         }
-        
+
         return `<tr><td>${sym}</td><td colspan="5" style="color:var(--color-text-faint)">—</td></tr>`;
       }
-      
+
       // Auto mode: use real-time if available, fall back to historical
       const a = window.MarketResolver?.getResolutionAccuracy?.(sym, 30);
-      
+
       if (!a) {
         const stats = window.getAccuracyStats?.();
         const symStats = stats?.bySymbol?.[sym];
-        
+
         if (symStats && symStats.total > 0) {
           const acc = symStats.winRate / 100;
           const pct = symStats.winRate;
@@ -3789,16 +4665,16 @@
             <td style="color:var(--color-text-muted)">—</td>
           </tr>`;
         }
-        
+
         return `<tr><td>${sym}</td><td colspan="5" style="color:var(--color-text-faint)">—</td></tr>`;
       }
-      
-      const pct  = (a.accuracy * 100).toFixed(0);
-      const col  = a.accuracy >= 0.60 ? 'var(--color-green)' : a.accuracy >= 0.50 ? 'var(--color-orange)' : 'var(--color-red)';
+
+      const pct = (a.accuracy * 100).toFixed(0);
+      const col = a.accuracy >= 0.60 ? 'var(--color-green)' : a.accuracy >= 0.50 ? 'var(--color-orange)' : 'var(--color-red)';
       const strk = a.streak > 0 ? `<span style="color:var(--color-green)">+${a.streak}🔥</span>`
-                 : a.streak < 0 ? `<span style="color:var(--color-red)">${a.streak}❄️</span>` : '0';
+        : a.streak < 0 ? `<span style="color:var(--color-red)">${a.streak}❄️</span>` : '0';
       const trendIcon = a.trend === 'improving' ? '▲' : a.trend === 'declining' ? '▼' : '→';
-      const trendCol  = a.trend === 'improving' ? 'var(--color-green)' : a.trend === 'declining' ? 'var(--color-red)' : 'var(--color-text-faint)';
+      const trendCol = a.trend === 'improving' ? 'var(--color-green)' : a.trend === 'declining' ? 'var(--color-red)' : 'var(--color-text-faint)';
       const calib = a.calibMultiplier != null ? a.calibMultiplier.toFixed(2) + '×' : '—';
       return `<tr>
         <td style="font-weight:700">${sym}</td>
@@ -3826,10 +4702,10 @@
     // ── Velocity table (live Kalshi probability drift) ──────────────
     const velRows = COINS.map(sym => {
       const v = vels[sym] || { trend: 'flat', velCentsPerMin: 0, acceleration: 0, samples: 0, latestProb: null };
-      const col     = v.trend === 'rising' ? 'var(--color-green)' : v.trend === 'falling' ? 'var(--color-red)' : 'var(--color-text-faint)';
-      const arrow   = v.trend === 'rising' ? '▲' : v.trend === 'falling' ? '▼' : '→';
+      const col = v.trend === 'rising' ? 'var(--color-green)' : v.trend === 'falling' ? 'var(--color-red)' : 'var(--color-text-faint)';
+      const arrow = v.trend === 'rising' ? '▲' : v.trend === 'falling' ? '▼' : '→';
       const latestP = v.latestProb != null ? Math.round(v.latestProb * 100) + '¢' : '—';
-      const accel   = v.acceleration > 0 ? `+${v.acceleration}` : v.acceleration.toString();
+      const accel = v.acceleration > 0 ? `+${v.acceleration}` : v.acceleration.toString();
       return `<tr>
         <td style="font-weight:700">${sym}</td>
         <td style="color:${col}">${arrow} ${v.trend}</td>
@@ -3843,10 +4719,10 @@
     // ── Recent settlements ──────────────────────────────────────────
     const recent = [...log].reverse().slice(0, 40);
     const settlementRows = recent.length ? recent.map(e => {
-      const ts    = new Date(e.settledTs || e.closeTimeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      const badge = e.modelCorrect === true  ? '<span style="color:var(--color-green);font-weight:800">✅ CORRECT</span>'
-                  : e.modelCorrect === false ? '<span style="color:var(--color-red);font-weight:800">❌ WRONG</span>'
-                  : '<span style="color:var(--color-text-faint)">? N/A</span>';
+      const ts = new Date(e.settledTs || e.closeTimeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const badge = e.modelCorrect === true ? '<span style="color:var(--color-green);font-weight:800">✅ CORRECT</span>'
+        : e.modelCorrect === false ? '<span style="color:var(--color-red);font-weight:800">❌ WRONG</span>'
+          : '<span style="color:var(--color-text-faint)">? N/A</span>';
       const edgeStr = e.edgeCents != null ? (e.edgeCents > 0 ? `+${e.edgeCents}¢` : `${e.edgeCents}¢`) : '—';
       const edgeCol = e.edgeCents >= 10 ? 'var(--color-green)' : e.edgeCents >= 5 ? 'var(--color-orange)' : e.edgeCents > 0 ? 'var(--color-text-muted)' : 'var(--color-red)';
       const actionBadge = e.orchestratorAction
@@ -3870,9 +4746,9 @@
 
     // ── Missed opportunities list ───────────────────────────────────
     const missedRows = missedOps.length ? [...missedOps].reverse().slice(0, 20).map(e => {
-      const ts     = new Date(e.settledTs || e.closeTimeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      const eStr   = e.missedOpportunity?.edgeCents != null ? `${e.missedOpportunity.edgeCents}¢` : '—';
-      const align  = e.missedOpportunity?.alignment ?? '—';
+      const ts = new Date(e.settledTs || e.closeTimeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      const eStr = e.missedOpportunity?.edgeCents != null ? `${e.missedOpportunity.edgeCents}¢` : '—';
+      const align = e.missedOpportunity?.alignment ?? '—';
       return `<tr>
         <td>${ts}</td>
         <td style="font-weight:700">${e.sym}</td>
@@ -3886,15 +4762,15 @@
     // ── Pending snapshots ───────────────────────────────────────────
     const pendingRows = pending.length ? pending.map(e => {
       const close = new Date(e.closeTimeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      const ms    = Math.max(0, e.closeTimeMs - Date.now());
-      const m     = Math.floor(ms / 60000);
-      const s     = Math.floor((ms % 60000) / 1000);
+      const ms = Math.max(0, e.closeTimeMs - Date.now());
+      const m = Math.floor(ms / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
       const edgeS = e.edgeCents != null ? `${e.edgeCents > 0 ? '+' : ''}${e.edgeCents}¢` : '—';
-      const actB  = e.orchestratorAction ? `<span style="background:var(--color-surface-3);border-radius:3px;padding:1px 5px;font-size:10px">${e.orchestratorAction}</span>` : '—';
+      const actB = e.orchestratorAction ? `<span style="background:var(--color-surface-3);border-radius:3px;padding:1px 5px;font-size:10px">${e.orchestratorAction}</span>` : '—';
       return `<tr>
         <td style="font-weight:700">${e.sym}</td>
         <td>${close}</td>
-        <td style="color:var(--color-orange)">${m}m${String(s).padStart(2,'0')}s</td>
+        <td style="color:var(--color-orange)">${m}m${String(s).padStart(2, '0')}s</td>
         <td style="color:var(--color-text-muted)">${e.modelDir ?? '—'}</td>
         <td>${edgeS}</td>
         <td>${actB}</td>
@@ -3922,43 +4798,680 @@
         </div>
 
         ${card('📡 Live Kalshi Probability Velocity', tbl(
-          ['Coin','Trend','¢/Min','Accel','Samples','Latest YES'],
-          velRows
-        ))}
+      ['Coin', 'Trend', '¢/Min', 'Accel', 'Samples', 'Latest YES'],
+      velRows
+    ))}
 
         ${card(`🎯 Per-Coin Settlement Accuracy 
           <select id="accuracyDataSource" style="float:right;padding:4px 8px;font-size:11px;border-radius:4px;border:1px solid var(--color-border);background:var(--color-surface-2);color:var(--color-text);cursor:pointer" onchange="(function(){const e=event.target.value;window._accuracySource=e;window.refreshDebugLog?.()})()">
-            <option value="auto" ${window._accuracySource!=='historical'?'selected':''}>Auto (Real-time + Historical)</option>
-            <option value="historical" ${window._accuracySource==='historical'?'selected':''}>📊 Historical Only (Backtest)</option>
+            <option value="auto" ${window._accuracySource !== 'historical' ? 'selected' : ''}>Auto (Real-time + Historical)</option>
+            <option value="historical" ${window._accuracySource === 'historical' ? 'selected' : ''}>📊 Historical Only (Backtest)</option>
           </select>
           <div style="clear:both"></div>`, tbl(
-          ['Coin','Accuracy','Correct/Total','Streak','Trend','Calib'],
-          accRows
-        ))}
+      ['Coin', 'Accuracy', 'Correct/Total', 'Streak', 'Trend', 'Calib'],
+      accRows
+    ))}
 
         ${card('🛡️ Buffer Zone Analysis — Safe Edge Thresholds', `
-          ${tbl(['Edge Bucket','Win Rate','W/T','Avg Edge'], zoneRows)}
+          ${tbl(['Edge Bucket', 'Win Rate', 'W/T', 'Avg Edge'], zoneRows)}
           <p style="font-size:11px;color:var(--color-text-faint);margin-top:8px">✓ SAFE = win rate ≥ 55%. Use these thresholds to set orchestrator trade gate.</p>
         `)}
 
         ${card(`⚠️ Missed Opportunities (${missedOps.length} total — model correct, orchestrator skipped)`, tbl(
-          ['Time','Coin','Outcome','Orch Action','Edge','Alignment'],
-          missedRows
-        ))}
+      ['Time', 'Coin', 'Outcome', 'Orch Action', 'Edge', 'Alignment'],
+      missedRows
+    ))}
 
         ${card(`⏳ Pending Snapshots (${pending.length} awaiting settlement)`, tbl(
-          ['Coin','Closes','Time Left','Model Dir','Edge','Orch Action'],
-          pendingRows
-        ))}
+      ['Coin', 'Closes', 'Time Left', 'Model Dir', 'Edge', 'Orch Action'],
+      pendingRows
+    ))}
 
         ${card(`📋 Settlement History (last 40 of ${log.length})`, tbl(
-          ['Time','Coin','Actual','Model','Pred Dir','Edge','Action','Kalshi%'],
-          settlementRows
-        ))}
+      ['Time', 'Coin', 'Actual', 'Model', 'Pred Dir', 'Edge', 'Action', 'Kalshi%'],
+      settlementRows
+    ))}
       </div>`;
 
     // Expose refresh shortcut
     window.refreshDebugLog = () => { if (currentView === 'debuglog') renderDebugLog(); };
+  }
+
+  function _obsNum(v, fallback = null) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function _obsNormRegime(v) {
+    if (!v) return 'UNKNOWN';
+    return String(v).trim().replace(/\s+/g, '_').toUpperCase();
+  }
+
+  function _obsPct(v, dp = 1) {
+    return Number.isFinite(v) ? `${(v * 100).toFixed(dp)}%` : '—';
+  }
+
+  function _obsLatencyBuckets(valuesMs = []) {
+    const labels = ['0-5s', '5-15s', '15-30s', '30-60s', '1-2m', '2-5m', '5-10m', '10m+'];
+    const bounds = [5000, 15000, 30000, 60000, 120000, 300000, 600000, Infinity];
+    const counts = new Array(labels.length).fill(0);
+    for (const v of valuesMs) {
+      if (!Number.isFinite(v) || v < 0) continue;
+      for (let i = 0; i < bounds.length; i++) {
+        if (v <= bounds[i]) {
+          counts[i]++;
+          break;
+        }
+      }
+    }
+    const total = counts.reduce((a, b) => a + b, 0);
+    return { labels, counts, total };
+  }
+
+  function _obsGetQuantDriftSnapshot() {
+    const sources = [
+      window.QuantCore?.driftDetector,
+      window.QuantCore?.drift,
+      window.QuantCore?.diagnostics?.driftDetector,
+      window._driftDetector,
+    ];
+
+    for (const src of sources) {
+      if (!src) continue;
+      try {
+        if (typeof src.overallStatus === 'function') {
+          const status = src.overallStatus();
+          if (!status) continue;
+          if (typeof status === 'string') {
+            return { overall_status: String(status).toUpperCase(), source: 'overallStatus:string' };
+          }
+          if (typeof status === 'object') {
+            return {
+              ...status,
+              overall_status: String(status.overall_status || status.status || 'UNKNOWN').toUpperCase(),
+            };
+          }
+        }
+        if (typeof src === 'object' && (src.overall_status || src.status)) {
+          return {
+            ...src,
+            overall_status: String(src.overall_status || src.status).toUpperCase(),
+            source: 'object',
+          };
+        }
+      } catch (_) { }
+    }
+
+    return null;
+  }
+
+  function _obsEmergencyToolsSummary() {
+    const out = {
+      available: false,
+      active: 0,
+      pending: 0,
+      total: 0,
+      note: 'Emergency tools dashboard unavailable.',
+    };
+
+    const et = window.__EMERGENCY_TOOLS;
+    if (!et || typeof et.catalog !== 'function') return out;
+
+    out.available = true;
+    try {
+      const text = String(et.catalog() || '');
+      const lines = text.split(/\r?\n/);
+      lines.forEach(line => {
+        if (line.includes('ACTIVE')) out.active += 1;
+        else if (line.includes('PENDING')) out.pending += 1;
+      });
+      out.total = out.active + out.pending;
+      out.note = out.total > 0
+        ? `${out.active}/${out.total} tools active`
+        : 'Emergency tools catalog loaded.';
+    } catch (_) {
+      out.note = 'Emergency tools catalog unavailable.';
+    }
+
+    return out;
+  }
+
+  function _obsBuildMetrics() {
+    const resLog = window._15mResolutionLog || [];
+    const kalshiLog = window._kalshiLog || [];
+    const orchLog = window._orchLog || [];
+    const kalshiErrors = window._kalshiErrors || [];
+    const journal = _getTradeJournal();
+    const journalTrades = Array.isArray(journal?.trades) ? journal.trades : [];
+    const quantDrift = _obsGetQuantDriftSnapshot();
+    const emergencyTools = _obsEmergencyToolsSummary();
+    const sig = [
+      resLog.length,
+      resLog.length ? (resLog[resLog.length - 1].settledTs || resLog[resLog.length - 1].ts || 0) : 0,
+      kalshiLog.length,
+      kalshiLog.length ? (kalshiLog[kalshiLog.length - 1].settledTs || kalshiLog[kalshiLog.length - 1].ts || 0) : 0,
+      orchLog.length,
+      orchLog.length ? (orchLog[orchLog.length - 1].ts || 0) : 0,
+      journalTrades.length,
+      learningEngine?.tuneLog?.length || 0,
+      quantDrift?.overall_status || 'NO_QUANT_DRIFT',
+      emergencyTools.active,
+      emergencyTools.total,
+    ].join('|');
+
+    if (_observabilityCache.sig === sig && _observabilityCache.data && (Date.now() - _observabilityCache.ts) < 10_000) {
+      return _observabilityCache.data;
+    }
+
+    const events = [];
+
+    resLog.forEach(e => {
+      if (typeof e.modelCorrect === 'boolean') {
+        const modelDir = String(e.modelDir || '').toUpperCase();
+        const pUp = _obsNum(e.modelProbUp, null);
+        const confFromProb = Number.isFinite(pUp) && (modelDir === 'UP' || modelDir === 'DOWN')
+          ? (modelDir === 'UP' ? pUp : (1 - pUp))
+          : null;
+        events.push({
+          source: 'resolution',
+          sym: e.sym || 'UNK',
+          ts: _obsNum(e.settledTs || e.ts, Date.now()),
+          correct: e.modelCorrect,
+          regime: _obsNormRegime(e.quantRegime?.state || e.quantRegime?.regime || e.mdtRegime || e.regime),
+          confidence: Number.isFinite(confFromProb)
+            ? Math.max(0, Math.min(1, confFromProb))
+            : (Number.isFinite(_obsNum(e.modelScore, null)) ? Math.max(0, Math.min(1, 0.5 + Math.abs(e.modelScore) * 0.5)) : null),
+          latency: {
+            snapshotTs: _obsNum(e.snapshotTs, null),
+            closeTimeMs: _obsNum(e.closeTimeMs, null),
+            settledTs: _obsNum(e.settledTs, null),
+            fillTs: _obsNum(e.fillTs || e.fillTsMs, null),
+          },
+          signalComponents: e.signalComponents || null,
+          orchestratorAction: e.orchestratorAction || null,
+        });
+      }
+    });
+
+    kalshiLog.forEach(e => {
+      if (typeof e.modelCorrect === 'boolean') {
+        const modelDir = String(e.modelDir || '').toUpperCase();
+        const mYesPct = _obsNum(e.mYesPct, null);
+        const conf = Number.isFinite(mYesPct) && (modelDir === 'UP' || modelDir === 'DOWN')
+          ? (modelDir === 'UP' ? mYesPct / 100 : (100 - mYesPct) / 100)
+          : (Number.isFinite(_obsNum(e.modelConf, null)) ? Math.max(0, Math.min(1, _obsNum(e.modelConf, 0))) : null);
+        events.push({
+          source: 'kalshi',
+          sym: e.sym || 'UNK',
+          ts: _obsNum(e.settledTs || e.ts, Date.now()),
+          correct: e.modelCorrect,
+          regime: _obsNormRegime(e.quantRegime?.state || e.quantRegime?.regime),
+          confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : null,
+          signalComponents: e.signalComponents || null,
+          orchestratorAction: e.orchestratorAction || null,
+        });
+      }
+    });
+
+    journalTrades.forEach(t => {
+      if (!t?.settled || (t.win !== 0 && t.win !== 1)) return;
+      events.push({
+        source: 'journal',
+        sym: t.asset || 'UNK',
+        ts: _obsNum(t.settled_timestamp || t.timestamp, Date.now()),
+        correct: t.win === 1,
+        regime: _obsNormRegime(t.regime),
+        confidence: Number.isFinite(_obsNum(t.confidence, null)) ? Math.max(0, Math.min(1, t.confidence)) : null,
+        signalComponents: t.signals || null,
+        orchestratorAction: t.metadata?.routed_action || null,
+      });
+    });
+
+    const eventsSorted = events.sort((a, b) => a.ts - b.ts);
+
+    const regimeMap = {};
+    eventsSorted.forEach(e => {
+      const r = e.regime || 'UNKNOWN';
+      if (!regimeMap[r]) regimeMap[r] = { regime: r, wins: 0, total: 0 };
+      regimeMap[r].total += 1;
+      if (e.correct) regimeMap[r].wins += 1;
+    });
+    const regimeRows = Object.values(regimeMap)
+      .map(r => ({ ...r, winRate: r.total ? r.wins / r.total : 0 }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 12);
+
+    const confBuckets = [
+      { label: '50-59%', min: 0.50, max: 0.60, wins: 0, total: 0, confSum: 0 },
+      { label: '60-69%', min: 0.60, max: 0.70, wins: 0, total: 0, confSum: 0 },
+      { label: '70-79%', min: 0.70, max: 0.80, wins: 0, total: 0, confSum: 0 },
+      { label: '80-89%', min: 0.80, max: 0.90, wins: 0, total: 0, confSum: 0 },
+      { label: '90-100%', min: 0.90, max: 1.01, wins: 0, total: 0, confSum: 0 },
+    ];
+    eventsSorted.forEach(e => {
+      if (!Number.isFinite(e.confidence)) return;
+      const b = confBuckets.find(x => e.confidence >= x.min && e.confidence < x.max);
+      if (!b) return;
+      b.total += 1;
+      b.confSum += e.confidence;
+      if (e.correct) b.wins += 1;
+    });
+    const calibrationRows = confBuckets.map(b => {
+      const avgConf = b.total ? b.confSum / b.total : null;
+      const empirical = b.total ? b.wins / b.total : null;
+      const ece = (avgConf != null && empirical != null) ? Math.abs(avgConf - empirical) : null;
+      return { ...b, avgConf, empirical, ece };
+    });
+
+    const orchBySym = {};
+    orchLog.forEach(o => {
+      const sym = o.sym || 'UNK';
+      if (!orchBySym[sym]) orchBySym[sym] = [];
+      orchBySym[sym].push(_obsNum(o.ts, 0));
+    });
+    Object.values(orchBySym).forEach(arr => arr.sort((a, b) => a - b));
+
+    const signalToQuote = [];
+    const quoteToFill = [];
+    const fillToSettle = [];
+    const signalToSettle = [];
+    const quoteToSettle = [];
+    let fillCoverage = 0;
+    let latencySamples = 0;
+
+    resLog.forEach(e => {
+      const settledTs = _obsNum(e.settledTs, null);
+      const quoteTs = _obsNum(e.snapshotTs, null);
+      const closeTs = _obsNum(e.closeTimeMs, null);
+      const fillTs = _obsNum(e.fillTs || e.fillTsMs, null);
+      if (!Number.isFinite(settledTs) || !Number.isFinite(closeTs)) return;
+      latencySamples += 1;
+
+      const symArr = orchBySym[e.sym] || [];
+      let signalTs = null;
+      for (let i = symArr.length - 1; i >= 0; i--) {
+        const cand = symArr[i];
+        if (cand <= closeTs && cand >= (closeTs - 30 * 60_000)) {
+          signalTs = cand;
+          break;
+        }
+      }
+
+      if (Number.isFinite(signalTs) && Number.isFinite(quoteTs) && quoteTs >= signalTs) {
+        signalToQuote.push(quoteTs - signalTs);
+      }
+      if (Number.isFinite(quoteTs) && Number.isFinite(fillTs) && fillTs >= quoteTs) {
+        quoteToFill.push(fillTs - quoteTs);
+      }
+      if (Number.isFinite(fillTs) && Number.isFinite(settledTs) && settledTs >= fillTs) {
+        fillToSettle.push(settledTs - fillTs);
+        fillCoverage += 1;
+      } else if (Number.isFinite(quoteTs) && Number.isFinite(settledTs) && settledTs >= quoteTs) {
+        quoteToSettle.push(settledTs - quoteTs);
+      }
+      if (Number.isFinite(signalTs) && Number.isFinite(settledTs) && settledTs >= signalTs) {
+        signalToSettle.push(settledTs - signalTs);
+      }
+    });
+
+    const latency = {
+      samples: latencySamples,
+      fillCoverage: latencySamples ? fillCoverage / latencySamples : 0,
+      signalToQuote: _obsLatencyBuckets(signalToQuote),
+      quoteToFill: _obsLatencyBuckets(quoteToFill),
+      fillToSettle: _obsLatencyBuckets(fillToSettle),
+      signalToSettle: _obsLatencyBuckets(signalToSettle),
+      quoteToSettle: _obsLatencyBuckets(quoteToSettle),
+    };
+
+    const recentKalshi = kalshiLog.slice(-80);
+    const dirConflictCount = recentKalshi.filter(e => e._dirConflict || e.dirConflict).length;
+    const proxyMismatchCount = recentKalshi.filter(e => e._proxyMismatch).length;
+    const wickCount = recentKalshi.filter(e => e._wickStraddle || e._nearRef).length;
+    const recentErrors = kalshiErrors.slice(-80);
+    const errByType = {};
+    recentErrors.forEach(e => {
+      const type = String(e.type || 'unknown');
+      errByType[type] = (errByType[type] || 0) + 1;
+    });
+
+    const conflictRate = recentKalshi.length ? dirConflictCount / recentKalshi.length : 0;
+    const mismatchRate = recentKalshi.length ? proxyMismatchCount / recentKalshi.length : 0;
+    const wickRate = recentKalshi.length ? wickCount / recentKalshi.length : 0;
+    let driftStatus = 'STABLE';
+    if ((quantDrift?.overall_status === 'MAJOR_DRIFT') || mismatchRate > 0.15 || conflictRate > 0.20) driftStatus = 'ELEVATED';
+    else if ((quantDrift?.overall_status === 'DRIFT') || mismatchRate > 0.08 || conflictRate > 0.12 || wickRate > 0.20) driftStatus = 'WATCH';
+
+    const featureDrift = {
+      driftStatus,
+      quant: quantDrift,
+      emergencyTools,
+      conflictRate,
+      mismatchRate,
+      wickRate,
+      errByType,
+      recentErrors: recentErrors.slice(-6),
+    };
+
+    const attributionMap = {};
+    const addAttr = (name, score, samples = 1, weight = null) => {
+      const key = String(name || 'unknown').toUpperCase();
+      if (!attributionMap[key]) {
+        attributionMap[key] = {
+          signal: key,
+          score: 0,
+          samples: 0,
+          weightSum: 0,
+          weightN: 0,
+        };
+      }
+      attributionMap[key].score += Number.isFinite(score) ? score : 0;
+      attributionMap[key].samples += Number.isFinite(samples) ? samples : 0;
+      if (Number.isFinite(weight)) {
+        attributionMap[key].weightSum += weight;
+        attributionMap[key].weightN += 1;
+      }
+    };
+
+    if (learningEngine?.getAllReports) {
+      const reports = learningEngine.getAllReports() || {};
+      Object.values(reports).forEach(rep => {
+        if (!rep?.signals) return;
+        Object.entries(rep.signals).forEach(([signal, st]) => {
+          const acc = _obsNum(st.accuracy, null);
+          const smp = _obsNum(st.samples, 0);
+          const w = _obsNum(st.weight, null);
+          if (!Number.isFinite(acc) || smp <= 0) return;
+          addAttr(signal, (acc - 0.5) * smp, smp, w);
+        });
+      });
+    }
+
+    eventsSorted.forEach(e => {
+      const sigs = e.signalComponents;
+      if (!sigs || typeof sigs !== 'object') return;
+      const outcomeSign = e.correct ? 1 : -1;
+      Object.entries(sigs).forEach(([name, raw]) => {
+        let val = null;
+        let weight = null;
+        if (typeof raw === 'number') {
+          val = raw;
+        } else if (raw && typeof raw === 'object') {
+          val = _obsNum(raw.contribution, null);
+          if (!Number.isFinite(val)) val = _obsNum(raw.value, null);
+          if (!Number.isFinite(val)) val = _obsNum(raw.score, null);
+          weight = _obsNum(raw.weight, null);
+        }
+        if (!Number.isFinite(val)) return;
+        addAttr(name, outcomeSign * Math.abs(val), 1, weight);
+      });
+    });
+
+    const attributionRows = Object.values(attributionMap)
+      .map(r => ({
+        signal: r.signal,
+        score: r.score,
+        samples: r.samples,
+        avgWeight: r.weightN ? r.weightSum / r.weightN : null,
+      }))
+      .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+      .slice(0, 12);
+
+    const sourceContribution = {};
+    eventsSorted.forEach(e => {
+      sourceContribution[e.source] = (sourceContribution[e.source] || 0) + 1;
+    });
+
+    const drawdownBySym = {};
+    eventsSorted.forEach(e => {
+      const sym = e.sym || 'UNK';
+      if (!drawdownBySym[sym]) {
+        drawdownBySym[sym] = {
+          sym,
+          equity: 0,
+          peak: 0,
+          maxDrawdown: 0,
+          currentLossStreak: 0,
+          maxLossStreak: 0,
+          clusterCount: 0,
+          clusters: [],
+        };
+      }
+      const s = drawdownBySym[sym];
+      s.equity += e.correct ? 1 : -1;
+      s.peak = Math.max(s.peak, s.equity);
+      s.maxDrawdown = Math.max(s.maxDrawdown, s.peak - s.equity);
+      if (!e.correct) {
+        s.currentLossStreak += 1;
+        s.maxLossStreak = Math.max(s.maxLossStreak, s.currentLossStreak);
+      } else if (s.currentLossStreak > 0) {
+        if (s.currentLossStreak >= 3) {
+          s.clusterCount += 1;
+          s.clusters.push({ len: s.currentLossStreak, ts: e.ts });
+        }
+        s.currentLossStreak = 0;
+      }
+    });
+    Object.values(drawdownBySym).forEach(s => {
+      if (s.currentLossStreak >= 3) {
+        s.clusterCount += 1;
+        s.clusters.push({ len: s.currentLossStreak, ts: Date.now() });
+      }
+    });
+
+    const drawdownRows = Object.values(drawdownBySym)
+      .sort((a, b) => (b.maxDrawdown - a.maxDrawdown) || (b.maxLossStreak - a.maxLossStreak))
+      .slice(0, 10);
+
+    const out = {
+      sampleCount: eventsSorted.length,
+      regimeRows,
+      calibrationRows,
+      latency,
+      featureDrift,
+      attributionRows,
+      sourceContribution,
+      drawdownRows,
+      updatedAt: Date.now(),
+    };
+
+    _observabilityCache = { sig, ts: Date.now(), data: out };
+    return out;
+  }
+
+  function _obsRenderHist(title, hist, accent = 'var(--color-primary)') {
+    const max = Math.max(1, ...hist.counts);
+    const rows = hist.labels.map((label, i) => {
+      const c = hist.counts[i] || 0;
+      const width = Math.max(0, Math.min(100, (c / max) * 100));
+      return `
+        <div style="display:grid;grid-template-columns:60px 1fr 40px;gap:8px;align-items:center;margin:4px 0">
+          <span style="font-size:10px;color:var(--color-text-muted)">${label}</span>
+          <div style="height:8px;background:var(--color-surface-3);border-radius:999px;overflow:hidden">
+            <div style="height:100%;width:${width}%;background:${accent};opacity:0.88"></div>
+          </div>
+          <span style="font-size:10px;font-family:var(--font-mono);color:var(--color-text)">${c}</span>
+        </div>`;
+    }).join('');
+    return `
+      <div class="card" style="padding:12px">
+        <div class="card-title" style="margin-bottom:8px">${title}</div>
+        ${rows}
+      </div>`;
+  }
+
+  function renderObservability() {
+    const m = _obsBuildMetrics();
+
+    const regimeRows = m.regimeRows.length
+      ? m.regimeRows.map(r => {
+        const wr = r.winRate;
+        const col = wr >= 0.6 ? 'var(--color-green)' : wr >= 0.5 ? 'var(--color-orange)' : 'var(--color-red)';
+        return `<tr>
+          <td>${r.regime}</td>
+          <td style="color:${col};font-weight:700">${_obsPct(wr, 0)}</td>
+          <td>${r.wins}/${r.total}</td>
+        </tr>`;
+      }).join('')
+      : '<tr><td colspan="3" style="color:var(--color-text-faint)">No settled regime samples yet.</td></tr>';
+
+    const calibRows = m.calibrationRows.map(b => {
+      const ece = b.ece;
+      const eceCol = ece == null ? 'var(--color-text-muted)' : ece < 0.05 ? 'var(--color-green)' : ece < 0.10 ? 'var(--color-orange)' : 'var(--color-red)';
+      return `<tr>
+        <td>${b.label}</td>
+        <td>${_obsPct(b.avgConf, 1)}</td>
+        <td>${_obsPct(b.empirical, 1)}</td>
+        <td style="color:${eceCol};font-weight:700">${_obsPct(b.ece, 1)}</td>
+        <td>${b.total}</td>
+      </tr>`;
+    }).join('');
+
+    const driftCol = m.featureDrift.driftStatus === 'STABLE'
+      ? 'var(--color-green)'
+      : m.featureDrift.driftStatus === 'WATCH'
+        ? 'var(--color-orange)'
+        : 'var(--color-red)';
+
+    const driftErrRows = Object.entries(m.featureDrift.errByType)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([k, v]) => `<span style="padding:2px 7px;border-radius:999px;background:var(--color-surface-3);font-size:10px;color:var(--color-text-muted)">${k}: ${v}</span>`)
+      .join(' ');
+
+    const attrRows = m.attributionRows.length
+      ? m.attributionRows.map(r => {
+        const col = r.score >= 0 ? 'var(--color-green)' : 'var(--color-red)';
+        return `<tr>
+          <td style="font-weight:700">${r.signal}</td>
+          <td style="color:${col}">${r.score >= 0 ? '+' : ''}${r.score.toFixed(2)}</td>
+          <td>${r.samples}</td>
+          <td>${Number.isFinite(r.avgWeight) ? r.avgWeight.toFixed(2) + 'x' : '—'}</td>
+        </tr>`;
+      }).join('')
+      : '<tr><td colspan="4" style="color:var(--color-text-faint)">No signal attribution samples yet.</td></tr>';
+
+    const srcRows = Object.entries(m.sourceContribution)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`)
+      .join('') || '<tr><td colspan="2" style="color:var(--color-text-faint)">No source contribution data yet.</td></tr>';
+
+    const ddRows = m.drawdownRows.length
+      ? m.drawdownRows.map(r => {
+        const streakCol = r.currentLossStreak >= 3 ? 'var(--color-red)' : 'var(--color-text)';
+        return `<tr>
+          <td style="font-weight:700">${r.sym}</td>
+          <td>${r.maxDrawdown}</td>
+          <td>${r.maxLossStreak}</td>
+          <td style="color:${streakCol}">${r.currentLossStreak}</td>
+          <td>${r.clusterCount}</td>
+        </tr>`;
+      }).join('')
+      : '<tr><td colspan="5" style="color:var(--color-text-faint)">No drawdown clusters yet.</td></tr>';
+
+    content.innerHTML = `
+      <div class="section-header">
+        <span class="section-title">Trading Reliability Observability</span>
+        <span style="font-size:11px;color:var(--color-text-faint)">
+          Updated ${new Date(m.updatedAt).toLocaleTimeString()} · ${m.sampleCount} settled samples
+        </span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-bottom:12px;">
+        <div class="card" style="padding:12px">
+          <div class="card-title">Feature Drift Status</div>
+          <div style="font-size:22px;font-weight:800;color:${driftCol};font-family:var(--font-mono)">${m.featureDrift.driftStatus}</div>
+          <div style="font-size:11px;color:var(--color-text-muted);margin-top:6px">
+            Dir conflict: ${_obsPct(m.featureDrift.conflictRate, 1)} · Proxy mismatch: ${_obsPct(m.featureDrift.mismatchRate, 1)} · Wick/near-ref: ${_obsPct(m.featureDrift.wickRate, 1)}
+          </div>
+          <div style="font-size:10px;color:var(--color-text-faint);margin-top:6px;line-height:1.45">
+            ${m.featureDrift.quant?.overall_status ? `Quant detector: ${m.featureDrift.quant.overall_status}` : 'Quant drift detector not active in this runtime.'}
+          </div>
+          <div style="font-size:10px;color:var(--color-text-faint);margin-top:4px;line-height:1.45">
+            Emergency tools: ${m.featureDrift.emergencyTools?.note || 'unavailable'}
+          </div>
+        </div>
+        <div class="card" style="padding:12px">
+          <div class="card-title">Latency Coverage</div>
+          <div style="font-size:22px;font-weight:800;color:var(--color-primary);font-family:var(--font-mono)">${m.latency.samples}</div>
+          <div style="font-size:11px;color:var(--color-text-muted);margin-top:6px">
+            Fill timestamp coverage: ${_obsPct(m.latency.fillCoverage, 0)}
+          </div>
+          <div style="font-size:10px;color:var(--color-text-faint);margin-top:6px;line-height:1.45">
+            Pipeline histograms show signal→quote→fill→settle where available, with quote→settle fallback when fill is missing.
+          </div>
+        </div>
+        <div class="card" style="padding:12px">
+          <div class="card-title">Top Drift/Error Flags</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;line-height:1.8">
+            ${driftErrRows || '<span style="font-size:10px;color:var(--color-text-faint)">No recent flagged errors.</span>'}
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div class="card">
+          <div class="card-title">Win Rate by Regime</div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Regime</th><th>Win Rate</th><th>W/T</th></tr></thead>
+              <tbody>${regimeRows}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Calibration Error by Confidence Bucket</div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Bucket</th><th>Avg Conf</th><th>Empirical</th><th>Abs Error</th><th>N</th></tr></thead>
+              <tbody>${calibRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-bottom:12px;">
+        ${_obsRenderHist('Latency: Signal → Quote', m.latency.signalToQuote, 'var(--color-primary)')}
+        ${_obsRenderHist('Latency: Quote → Fill', m.latency.quoteToFill, 'var(--color-orange)')}
+        ${_obsRenderHist('Latency: Fill → Settle', m.latency.fillToSettle, 'var(--color-green)')}
+        ${_obsRenderHist('Latency: Quote → Settle (fallback)', m.latency.quoteToSettle, 'var(--color-text-muted)')}
+        ${_obsRenderHist('Latency: Signal → Settle', m.latency.signalToSettle, 'var(--color-red)')}
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="card">
+          <div class="card-title">Signal Attribution / Contribution</div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Signal</th><th>Net Score</th><th>Samples</th><th>Avg Weight</th></tr></thead>
+              <tbody>${attrRows}</tbody>
+            </table>
+          </div>
+          <div style="font-size:10px;color:var(--color-text-faint);margin-top:8px">
+            Net score combines adaptive-learning accuracy edge and settled-outcome component impact when present.
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Source Contribution Summary</div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Source</th><th>Samples</th></tr></thead>
+              <tbody>${srcRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-title">Drawdown Cluster Indicators</div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Coin</th><th>Max Drawdown</th><th>Max Loss Streak</th><th>Current Loss Streak</th><th>Clusters (>=3)</th></tr></thead>
+            <tbody>${ddRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
   }
 
   function renderMarkets() {
@@ -4238,16 +5751,18 @@
       const top8 = rows.slice(0, 8);
       const otherVal = rows.slice(8).reduce((s, h) => s + h.val, 0);
       const labels = [...top8.map(h => h.sym), otherVal > 0 ? 'Other' : null].filter(Boolean);
-      const vals   = [...top8.map(h => h.val), otherVal > 0 ? otherVal : null].filter(Boolean);
+      const vals = [...top8.map(h => h.val), otherVal > 0 ? otherVal : null].filter(Boolean);
       const colors = [...top8.map(h => coinColor(h.sym)), '#444a60'];
       donutChart = new Chart(canvas, {
         type: 'doughnut',
         data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 0, hoverOffset: 4 }] },
         options: {
           responsive: false, cutout: '70%',
-          plugins: { legend: { display: false }, tooltip: {
-            callbacks: { label: ctx => ` ${ctx.label}: $${fmt(ctx.raw, 0)} (${total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0}%)` }
-          }}
+          plugins: {
+            legend: { display: false }, tooltip: {
+              callbacks: { label: ctx => ` ${ctx.label}: $${fmt(ctx.raw, 0)} (${total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0}%)` }
+            }
+          }
         }
       });
     });
@@ -4274,12 +5789,12 @@
         <div class="coin-icon" style="background:${coinColor(h.sym)}22;color:${coinColor(h.sym)};width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;">${coinIcon(h.sym)}</div>
         <div class="holding-info">
           <div class="holding-name">${h.sym}</div>
-          <div class="holding-amt">${h.amount.toLocaleString(undefined, {maximumFractionDigits: 4})} @ ${fmtPrice(h.costBasis)}</div>
+          <div class="holding-amt">${h.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} @ ${fmtPrice(h.costBasis)}</div>
           <div class="alloc-bar-wrap"><div class="alloc-bar" style="width:${pct}%;background:${coinColor(h.sym)}"></div></div>
         </div>
         <div class="holding-right">
-          <div class="holding-val">${h.price > 0 ? '$'+fmt(h.val, 2) : '—'}</div>
-          <div class="holding-chg ${posneg(h.pnl)}">${h.pnlPct !== 0 ? fmtPct(h.pnlPct)+' PnL' : '—'}</div>
+          <div class="holding-val">${h.price > 0 ? '$' + fmt(h.val, 2) : '—'}</div>
+          <div class="holding-chg ${posneg(h.pnl)}">${h.pnlPct !== 0 ? fmtPct(h.pnlPct) + ' PnL' : '—'}</div>
         </div>
       </div>
     `;
@@ -4303,20 +5818,20 @@
         <div style="display:flex;align-items:center;gap:8px">
           <span class="ctrl-label">Timeframe</span>
           <div class="tf-btns">
-            ${['1m','3m','5m','15m','1h','4h','1D','1W'].map(tf => `<button class="tf-btn ${chartTf === tf ? 'active' : ''}" data-tf="${tf}">${tf}</button>`).join('')}
+            ${['1m', '3m', '5m', '15m', '1h', '4h', '1D', '1W'].map(tf => `<button class="tf-btn ${chartTf === tf ? 'active' : ''}" data-tf="${tf}">${tf}</button>`).join('')}
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span class="ctrl-label">Tracing</span>
           <div class="tf-btns">
             ${[
-              ['ema9', 'EMA 9'],
-              ['ema21', 'EMA 21'],
-              ['vwap', 'VWAP'],
-              ['support', 'Support'],
-              ['resistance', 'Resistance'],
-              ['trend', 'Trend'],
-            ].map(([key, label]) => `<button class="tf-btn ${chartIndicators[key] ? 'active' : ''}" data-indicator="${key}">${label}</button>`).join('')}
+        ['ema9', 'EMA 9'],
+        ['ema21', 'EMA 21'],
+        ['vwap', 'VWAP'],
+        ['support', 'Support'],
+        ['resistance', 'Resistance'],
+        ['trend', 'Trend'],
+      ].map(([key, label]) => `<button class="tf-btn ${chartIndicators[key] ? 'active' : ''}" data-indicator="${key}">${label}</button>`).join('')}
           </div>
         </div>
         <button class="btn-outline" id="chartRefreshBtn">Refresh Chart</button>
@@ -4393,11 +5908,11 @@
 
   function destroyChart() {
     if (chartResizeObserver) {
-      try { chartResizeObserver.disconnect(); } catch (e) {}
+      try { chartResizeObserver.disconnect(); } catch (e) { }
       chartResizeObserver = null;
     }
     if (candleChart) {
-      try { candleChart.remove(); } catch (e) {}
+      try { candleChart.remove(); } catch (e) { }
       candleChart = null;
     }
     chartSeries = {};
@@ -4483,7 +5998,7 @@
         <div class="ohlc-item"><div class="ohlc-label">High</div><div class="ohlc-val" style="color:var(--color-green)">${fmtPrice(last.high)}</div></div>
         <div class="ohlc-item"><div class="ohlc-label">Low</div><div class="ohlc-val" style="color:var(--color-red)">${fmtPrice(last.low)}</div></div>
         <div class="ohlc-item"><div class="ohlc-label">Close</div><div class="ohlc-val">${fmtPrice(last.close)}</div></div>
-        <div class="ohlc-item"><div class="ohlc-label">Change</div><div class="ohlc-val ${posneg(last.close-last.open)}">${fmtPct(((last.close-last.open)/last.open)*100)}</div></div>
+        <div class="ohlc-item"><div class="ohlc-label">Change</div><div class="ohlc-val ${posneg(last.close - last.open)}">${fmtPct(((last.close - last.open) / last.open) * 100)}</div></div>
         <div class="ohlc-item"><div class="ohlc-label">Support</div><div class="ohlc-val">${fmtPrice(support)}</div></div>
         <div class="ohlc-item"><div class="ohlc-label">Resistance</div><div class="ohlc-val">${fmtPrice(resistance)}</div></div>
         ${coin ? `<div class="ohlc-item"><div class="ohlc-label">Coin</div><div class="ohlc-val" style="color:${coinColor(coin.sym)}">${coin.sym}</div></div>` : ''}
@@ -4500,8 +6015,8 @@
       const hasBook = Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0 && t?.source !== 'coingecko';
       if (hasBook) {
         const spread = ((ask - bid) / bid * 100).toFixed(4);
-        const bidSz  = t?.best_bid_size || (obBook?.bids?.[0]?.[1]?.toFixed(2)) || '—';
-        const askSz  = t?.best_ask_size || (obBook?.asks?.[0]?.[1]?.toFixed(2)) || '—';
+        const bidSz = t?.best_bid_size || (obBook?.bids?.[0]?.[1]?.toFixed(2)) || '—';
+        const askSz = t?.best_ask_size || (obBook?.asks?.[0]?.[1]?.toFixed(2)) || '—';
         ob.innerHTML = `
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px;font-family:var(--font-mono)">
             <div style="color:var(--color-text-muted);font-size:10px;text-transform:uppercase">Ask</div>
@@ -4516,8 +6031,8 @@
         `;
       } else {
         const srcLabel = t?.source === 'coingecko' ? 'CoinGecko supplemental data'
-                       : (t?.source === 'pyth' || t?.source === 'hyperliquid') ? `${t.source} oracle (mid price only)`
-                       : 'this feed';
+          : (t?.source === 'pyth' || t?.source === 'hyperliquid') ? `${t.source} oracle (mid price only)`
+            : 'this feed';
         ob.innerHTML = `
           <div class="empty-state" style="padding:20px 12px;text-align:left">
             <div style="font-size:12px;color:var(--color-text)">Order book unavailable for ${coin?.sym || chartCoin}</div>
@@ -4600,11 +6115,11 @@
       // Zoom: short TFs show a tight window so candles are large and readable.
       // Longer TFs show all data (fitContent).
       // barSpacing is set explicitly per-TF so candle widths look right regardless of chart width.
-      const ZOOM_WINDOW  = { '1m': 60, '3m': 60, '5m': 80, '15m': 120 };
-      const BAR_SPACING  = { '1m': 5,  '3m': 7,  '5m': 9,  '15m': 9  };
+      const ZOOM_WINDOW = { '1m': 60, '3m': 60, '5m': 80, '15m': 120 };
+      const BAR_SPACING = { '1m': 5, '3m': 7, '5m': 9, '15m': 9 };
       const total = series.length;
-      const show  = ZOOM_WINDOW[chartTf];
-      const bs    = BAR_SPACING[chartTf];
+      const show = ZOOM_WINDOW[chartTf];
+      const bs = BAR_SPACING[chartTf];
       if (candleChart) {
         if (bs) candleChart.timeScale().applyOptions({ barSpacing: bs });
         if (show && total > show) {
@@ -4633,7 +6148,7 @@
   };
 
   function buildChainScanPlaceholders() {
-    return ['BTC','ETH','SOL','XRP','BNB','DOGE','HYPE'].map(sym => `
+    return ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'].map(sym => `
       <div class="chain-scan-card" id="chain-card-${sym}">
         <div class="chain-scan-header">
           <span class="chain-scan-sym" style="color:${CHAIN_COLORS[sym]}">${sym}</span>
@@ -4645,10 +6160,10 @@
   }
 
   function buildChainCard(d) {
-    const color  = CHAIN_COLORS[d.sym] || '#888';
+    const color = CHAIN_COLORS[d.sym] || '#888';
     const sigCls = d.signal === 'BULLISH' ? 'bullish' : d.signal === 'BEARISH' ? 'bearish' : 'neutral';
-    const ago    = d.ts ? Math.round((Date.now() - d.ts) / 1000) : null;
-    const agoStr = ago !== null ? (ago < 60 ? `${ago}s ago` : `${Math.round(ago/60)}m ago`) : '';
+    const ago = d.ts ? Math.round((Date.now() - d.ts) / 1000) : null;
+    const agoStr = ago !== null ? (ago < 60 ? `${ago}s ago` : `${Math.round(ago / 60)}m ago`) : '';
     if (d.error) {
       return `
         <div class="chain-scan-card" id="chain-card-${d.sym}">
@@ -4689,17 +6204,17 @@
 
   function refreshChainScanUI() {
     const grid = document.getElementById('chainScanGrid');
-    const age  = document.getElementById('chainScanAge');
+    const age = document.getElementById('chainScanAge');
     if (!grid) return;
     const all = window.BlockchainScan?.getAll() || {};
-    const syms = ['BTC','ETH','SOL','XRP','BNB','DOGE','HYPE'];
+    const syms = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
     if (!Object.keys(all).length) {
       if (age) age.textContent = 'Waiting for data…';
       return;
     }
     // Update each card individually to avoid full re-render flicker
     syms.forEach(sym => {
-      const d    = all[sym];
+      const d = all[sym];
       const slot = document.getElementById(`chain-card-${sym}`);
       if (!d || !slot) return;
       slot.outerHTML = buildChainCard(d);
@@ -4707,7 +6222,7 @@
     if (age) {
       const oldest = Math.min(...syms.filter(s => all[s]?.ts).map(s => all[s].ts));
       const sec = Math.round((Date.now() - oldest) / 1000);
-      age.textContent = sec < 60 ? `Updated ${sec}s ago` : `Updated ${Math.round(sec/60)}m ago`;
+      age.textContent = sec < 60 ? `Updated ${sec}s ago` : `Updated ${Math.round(sec / 60)}m ago`;
     }
   }
 
@@ -4914,7 +6429,7 @@
       try { await fetchScreenerMeta(); } catch (e) { /* use stale cache or empty */ }
       if (_rv !== _myRV) return; // user navigated away during meta fetch
     } else {
-      fetchScreenerMeta().catch(() => {});
+      fetchScreenerMeta().catch(() => { });
     }
 
     const coins = sortScreenerCoins(WATCHLIST.map(c => {
@@ -4925,8 +6440,8 @@
     }));
 
     const gainers = coins.filter(c => c.change > 3);
-    const losers  = coins.filter(c => c.change < -3);
-    const hot     = coins.filter(c => (c.meta?.totalVolume || c.vol) > 100000);
+    const losers = coins.filter(c => c.change < -3);
+    const hot = coins.filter(c => (c.meta?.totalVolume || c.vol) > 100000);
     const topCap = WATCHLIST
       .map(c => ({ ...c, meta: screenerMetaCache[c.sym] || {} }))
       .filter(c => marketCap(c.meta) > 0)
@@ -5080,54 +6595,54 @@
 
   const SUBORBITALS = [
     // ---- Shell 1s: Price Benchmarks (ALL coins) ----
-    { num: 1,  sym: 'CFM', name: 'CFM Rate',         shell: '1s', key: 'cfmRate',      fmt: 'price', desc: 'VWM partition average (CF Benchmarks method)', weight: 'all' },
-    { num: 2,  sym: 'VWP', name: 'VWAP-15',           shell: '1s', key: 'vwap15',       fmt: 'price', desc: 'Volume-weighted average price (15min)', weight: 'all' },
-    { num: 3,  sym: 'TWP', name: 'TWAP-15',           shell: '1s', key: 'twap15',       fmt: 'price', desc: 'Time-weighted average price (15min)', weight: 'all' },
-    { num: 4,  sym: 'SPT', name: 'Spot',              shell: '1s', key: 'lastPrice',    fmt: 'price', desc: 'Latest spot price across sources', weight: 'all' },
+    { num: 1, sym: 'CFM', name: 'CFM Rate', shell: '1s', key: 'cfmRate', fmt: 'price', desc: 'VWM partition average (CF Benchmarks method)', weight: 'all' },
+    { num: 2, sym: 'VWP', name: 'VWAP-15', shell: '1s', key: 'vwap15', fmt: 'price', desc: 'Volume-weighted average price (15min)', weight: 'all' },
+    { num: 3, sym: 'TWP', name: 'TWAP-15', shell: '1s', key: 'twap15', fmt: 'price', desc: 'Time-weighted average price (15min)', weight: 'all' },
+    { num: 4, sym: 'SPT', name: 'Spot', shell: '1s', key: 'lastPrice', fmt: 'price', desc: 'Latest spot price across sources', weight: 'all' },
 
     // ---- Shell 2s: Momentum Oscillators (ALL coins) ----
-    { num: 5,  sym: 'RSI', name: 'RSI(14)',            shell: '2s', key: '_rsi',         fmt: 'num1',  desc: 'Relative Strength Index — overbought/oversold', weight: 'all' },
-    { num: 6,  sym: 'MOM', name: 'Momentum',           shell: '2s', key: 'momentum',     fmt: 'pct3',  desc: 'Rate of change over 5 polling cycles', weight: 'all' },
-    { num: 7,  sym: 'MCD', name: 'MACD',               shell: '2s', key: '_macd',        fmt: 'sign4', desc: 'VWAP-TWAP divergence (MACD proxy)', weight: 'all' },
+    { num: 5, sym: 'RSI', name: 'RSI(14)', shell: '2s', key: '_rsi', fmt: 'num1', desc: 'Relative Strength Index — overbought/oversold', weight: 'all' },
+    { num: 6, sym: 'MOM', name: 'Momentum', shell: '2s', key: 'momentum', fmt: 'pct3', desc: 'Rate of change over 5 polling cycles', weight: 'all' },
+    { num: 7, sym: 'MCD', name: 'MACD', shell: '2s', key: '_macd', fmt: 'sign4', desc: 'VWAP-TWAP divergence (MACD proxy)', weight: 'all' },
 
     // ---- Shell 2p: Trend Signals (ALL coins) ----
-    { num: 8,  sym: 'EMA', name: 'EMA 9/21',           shell: '2p', key: '_emaCross',    fmt: 'pct3',  desc: 'Fast/slow EMA crossover spread', weight: 'all' },
-    { num: 9,  sym: 'TRD', name: 'Trend',              shell: '2p', key: 'trend',        fmt: 'trend', desc: '15-min window direction', weight: 'all' },
+    { num: 8, sym: 'EMA', name: 'EMA 9/21', shell: '2p', key: '_emaCross', fmt: 'pct3', desc: 'Fast/slow EMA crossover spread', weight: 'all' },
+    { num: 9, sym: 'TRD', name: 'Trend', shell: '2p', key: 'trend', fmt: 'trend', desc: '15-min window direction', weight: 'all' },
 
     // ---- Shell 3s: Volume & Flow (ALL coins) ----
-    { num: 10, sym: 'OBV', name: 'OBV Slope',          shell: '3s', key: '_obvSlope',    fmt: 'sign2', desc: 'On-Balance Volume — accumulation/distribution', weight: 'all' },
-    { num: 11, sym: 'VDL', name: 'Vol Delta',          shell: '3s', key: '_volRatio',    fmt: 'ratio', desc: 'Buy vs sell volume ratio', weight: 'all' },
-    { num: 12, sym: 'ATR', name: 'Volatility',         shell: '3s', key: '_atrPct',      fmt: 'pct2',  desc: 'ATR as percentage of price', weight: 'all' },
+    { num: 10, sym: 'OBV', name: 'OBV Slope', shell: '3s', key: '_obvSlope', fmt: 'sign2', desc: 'On-Balance Volume — accumulation/distribution', weight: 'all' },
+    { num: 11, sym: 'VDL', name: 'Vol Delta', shell: '3s', key: '_volRatio', fmt: 'ratio', desc: 'Buy vs sell volume ratio', weight: 'all' },
+    { num: 12, sym: 'ATR', name: 'Volatility', shell: '3s', key: '_atrPct', fmt: 'pct2', desc: 'ATR as percentage of price', weight: 'all' },
 
     // ---- Shell 3p: Order Book Micro (MID + HEAVY only) ----
-    { num: 13, sym: 'BAS', name: 'Bid-Ask',            shell: '3p', key: 'bidAsk',       fmt: 'pct4',  desc: 'Bid-ask spread — market tightness', weight: 'mid' },
-    { num: 14, sym: 'BKI', name: 'Book Imbal',         shell: '3p', key: '_bookImbal',   fmt: 'sign2', desc: 'Order book bid/ask weight imbalance', weight: 'mid' },
-    { num: 15, sym: 'AGR', name: 'Aggressor',          shell: '3p', key: '_aggrBuy',     fmt: 'pct1',  desc: 'Buy-side aggressor ratio from trade tape', weight: 'mid' },
+    { num: 13, sym: 'BAS', name: 'Bid-Ask', shell: '3p', key: 'bidAsk', fmt: 'pct4', desc: 'Bid-ask spread — market tightness', weight: 'mid' },
+    { num: 14, sym: 'BKI', name: 'Book Imbal', shell: '3p', key: '_bookImbal', fmt: 'sign2', desc: 'Order book bid/ask weight imbalance', weight: 'mid' },
+    { num: 15, sym: 'AGR', name: 'Aggressor', shell: '3p', key: '_aggrBuy', fmt: 'pct1', desc: 'Buy-side aggressor ratio from trade tape', weight: 'mid' },
 
     // ---- Shell 3d: Cross-Exchange Arbitrage (MID + HEAVY only) ----
-    { num: 16, sym: 'XSP', name: 'X-Spread',           shell: '3d', key: 'spread',       fmt: 'pct3',  desc: 'Cross-exchange price divergence', weight: 'mid' },
-    { num: 17, sym: 'CVG', name: 'Convergence',        shell: '3d', key: 'convergence',  fmt: 'pct3',  desc: 'How tightly sources agree (lower=better)', weight: 'mid' },
-    { num: 18, sym: 'SRC', name: 'Sources',             shell: '3d', key: 'sourceCount',  fmt: 'of4',   desc: 'Number of active constituent exchanges', weight: 'mid' },
+    { num: 16, sym: 'XSP', name: 'X-Spread', shell: '3d', key: 'spread', fmt: 'pct3', desc: 'Cross-exchange price divergence', weight: 'mid' },
+    { num: 17, sym: 'CVG', name: 'Convergence', shell: '3d', key: 'convergence', fmt: 'pct3', desc: 'How tightly sources agree (lower=better)', weight: 'mid' },
+    { num: 18, sym: 'SRC', name: 'Sources', shell: '3d', key: 'sourceCount', fmt: 'of4', desc: 'Number of active constituent exchanges', weight: 'mid' },
 
     // ---- Shell 3d+: Derivatives (MID + HEAVY) ----
-    { num: 19, sym: 'FND', name: 'Funding Rate',       shell: '3d', key: '_funding',      fmt: 'fundingRate', desc: 'Perp futures funding rate — +longs pay, -shorts pay', weight: 'mid' },
-    { num: 20, sym: 'OI',  name: 'Open Interest',      shell: '3d', key: '_oi',           fmt: 'compactUsd', desc: 'Total open interest in futures markets', weight: 'mid' },
-    { num: 21, sym: 'SQZ', name: 'Squeeze Risk',       shell: '3d', key: '_squeezeScore', fmt: 'squeeze', desc: 'Liquidation cascade / squeeze probability', weight: 'mid' },
+    { num: 19, sym: 'FND', name: 'Funding Rate', shell: '3d', key: '_funding', fmt: 'fundingRate', desc: 'Perp futures funding rate — +longs pay, -shorts pay', weight: 'mid' },
+    { num: 20, sym: 'OI', name: 'Open Interest', shell: '3d', key: '_oi', fmt: 'compactUsd', desc: 'Total open interest in futures markets', weight: 'mid' },
+    { num: 21, sym: 'SQZ', name: 'Squeeze Risk', shell: '3d', key: '_squeezeScore', fmt: 'squeeze', desc: 'Liquidation cascade / squeeze probability', weight: 'mid' },
 
     // ---- Shell 4s: CVD + Coinbase Premium (HEAVY only) ----
-    { num: 22, sym: 'CVD', name: 'Cum Vol Delta',      shell: '4s', key: '_cvdSlope',     fmt: 'sign2', desc: 'CVD slope — buyer/seller exhaustion detector', weight: 'heavy' },
-    { num: 23, sym: 'CBP', name: 'CB Premium',         shell: '4s', key: '_cbPremium',   fmt: 'pct3',  desc: 'Coinbase price vs CFM rate — institutional flow proxy', weight: 'heavy' },
-    { num: 24, sym: 'CBS', name: 'CB Spread',          shell: '4s', key: 'cbSpread',     fmt: 'pct4',  desc: 'Coinbase buy-sell spread', weight: 'heavy' },
+    { num: 22, sym: 'CVD', name: 'Cum Vol Delta', shell: '4s', key: '_cvdSlope', fmt: 'sign2', desc: 'CVD slope — buyer/seller exhaustion detector', weight: 'heavy' },
+    { num: 23, sym: 'CBP', name: 'CB Premium', shell: '4s', key: '_cbPremium', fmt: 'pct3', desc: 'Coinbase price vs CFM rate — institutional flow proxy', weight: 'heavy' },
+    { num: 24, sym: 'CBS', name: 'CB Spread', shell: '4s', key: 'cbSpread', fmt: 'pct4', desc: 'Coinbase buy-sell spread', weight: 'heavy' },
 
     // ---- Shell 4f: Deep Microstructure (HEAVY only) ----
-    { num: 25, sym: 'DXV', name: 'DEX Vol',            shell: '4f', key: '_dexVol',      fmt: 'compactUsd', desc: 'On-chain DEX 24h volume', weight: 'heavy' },
-    { num: 26, sym: 'DXL', name: 'DEX Liq',            shell: '4f', key: '_dexLiq',      fmt: 'compactUsd', desc: 'On-chain DEX liquidity depth', weight: 'heavy' },
+    { num: 25, sym: 'DXV', name: 'DEX Vol', shell: '4f', key: '_dexVol', fmt: 'compactUsd', desc: 'On-chain DEX 24h volume', weight: 'heavy' },
+    { num: 26, sym: 'DXL', name: 'DEX Liq', shell: '4f', key: '_dexLiq', fmt: 'compactUsd', desc: 'On-chain DEX liquidity depth', weight: 'heavy' },
 
     // ---- Shell 5s: Market Consensus (ALL coins, requires PredictionMarkets) ----
-    { num: 27, sym: 'MKT', name: 'Mkt Consensus',      shell: '5s', key: '_mktConsensus', fmt: 'prob1',      desc: 'Kalshi + Polymarket implied UP probability', weight: 'all' },
+    { num: 27, sym: 'MKT', name: 'Mkt Consensus', shell: '5s', key: '_mktConsensus', fmt: 'prob1', desc: 'Kalshi + Polymarket implied UP probability', weight: 'all' },
 
     // ---- Shell 5p: Social Sentiment (ALL coins, requires x.ai API key) ----
-    { num: 28, sym: 'SNT', name: 'X Sentiment',         shell: '5p', key: '_xSentiment',  fmt: 'sentiment',  desc: 'X.com real-time crowd sentiment via Grok AI (-100 to +100)', weight: 'all' },
+    { num: 28, sym: 'SNT', name: 'X Sentiment', shell: '5p', key: '_xSentiment', fmt: 'sentiment', desc: 'X.com real-time crowd sentiment via Grok AI (-100 to +100)', weight: 'all' },
   ];
 
   async function renderCFM() {
@@ -5143,7 +6658,7 @@
       if (!predsLoaded) {
         startPredictionRun()
           .then(() => { predsLoaded = true; _lastPredictionRunTs = Date.now(); snapshotPredictions(); })
-          .catch(() => {});
+          .catch(() => { });
       }
       if (window.PredictionMarkets && !window._mktStarted) { window.PredictionMarkets.start(); window._mktStarted = true; }
     }
@@ -5243,7 +6758,7 @@
     `;
 
     // Hydrate WECRYPTO sentiment panel (scripts in innerHTML don't execute)
-    (function() {
+    (function () {
       const panel = document.getElementById('xai-sentiment-panel');
       if (!panel) return;
       try {
@@ -5286,7 +6801,7 @@
             'style="padding:9px 20px;background:#a855f7;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:800;color:#fff;cursor:pointer;flex-shrink:0">Connect</button></div>' +
             '<div style="font-size:9px;color:var(--color-text-faint);margin-top:8px">Credentials from <a href="https://developer.twitter.com" target="_blank" style="color:#a855f7">developer.twitter.com</a> \u2192 Your App \u2192 Keys &amp; Tokens \u2192 OAuth 2.0. Stored locally only.</div></div>';
         }
-      } catch(e) { console.warn('[WECRYPTO panel]', e); }
+      } catch (e) { console.warn('[WECRYPTO panel]', e); }
     })();
 
     // ── Progressive async fill — opportunities panel then coins one-by-one ──
@@ -5298,21 +6813,21 @@
       const oppSlot = document.getElementById('cfm-opp-slot');
       if (oppSlot) {
         try { oppSlot.outerHTML = buildOpportunitiesPanel(cfmAll, predAll) || '<div id="cfm-opp-slot"></div>'; }
-        catch(e) { console.warn('[CFM] opp panel error:', e); }
+        catch (e) { console.warn('[CFM] opp panel error:', e); }
       }
 
       // 2. Each coin table (heavy — up to 22 suborbitals each)
       for (const coin of PREDICTION_COINS) {
         await new Promise(r => setTimeout(r, 0));
         if (_rv !== _myRV) return;
-        const cfm  = cfmAll[coin.sym];
+        const cfm = cfmAll[coin.sym];
         const pred = predAll[coin.sym];
         const slot = document.getElementById(`cfm-coin-slot-${coin.sym}`);
         if (!slot) continue;
         if (!cfm || cfm.cfmRate === 0) { slot.remove(); continue; }
         try {
           slot.outerHTML = buildCoinPeriodicTable(coin, cfm, pred);
-        } catch(e) {
+        } catch (e) {
           console.warn(`[CFM] coin table error ${coin.sym}:`, e);
           slot.remove();
         }
@@ -5326,7 +6841,7 @@
           const block = btn.closest('[data-cfm-sym]');
           if (!block) return;
           const panel = block.querySelector('.cfm-expand-panel');
-          const icon  = block.querySelector('.cfm-expand-icon');
+          const icon = block.querySelector('.cfm-expand-icon');
           const isOpen = panel?.classList.toggle('open');
           block.classList.toggle('expanded', isOpen);
           if (icon) icon.textContent = isOpen ? '\u2212' : '+';
@@ -5519,11 +7034,11 @@
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
           ${alerts.map(a => {
-            const bgColor = a.type === 'opp' ? 'var(--color-green-dim)' : a.type === 'warn' ? 'var(--color-orange-dim)' : 'var(--color-surface-2)';
-            const borderColor = a.type === 'opp' ? 'var(--color-green)' : a.type === 'warn' ? 'var(--color-orange)' : 'var(--color-primary)';
-            const typeLabel = a.type === 'opp' ? 'OPPORTUNITY' : a.type === 'warn' ? 'WARNING' : 'INTEL';
-            const typeBadgeColor = a.type === 'opp' ? 'var(--color-green)' : a.type === 'warn' ? 'var(--color-orange)' : 'var(--color-primary)';
-            return `
+      const bgColor = a.type === 'opp' ? 'var(--color-green-dim)' : a.type === 'warn' ? 'var(--color-orange-dim)' : 'var(--color-surface-2)';
+      const borderColor = a.type === 'opp' ? 'var(--color-green)' : a.type === 'warn' ? 'var(--color-orange)' : 'var(--color-primary)';
+      const typeLabel = a.type === 'opp' ? 'OPPORTUNITY' : a.type === 'warn' ? 'WARNING' : 'INTEL';
+      const typeBadgeColor = a.type === 'opp' ? 'var(--color-green)' : a.type === 'warn' ? 'var(--color-orange)' : 'var(--color-primary)';
+      return `
               <div style="padding:10px 14px;background:${bgColor};border-left:3px solid ${borderColor};border-radius:var(--radius-md)">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                   <span style="font-size:15px">${a.icon}</span>
@@ -5534,7 +7049,7 @@
                 <div style="font-size:11px;color:var(--color-text-muted);line-height:1.5">${a.body}</div>
               </div>
             `;
-          }).join('')}
+    }).join('')}
         </div>
       </div>
     `;
@@ -5580,9 +7095,9 @@
     // Kalshi contract price — detects tail-risk (too expensive) and leverage (too cheap)
     const pm = window.PredictionMarkets?.getCoin?.(coin?.sym);
     const kalshiYesPrice = pm?.kalshi15m?.probability ?? null;
-    const entryIsTailRisk  = kalshiYesPrice !== null && kalshiYesPrice >= 0.85; // paying 85¢+ to win ≤15¢
+    const entryIsTailRisk = kalshiYesPrice !== null && kalshiYesPrice >= 0.85; // paying 85¢+ to win ≤15¢
     const entryIsLeveraged = kalshiYesPrice !== null && kalshiYesPrice <= 0.15; // paying ≤15¢, high variance
-    const lossErasesWins   = entryIsTailRisk
+    const lossErasesWins = entryIsTailRisk
       ? Math.round(kalshiYesPrice / (1 - kalshiYesPrice))   // 1 loss wipes N wins
       : null;
 
@@ -5593,7 +7108,7 @@
     if (entryIsTailRisk) {
       tier = 'TAIL RISK'; tierColor = 'var(--color-red)';
       tierDesc = `YES at ${Math.round(kalshiYesPrice * 100)}¢ — 1 loss erases ${lossErasesWins} wins. Need overwhelming edge to justify.`;
-    // Leveraged-entry override: tiny YES price = high variance, wide gap required
+      // Leveraged-entry override: tiny YES price = high variance, wide gap required
     } else if (entryIsLeveraged) {
       tier = edge15 > 0.25 && signalCount >= 3 ? 'HIGH CONVICTION' : 'LEVERAGED';
       tierColor = edge15 > 0.25 && signalCount >= 3 ? 'var(--color-green)' : 'var(--color-orange)';
@@ -5809,53 +7324,53 @@
         const prev = window._orchLog.length
           ? window._orchLog.filter(e => e.sym === coin.sym).slice(-1)[0] : null;
         const changed = !prev
-          || prev.action    !== ki.action
-          || prev.side      !== ki.side
+          || prev.action !== ki.action
+          || prev.side !== ki.side
           || prev.alignment !== ki.alignment;
         if (changed) {
           const setupType = maybePlayTradeSetupBell(coin.sym, ki);
           window._orchLog.push({
-            sym:         coin.sym,
-            ts:          Date.now(),
-            action:      ki.action,
-            side:        ki.side         ?? null,
-            direction:   ki.direction    ?? null,
-            alignment:   ki.alignment    ?? null,
-            edgeCents:   ki.edgeCents    ?? null,
-            confidence:  ki.confidence   ?? null,
-            modelScore:  ki.modelScore   ?? null,
-            secsLeft:    ki.secsLeft     ?? null,
-            minsLeft:    ki.minsLeft     ?? null,
-            sweetSpot:   ki.sweetSpot    ?? false,
-            crowdFade:   ki.crowdFade    ?? false,
-            signalLocked:ki.signalLocked ?? false,
-            setupType:   setupType       ?? null,
+            sym: coin.sym,
+            ts: Date.now(),
+            action: ki.action,
+            side: ki.side ?? null,
+            direction: ki.direction ?? null,
+            alignment: ki.alignment ?? null,
+            edgeCents: ki.edgeCents ?? null,
+            confidence: ki.confidence ?? null,
+            modelScore: ki.modelScore ?? null,
+            secsLeft: ki.secsLeft ?? null,
+            minsLeft: ki.minsLeft ?? null,
+            sweetSpot: ki.sweetSpot ?? false,
+            crowdFade: ki.crowdFade ?? false,
+            signalLocked: ki.signalLocked ?? false,
+            setupType: setupType ?? null,
             contractTicker: ki.contractTicker ?? null,
-            humanReason: ki.humanReason  ?? null,
+            humanReason: ki.humanReason ?? null,
           });
           if (window._orchLog.length > 300) window._orchLog.shift();
           saveOrchLog();
         }
       });
-    } catch(orchLogErr) { console.warn('[orchLog]', orchLogErr.message); }
+    } catch (orchLogErr) { console.warn('[orchLog]', orchLogErr.message); }
 
     // ── DataLogger hooks — fire-and-forget, no perf impact ──────────────────
     if (window.DataLogger) {
       PREDICTION_COINS.forEach(coin => {
         const pred = predAll[coin.sym];
-        const cfm  = cfmAll[coin.sym];
+        const cfm = cfmAll[coin.sym];
         if (!pred || !cfm || cfm.cfmRate === 0) return;
         const ind = pred.indicators || {};
         const lastPred = window._lastPrediction?.[coin.sym];
         window.DataLogger.logPrediction(coin.sym, {
-          dir:       pred.direction ?? lastPred?.direction ?? null,
-          score:     pred.score     ?? null,
-          conf:      pred.confidence ?? null,
-          quality:   pred.modelQuality ?? null,
-          fit:       pred.tradeFit     ?? null,
+          dir: pred.direction ?? lastPred?.direction ?? null,
+          score: pred.score ?? null,
+          conf: pred.confidence ?? null,
+          quality: pred.modelQuality ?? null,
+          fit: pred.tradeFit ?? null,
           alignment: pred.signalAlignment ?? null,
-          rsi:       ind.rsi?.value ?? null,
-          vwapDev:   cfm.vwapDev    ?? null,
+          rsi: ind.rsi?.value ?? null,
+          vwapDev: cfm.vwapDev ?? null,
         });
         const ki = kalshiIntents[coin.sym];
         if (ki) window.DataLogger.logDecision(coin.sym, ki);
@@ -5940,10 +7455,10 @@
 
         <div class="opp-grid">
           ${verdicts.map(v => {
-            const e = v.edge;
-            const arrow = e.dir === 'up' ? '\u2191' : '\u2193';
-            const dirLabel = e.dir === 'up' ? 'UP' : 'DOWN';
-            return `
+      const e = v.edge;
+      const arrow = e.dir === 'up' ? '\u2191' : '\u2193';
+      const dirLabel = e.dir === 'up' ? 'UP' : 'DOWN';
+      return `
               <div class="opp-card ${e.tier === 'HIGH CONVICTION' ? 'scalp' : e.tier === 'MARGINAL' ? 'fade' : e.tier === 'NOT WORTH IT' ? 'danger' : 'even'}" style="padding:12px">
                 <div class="opp-head">
                   <span style="color:${v.color};font-size:14px">${v.sym}</span>
@@ -5991,58 +7506,58 @@
                 </div>
 
                 ${(() => {
-                  const ki = kalshiIntents[v.sym];
-                  if (!ki || ki.action === 'skip') return '';
-                  const isExit      = ki.action === 'earlyExit';
-                  const isHold      = ki.action === 'hold';
-                  const isTrade     = ki.action === 'trade';
-                  const isCrowdFade = ki.alignment === 'CROWD_FADE' || !!ki.crowdFade;
-                  const isDivergent = ki.alignment === 'DIVERGENT' || isCrowdFade;
-                  const bg     = isExit      ? 'rgba(255,80,80,0.07)'
-                               : isHold      ? 'rgba(255,180,0,0.07)'
-                               : isCrowdFade ? 'rgba(224,64,251,0.08)'
-                               : isTrade     ? 'rgba(0,200,100,0.08)'
-                               : isDivergent ? 'rgba(255,140,0,0.07)'
-                               :               'rgba(200,200,0,0.06)';
-                  const border = isExit      ? 'rgba(255,80,80,0.25)'
-                               : isHold      ? 'rgba(255,180,0,0.28)'
-                               : isCrowdFade ? 'rgba(224,64,251,0.26)'
-                               : isTrade     ? 'rgba(0,200,100,0.22)'
-                               : isDivergent ? 'rgba(255,140,0,0.28)'
-                               :               'rgba(200,200,0,0.18)';
-                  const sideColor  = ki.side === 'YES' ? 'var(--color-green)' : ki.side === 'NO' ? 'var(--color-red)' : 'var(--color-text-muted)';
-                  const sideBg     = ki.side === 'YES' ? 'rgba(0,200,100,0.18)' : ki.side === 'NO' ? 'rgba(220,60,60,0.18)' : 'transparent';
-                  const alignColor = isCrowdFade ? '#e040fb' : isDivergent ? '#ff8c00' : isTrade ? 'var(--color-green)' : 'var(--color-text-muted)';
-                  const alignTagC  = {
-                    ALIGNED:'✓ Aligned', DIVERGENT:'⚡ Divergent', CROWD_FADE:'🔄 Crowd fade', MODEL_LEADS:'→ Model leads',
-                    KALSHI_ONLY:'◇ Kalshi only', MODEL_ONLY:'◆ Model only',
-                    EARLY_EXIT:'✗ Early exit', SHELL_EVAL:'⏳ Evaluating',
-                  }[ki.alignment] || (ki.alignment || '');
-                  const strikeC = ki.strikeStr || (() => {
-                    const m = (ki.contractTicker||'').match(/T(\d+(?:\.\d+)?)$/);
-                    return m ? 'T'+Number(m[1]).toLocaleString() : '';
-                  })();
-                  // Millisecond-precision countdown — recomputed fresh on every render
-                  const msNow   = ki.closeTimeMs ? Math.max(0, ki.closeTimeMs - Date.now()) : null;
-                  const secsNow = msNow != null ? msNow / 1000 : null;
-                  const timeStr = secsNow == null ? null
-                    : secsNow < 10  ? msNow.toFixed(0) + 'ms'
-                    : secsNow < 90  ? Math.round(secsNow) + 's'
-                    : (secsNow / 60).toFixed(1) + 'm';
-                  const isLastCall = msNow != null && msNow <= 60000;
-                  return `
+          const ki = kalshiIntents[v.sym];
+          if (!ki || ki.action === 'skip') return '';
+          const isExit = ki.action === 'earlyExit';
+          const isHold = ki.action === 'hold';
+          const isTrade = ki.action === 'trade';
+          const isCrowdFade = ki.alignment === 'CROWD_FADE' || !!ki.crowdFade;
+          const isDivergent = ki.alignment === 'DIVERGENT' || isCrowdFade;
+          const bg = isExit ? 'rgba(255,80,80,0.07)'
+            : isHold ? 'rgba(255,180,0,0.07)'
+              : isCrowdFade ? 'rgba(224,64,251,0.08)'
+                : isTrade ? 'rgba(0,200,100,0.08)'
+                  : isDivergent ? 'rgba(255,140,0,0.07)'
+                    : 'rgba(200,200,0,0.06)';
+          const border = isExit ? 'rgba(255,80,80,0.25)'
+            : isHold ? 'rgba(255,180,0,0.28)'
+              : isCrowdFade ? 'rgba(224,64,251,0.26)'
+                : isTrade ? 'rgba(0,200,100,0.22)'
+                  : isDivergent ? 'rgba(255,140,0,0.28)'
+                    : 'rgba(200,200,0,0.18)';
+          const sideColor = ki.side === 'YES' ? 'var(--color-green)' : ki.side === 'NO' ? 'var(--color-red)' : 'var(--color-text-muted)';
+          const sideBg = ki.side === 'YES' ? 'rgba(0,200,100,0.18)' : ki.side === 'NO' ? 'rgba(220,60,60,0.18)' : 'transparent';
+          const alignColor = isCrowdFade ? '#e040fb' : isDivergent ? '#ff8c00' : isTrade ? 'var(--color-green)' : 'var(--color-text-muted)';
+          const alignTagC = {
+            ALIGNED: '✓ Aligned', DIVERGENT: '⚡ Divergent', CROWD_FADE: '🔄 Crowd fade', MODEL_LEADS: '→ Model leads',
+            KALSHI_ONLY: '◇ Kalshi only', MODEL_ONLY: '◆ Model only',
+            EARLY_EXIT: '✗ Early exit', SHELL_EVAL: '⏳ Evaluating',
+          }[ki.alignment] || (ki.alignment || '');
+          const strikeC = ki.strikeStr || (() => {
+            const m = (ki.contractTicker || '').match(/T(\d+(?:\.\d+)?)$/);
+            return m ? 'T' + Number(m[1]).toLocaleString() : '';
+          })();
+          // Millisecond-precision countdown — recomputed fresh on every render
+          const msNow = ki.closeTimeMs ? Math.max(0, ki.closeTimeMs - Date.now()) : null;
+          const secsNow = msNow != null ? msNow / 1000 : null;
+          const timeStr = secsNow == null ? null
+            : secsNow < 10 ? msNow.toFixed(0) + 'ms'
+              : secsNow < 90 ? Math.round(secsNow) + 's'
+                : (secsNow / 60).toFixed(1) + 'm';
+          const isLastCall = msNow != null && msNow <= 60000;
+          return `
                    <div style="margin-top:6px;padding:7px 9px;border-radius:5px;background:${bg};border:1px solid ${border}">
                      ${isExit
-                       ? `<div style="display:flex;align-items:center;gap:8px">
+              ? `<div style="display:flex;align-items:center;gap:8px">
                             <span style="background:rgba(255,80,80,0.22);color:var(--color-red);padding:3px 12px;border-radius:4px;font-size:12px;font-weight:800;letter-spacing:.5px">STAND ASIDE</span>
                             <span style="font-size:11px;color:var(--color-text-muted)">CFM early-exit signal</span>
                           </div>`
-                       : isHold
-                       ? `<div style="display:flex;align-items:center;gap:8px">
+              : isHold
+                ? `<div style="display:flex;align-items:center;gap:8px">
                             <span style="background:rgba(255,180,0,0.22);color:var(--color-gold,#f90);padding:3px 12px;border-radius:4px;font-size:12px;font-weight:800;letter-spacing:.5px">⏳ EVALUATING</span>
                             <span style="font-size:11px;color:var(--color-text-muted)">Shell wall — collecting data</span>
                           </div>`
-                       : `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                : `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                             <span style="background:${sideBg};color:${sideColor};padding:3px 12px;border-radius:4px;font-size:14px;font-weight:800;letter-spacing:.7px">${ki.side}</span>
                             <span style="font-size:12px;font-weight:700;color:var(--color-text);font-family:var(--font-mono)">KALSHI${strikeC ? ' · ' + strikeC : ''}</span>
                             ${ki.isInversion ? '<span style="background:rgba(255,120,0,0.22);color:#ff8c00;padding:2px 7px;border-radius:3px;font-size:11px;font-weight:800">🔥 INVERSION</span>' : ''}
@@ -6062,33 +7577,33 @@
                        <div style="background:var(--color-surface-3);padding:3px 8px;border-radius:4px;text-align:center;min-width:44px">
                          <div style="font-size:9px;color:var(--color-text-faint)">ENTRY</div>
                          <div style="font-size:13px;font-weight:800;color:${ki.thinBook ? 'var(--color-orange)' : ki.tailRisk ? '#ff6b6b' : 'var(--color-text)'}">
-                           ${ki.entryPrice != null ? '$'+(ki.entryPrice*100).toFixed(0)+'¢' : '—'}</div>
+                           ${ki.entryPrice != null ? '$' + (ki.entryPrice * 100).toFixed(0) + '¢' : '—'}</div>
                        </div>
                        ${ki.breakEven != null ? `<div style="background:var(--color-surface-3);padding:3px 8px;border-radius:4px;text-align:center;min-width:52px">
                          <div style="font-size:9px;color:var(--color-text-faint)">NEED WIN%</div>
-                         <div style="font-size:13px;font-weight:800;color:var(--color-text)">${Math.round(ki.breakEven*100)}%</div></div>` : ''}
+                         <div style="font-size:13px;font-weight:800;color:var(--color-text)">${Math.round(ki.breakEven * 100)}%</div></div>` : ''}
                        ${ki.kellyPct > 0 ? `<div style="background:var(--color-surface-3);padding:3px 8px;border-radius:4px;text-align:center;min-width:44px">
                          <div style="font-size:9px;color:var(--color-text-faint)">KELLY</div>
                          <div style="font-size:13px;font-weight:800;color:var(--color-text)">${ki.kellyPct}%</div></div>` : ''}
                      </div>` : ''}
                      <div style="font-size:11px;color:var(--color-text-faint);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap">
-                       ${ki.modelProbUp != null ? `<span>Model <strong style="color:var(--color-text)">${Math.round(ki.modelProbUp*100)}%</strong> ↑</span>` : ''}
-                       ${ki.kalshiYesPrice != null ? `<span>Kalshi <strong style="color:var(--color-text)">${Math.round(ki.kalshiYesPrice*100)}%</strong> YES</span>` : ''}
+                       ${ki.modelProbUp != null ? `<span>Model <strong style="color:var(--color-text)">${Math.round(ki.modelProbUp * 100)}%</strong> ↑</span>` : ''}
+                       ${ki.kalshiYesPrice != null ? `<span>Kalshi <strong style="color:var(--color-text)">${Math.round(ki.kalshiYesPrice * 100)}%</strong> YES</span>` : ''}
                        ${ki.targetPrice ? `<span>Strike <strong style="color:var(--color-text)">${ki.targetPrice}</strong></span>` : ''}
                        ${timeStr && !isLastCall ? `<span id="kalshi-min-${ki.sym}" data-close-ms="${ki.closeTimeMs}">⏱ <strong>${timeStr}</strong></span>` : ''}
                        <span style="color:${isTrade ? 'var(--color-green)' : 'var(--color-orange)'}"><strong>${ki.confidence}%</strong> conf</span>
                      </div>
-                     ${ki.thinBook ? `<div style="font-size:11px;color:var(--color-orange);margin-top:3px">⚠ Thin book (${ki.entryPrice != null ? (ki.entryPrice*100).toFixed(0) : '?'}¢ entry) — check spread before sizing</div>` : ''}
+                     ${ki.thinBook ? `<div style="font-size:11px;color:var(--color-orange);margin-top:3px">⚠ Thin book (${ki.entryPrice != null ? (ki.entryPrice * 100).toFixed(0) : '?'}¢ entry) — check spread before sizing</div>` : ''}
                      ${ki.tailRisk ? `<div style="font-size:11px;color:#ff6b6b;margin-top:3px">⚠ Tail risk ($${ki.entryPrice != null ? ki.entryPrice.toFixed(2) : '?'} entry)${ki.lossErasesWins ? ' — one loss erases ' + ki.lossErasesWins + ' wins' : ''}</div>` : ''}
                       ${isCrowdFade ? `<div style="font-size:11px;color:#e040fb;margin-top:3px">🔄 Mispricing hunter active — blockchain momentum is diverging from crowd pricing</div>`
-                      : isDivergent ? `<div style="font-size:11px;color:#ff8c00;margin-top:3px">⚡ Model vs house — buy the mispriced side, the edge IS the divergence</div>` : ''}
+              : isDivergent ? `<div style="font-size:11px;color:#ff8c00;margin-top:3px">⚡ Model vs house — buy the mispriced side, the edge IS the divergence</div>` : ''}
                       ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px;line-height:1.4">${ki.humanReason}</div>` : ''}
                       ${renderFifteenMinuteMovePlan(ki, true)}
                     </div>`;
-                })()}
+        })()}
                 </div>
             `;
-          }).join('')}
+    }).join('')}
         </div>
       </div>
 
@@ -6176,7 +7691,7 @@
 
     // Shell 2p — Trend direction
     const trd = vals.trend;
-    if (trd === 'rising')  addInner(0.7, 0.10);
+    if (trd === 'rising') addInner(0.7, 0.10);
     else if (trd === 'falling') addInner(-0.7, 0.10);
 
     // Shell 3s — OBV slope
@@ -6264,11 +7779,11 @@
     const dir = raw > 0.08 ? 'up' : raw < -0.08 ? 'down' : 'flat';
 
     let stateLabel, stateClass;
-    if      (abs >= 0.80) { stateLabel = 'IONISED';    stateClass = 'ionised'; }
-    else if (abs >= 0.60) { stateLabel = 'IONISING';   stateClass = 'ionising'; }
+    if (abs >= 0.80) { stateLabel = 'IONISED'; stateClass = 'ionised'; }
+    else if (abs >= 0.60) { stateLabel = 'IONISING'; stateClass = 'ionising'; }
     else if (abs >= 0.35) { stateLabel = 'HIGH ENERGY'; stateClass = 'high'; }
-    else if (abs >= 0.12) { stateLabel = 'EXCITED';    stateClass = 'excited'; }
-    else                  { stateLabel = 'GROUND';     stateClass = 'ground'; }
+    else if (abs >= 0.12) { stateLabel = 'EXCITED'; stateClass = 'excited'; }
+    else { stateLabel = 'GROUND'; stateClass = 'ground'; }
 
     // ── Conflict detection: outer catalysts oppose inner state ────────────
     const conflicted = (
@@ -6284,7 +7799,7 @@
     const bearSignals = pred?.signals?.filter(s => s.dir < 0).length ?? 0;
     const totalSignals = bullSignals + bearSignals;
     const shellsAligned = dir === 'up' ? bullSignals : dir === 'down' ? bearSignals : Math.min(bullSignals, bearSignals);
-    const shellsTotal   = Math.max(totalSignals, 1);
+    const shellsTotal = Math.max(totalSignals, 1);
 
     return {
       score: raw,
@@ -6325,9 +7840,9 @@
 
   // ── Entry quality grading ──────────────────────────────────────────────
   function computeEntryQuality(gs, regime, pred) {
-    const abs  = Math.abs(gs.score);
+    const abs = Math.abs(gs.score);
     const conf = gs.shellsTotal > 0 ? gs.shellsAligned / gs.shellsTotal : 0;
-    const rel  = pred?.backtest?.summary?.reliability ?? 0;
+    const rel = pred?.backtest?.summary?.reliability ?? 0;
 
     if (gs.conflicted) {
       return { grade: 'D', label: 'WAIT', cls: 'wait', reason: 'Shell conflict — outer catalysts oppose inner state' };
@@ -6396,13 +7911,13 @@
     };
 
     // ── Ground state synthesis ──────────────────────────────────────────
-    const gs     = computeGroundState(vals, pred, weightClass);
+    const gs = computeGroundState(vals, pred, weightClass);
     const regime = detectMarketRegime(pred);
-    const eq     = computeEntryQuality(gs, regime, pred);
+    const eq = computeEntryQuality(gs, regime, pred);
 
     // Ground state bar: fill from centre to each side
-    const barPct    = Math.abs(gs.score) * 50;  // 0-50% each side from centre
-    const barFill   = `left:${gs.dir === 'down' ? 50 - barPct : 50}%;width:${barPct}%;`;
+    const barPct = Math.abs(gs.score) * 50;  // 0-50% each side from centre
+    const barFill = `left:${gs.dir === 'down' ? 50 - barPct : 50}%;width:${barPct}%;`;
 
     const triggerBadges = gs.triggers.map(t =>
       `<span class="gs-trigger ${t.dir} ${t.strength}" title="${t.sym}">${t.sym} ${t.label}</span>`
@@ -6471,11 +7986,11 @@
             </div>
           </div>
           <div style="display:flex;flex-direction:column;gap:3px;align-items:center">
-            ${['CDC','CB','GKO','DEX'].map(src => {
-              const has = srcKeys.includes(src);
-              const c = src === 'CDC' ? '#1a6eff' : src === 'CB' ? '#0052ff' : src === 'GKO' ? '#8dc63f' : '#a259ff';
-              return `<span title="${src}: ${cfm.sources?.[src] ? fmtPrice(cfm.sources[src]) : 'N/A'}" style="width:6px;height:6px;border-radius:50%;background:${has ? c : 'var(--color-border)'};opacity:${has ? 1 : 0.25}"></span>`;
-            }).join('')}
+            ${['CDC', 'CB', 'GKO', 'DEX'].map(src => {
+      const has = srcKeys.includes(src);
+      const c = src === 'CDC' ? '#1a6eff' : src === 'CB' ? '#0052ff' : src === 'GKO' ? '#8dc63f' : '#a259ff';
+      return `<span title="${src}: ${cfm.sources?.[src] ? fmtPrice(cfm.sources[src]) : 'N/A'}" style="width:6px;height:6px;border-radius:50%;background:${has ? c : 'var(--color-border)'};opacity:${has ? 1 : 0.25}"></span>`;
+    }).join('')}
             <span class="cfm-expand-icon">${expanded ? '−' : '+'}</span>
           </div>
           ${gsHtml}
@@ -6609,8 +8124,8 @@
         return mk(null, '', '');
       case 'SNT':
         if (raw === null || raw === undefined) return mk(null, '', '');
-        if (raw >= 65)  return mk('bull', 'SOC-UP', 'X crowd: +' + raw.toFixed(0) + ' — FOMO building, strong bullish sentiment');
-        if (raw >= 35)  return mk('bull', 'SOC-UP', 'X crowd: +' + raw.toFixed(0) + ' — positive social flow');
+        if (raw >= 65) return mk('bull', 'SOC-UP', 'X crowd: +' + raw.toFixed(0) + ' — FOMO building, strong bullish sentiment');
+        if (raw >= 35) return mk('bull', 'SOC-UP', 'X crowd: +' + raw.toFixed(0) + ' — positive social flow');
         if (raw <= -65) return mk('bear', 'SOC-DN', 'X crowd: ' + raw.toFixed(0) + ' — fear/panic spreading');
         if (raw <= -35) return mk('bear', 'SOC-DN', 'X crowd: ' + raw.toFixed(0) + ' — negative social flow');
         if (Math.abs(raw) < 15) return mk('even', 'EVEN', 'X crowd: ' + raw.toFixed(0) + ' — mixed, no edge');
@@ -6712,18 +8227,18 @@
   // Returns { primary, secondary } rationale strings for the decision band.
   // Priority: mean-reversion > strong trend > band stretch > VWAP > MACD > OBV > volume > market > generic
   function getDecisionRationale(pred) {
-    const ind  = pred?.indicators || {};
-    const dir  = predictionDirection(pred);
-    const rsi  = ind.rsi?.value;
-    const adx  = ind.adx?.adx;
+    const ind = pred?.indicators || {};
+    const dir = predictionDirection(pred);
+    const rsi = ind.rsi?.value;
+    const adx = ind.adx?.adx;
     const bbPos = ind.bands?.position;
     const vwapDev = ind.vwap?.value;
-    const stochK  = ind.stochrsi?.k;
-    const mfi     = ind.mfi?.value;
+    const stochK = ind.stochrsi?.k;
+    const mfi = ind.mfi?.value;
     const obvSlope = ind.obv?.slope;
-    const buyPct   = ind.volume?.buyPct;
+    const buyPct = ind.volume?.buyPct;
 
-    let primary   = '';
+    let primary = '';
     let secondary = '';
 
     // ---- 0. Kalshi market odds — primary ground truth ────────────────────
@@ -6732,71 +8247,71 @@
     const _kProbR = _kCoinR?.kalshi15m?.probability ?? _kCoinR?.combinedProb ?? null;
     const _strikeR = _kCoinR?.kalshi15m?.strikeDir === 'below' ? 'below' : 'above';
     const _yesDirR = _strikeR === 'below' ? 'DOWN' : 'UP';
-    const _noDirR  = _yesDirR === 'UP' ? 'DOWN' : 'UP';
+    const _noDirR = _yesDirR === 'UP' ? 'DOWN' : 'UP';
     if (_kProbR !== null) {
       const kp = Math.round(_kProbR * 100);
-      if      (_kProbR >= 0.68) primary = `Kalshi ${kp}% YES — crowd strongly pricing ${_yesDirR} for this strike`;
-      else if (_kProbR <= 0.32) primary = `Kalshi ${100-kp}% NO — crowd strongly pricing ${_noDirR}`;
+      if (_kProbR >= 0.68) primary = `Kalshi ${kp}% YES — crowd strongly pricing ${_yesDirR} for this strike`;
+      else if (_kProbR <= 0.32) primary = `Kalshi ${100 - kp}% NO — crowd strongly pricing ${_noDirR}`;
       else if (_kProbR >= 0.55) primary = `Kalshi ${kp}% YES — market leans ${_yesDirR}`;
-      else if (_kProbR <= 0.45) primary = `Kalshi ${100-kp}% NO — market leans ${_noDirR}`;
-      else                       primary = `Kalshi near 50/50 (${kp}%) — uncertain, model drives verdict`;
+      else if (_kProbR <= 0.45) primary = `Kalshi ${100 - kp}% NO — market leans ${_noDirR}`;
+      else primary = `Kalshi near 50/50 (${kp}%) — uncertain, model drives verdict`;
     }
 
     if (!primary) {
-    if (rsi != null && rsi < 30 && dir >= 0) {
-      primary = `Mean reversion — RSI ${rsi.toFixed(0)}, oversold bounce`;
-    } else if (rsi != null && rsi > 70 && dir <= 0) {
-      primary = `Mean reversion — RSI ${rsi.toFixed(0)}, overbought fade`;
-    } else if (stochK != null && stochK < 15 && dir >= 0) {
-      primary = `StochRSI oversold — ${stochK.toFixed(0)}, reversal setup`;
-    } else if (stochK != null && stochK > 85 && dir <= 0) {
-      primary = `StochRSI overbought — ${stochK.toFixed(0)}, pullback risk`;
-    } else if (mfi != null && mfi < 20 && dir >= 0) {
-      primary = `MFI oversold — money flow exhausted, bounce likely`;
-    } else if (mfi != null && mfi > 80 && dir <= 0) {
-      primary = `MFI overbought — smart money distributing`;
+      if (rsi != null && rsi < 30 && dir >= 0) {
+        primary = `Mean reversion — RSI ${rsi.toFixed(0)}, oversold bounce`;
+      } else if (rsi != null && rsi > 70 && dir <= 0) {
+        primary = `Mean reversion — RSI ${rsi.toFixed(0)}, overbought fade`;
+      } else if (stochK != null && stochK < 15 && dir >= 0) {
+        primary = `StochRSI oversold — ${stochK.toFixed(0)}, reversal setup`;
+      } else if (stochK != null && stochK > 85 && dir <= 0) {
+        primary = `StochRSI overbought — ${stochK.toFixed(0)}, pullback risk`;
+      } else if (mfi != null && mfi < 20 && dir >= 0) {
+        primary = `MFI oversold — money flow exhausted, bounce likely`;
+      } else if (mfi != null && mfi > 80 && dir <= 0) {
+        primary = `MFI overbought — smart money distributing`;
 
-    // ---- 2. Strong trend (ADX > 25) ----
-    } else if (adx != null && adx > 28) {
-      if (dir > 0) primary = `Strong uptrend — ADX ${adx.toFixed(0)}, trend continuation`;
-      else if (dir < 0) primary = `Strong downtrend — ADX ${adx.toFixed(0)}, trend continuation`;
-      else primary = `Trending market — ADX ${adx.toFixed(0)}, direction unclear`;
+        // ---- 2. Strong trend (ADX > 25) ----
+      } else if (adx != null && adx > 28) {
+        if (dir > 0) primary = `Strong uptrend — ADX ${adx.toFixed(0)}, trend continuation`;
+        else if (dir < 0) primary = `Strong downtrend — ADX ${adx.toFixed(0)}, trend continuation`;
+        else primary = `Trending market — ADX ${adx.toFixed(0)}, direction unclear`;
 
-    // ---- 3. Bollinger Band stretch ----
-    } else if (bbPos != null && bbPos >= 0.88) {
-      primary = dir <= 0 ? `Upper-band stretch — overextended, reversion risk` : `Upper-band breakout — momentum expanding`;
-    } else if (bbPos != null && bbPos <= 0.12) {
-      primary = dir >= 0 ? `Lower-band stretch — oversold, snap-back setup` : `Lower-band breakdown — momentum extending`;
+        // ---- 3. Bollinger Band stretch ----
+      } else if (bbPos != null && bbPos >= 0.88) {
+        primary = dir <= 0 ? `Upper-band stretch — overextended, reversion risk` : `Upper-band breakout — momentum expanding`;
+      } else if (bbPos != null && bbPos <= 0.12) {
+        primary = dir >= 0 ? `Lower-band stretch — oversold, snap-back setup` : `Lower-band breakdown — momentum extending`;
 
-    // ---- 4. VWAP deviation ----
-    } else if (vwapDev != null && Math.abs(vwapDev) > 1.2) {
-      if (vwapDev > 0 && dir <= 0) primary = `VWAP extended — ${vwapDev.toFixed(1)}% above, mean reversion`;
-      else if (vwapDev < 0 && dir >= 0) primary = `VWAP discount — ${Math.abs(vwapDev).toFixed(1)}% below, reversion bid`;
-      else if (vwapDev > 0) primary = `VWAP momentum — price ${vwapDev.toFixed(1)}% above, bulls in control`;
-      else primary = `VWAP breakdown — price ${Math.abs(vwapDev).toFixed(1)}% below VWAP`;
+        // ---- 4. VWAP deviation ----
+      } else if (vwapDev != null && Math.abs(vwapDev) > 1.2) {
+        if (vwapDev > 0 && dir <= 0) primary = `VWAP extended — ${vwapDev.toFixed(1)}% above, mean reversion`;
+        else if (vwapDev < 0 && dir >= 0) primary = `VWAP discount — ${Math.abs(vwapDev).toFixed(1)}% below, reversion bid`;
+        else if (vwapDev > 0) primary = `VWAP momentum — price ${vwapDev.toFixed(1)}% above, bulls in control`;
+        else primary = `VWAP breakdown — price ${Math.abs(vwapDev).toFixed(1)}% below VWAP`;
 
-    // ---- 5. MACD ----
-    } else if (ind.macd?.sig != null) {
-      const hist = ind.macd.histogram;
-      if (ind.macd.sig > 0 && hist > 0) primary = `MACD bull cross — histogram expanding, momentum building`;
-      else if (ind.macd.sig < 0 && hist < 0) primary = `MACD bear cross — histogram deepening, sellers in control`;
-      else if (ind.macd.sig > 0) primary = `MACD bullish — signal line above zero`;
-      else if (ind.macd.sig < 0) primary = `MACD bearish — signal line below zero`;
+        // ---- 5. MACD ----
+      } else if (ind.macd?.sig != null) {
+        const hist = ind.macd.histogram;
+        if (ind.macd.sig > 0 && hist > 0) primary = `MACD bull cross — histogram expanding, momentum building`;
+        else if (ind.macd.sig < 0 && hist < 0) primary = `MACD bear cross — histogram deepening, sellers in control`;
+        else if (ind.macd.sig > 0) primary = `MACD bullish — signal line above zero`;
+        else if (ind.macd.sig < 0) primary = `MACD bearish — signal line below zero`;
 
-    // ---- 6. EMA ----
-    } else if (ind.ema?.value != null) {
-      if (ind.ema.value > 0.15) primary = `EMA bull cross — short above long, trend aligning`;
-      else if (ind.ema.value < -0.15) primary = `EMA bear cross — short below long, trend falling`;
-      else primary = `EMA converging — breakout pending`;
+        // ---- 6. EMA ----
+      } else if (ind.ema?.value != null) {
+        if (ind.ema.value > 0.15) primary = `EMA bull cross — short above long, trend aligning`;
+        else if (ind.ema.value < -0.15) primary = `EMA bear cross — short below long, trend falling`;
+        else primary = `EMA converging — breakout pending`;
 
-    // ---- Generic fallback ----
-    } else {
-      if      (pred?.signal === 'strong_bull') primary = `Strong buy — multiple indicators aligned UP`;
-      else if (pred?.signal === 'strong_bear') primary = `Strong sell — multiple indicators aligned DOWN`;
-      else if (pred?.signal === 'bullish')     primary = `Bullish bias — majority of signals positive`;
-      else if (pred?.signal === 'bearish')     primary = `Bearish bias — majority of signals negative`;
-      else                                      primary = `Mixed signals — insufficient confluence`;
-    }
+        // ---- Generic fallback ----
+      } else {
+        if (pred?.signal === 'strong_bull') primary = `Strong buy — multiple indicators aligned UP`;
+        else if (pred?.signal === 'strong_bear') primary = `Strong sell — multiple indicators aligned DOWN`;
+        else if (pred?.signal === 'bullish') primary = `Bullish bias — majority of signals positive`;
+        else if (pred?.signal === 'bearish') primary = `Bearish bias — majority of signals negative`;
+        else primary = `Mixed signals — insufficient confluence`;
+      }
     } // end !primary
 
     // ---- Secondary: pick the next most relevant fact ----
@@ -6831,42 +8346,42 @@
     let upCount = 0, downCount = 0, neutralCount = 0;
 
     const cards = ordered.map(pred => {
-      const dir      = predictionDirection(pred);
+      const dir = predictionDirection(pred);
       const dirClass = dir > 0 ? 'up' : dir < 0 ? 'down' : 'neutral';
-      const arrow    = dir > 0 ? '▲' : dir < 0 ? '▼' : '→';
-      const label    = dir > 0 ? 'UP' : dir < 0 ? 'DOWN' : 'FLAT';
-      const score    = Number.isFinite(pred.score) ? (pred.score > 0 ? '+' : '') + pred.score.toFixed(2) : '—';
-      const horizon  = pred.backtest?.summary?.preferredHorizon ? `${pred.backtest.summary.preferredHorizon}m` : '';
-      const mkt      = pred.indicators?.mktSentiment;
-      const kPct     = mkt?.kalshi != null ? Math.round(mkt.kalshi * 100) : null;
-      const pPct     = mkt?.poly   != null ? Math.round(mkt.poly   * 100) : null;
-      const mktRow   = (kPct != null || pPct != null) ? `
+      const arrow = dir > 0 ? '▲' : dir < 0 ? '▼' : '→';
+      const label = dir > 0 ? 'UP' : dir < 0 ? 'DOWN' : 'FLAT';
+      const score = Number.isFinite(pred.score) ? (pred.score > 0 ? '+' : '') + pred.score.toFixed(2) : '—';
+      const horizon = pred.backtest?.summary?.preferredHorizon ? `${pred.backtest.summary.preferredHorizon}m` : '';
+      const mkt = pred.indicators?.mktSentiment;
+      const kPct = mkt?.kalshi != null ? Math.round(mkt.kalshi * 100) : null;
+      const pPct = mkt?.poly != null ? Math.round(mkt.poly * 100) : null;
+      const mktRow = (kPct != null || pPct != null) ? `
         <div class="dc-mkt-row">
           ${kPct != null ? `<span class="dc-badge-k">K:${kPct}%</span>` : ''}
           ${pPct != null ? `<span class="dc-badge-p">P:${pPct}%</span>` : ''}
         </div>` : '';
 
       // Ground state synthesis for this coin
-      const coin      = PREDICTION_COINS.find(c => c.sym === pred.sym);
-      const wClass    = COIN_WEIGHT[pred.sym] || 'light';
-      const cfmSnap   = window.CFMEngine?.getAll?.()?.[pred.sym];
-      const gsVals    = cfmSnap ? {
+      const coin = PREDICTION_COINS.find(c => c.sym === pred.sym);
+      const wClass = COIN_WEIGHT[pred.sym] || 'light';
+      const cfmSnap = window.CFMEngine?.getAll?.()?.[pred.sym];
+      const gsVals = cfmSnap ? {
         ...cfmSnap,
-        _emaCross:   pred.indicators?.ema?.value ?? 0,
-        _obvSlope:   pred.indicators?.obv?.slope ?? 0,
-        _volRatio:   pred.indicators?.volume?.ratio ?? 1,
-        _bookImbal:  pred.indicators?.book?.imbalance ?? 0,
-        _aggrBuy:    pred.indicators?.flow?.buyRatio ?? 50,
-        _funding:    pred.derivatives?.funding ?? 0,
-        _cvdSlope:   pred.cvd?.slope ?? 0,
+        _emaCross: pred.indicators?.ema?.value ?? 0,
+        _obvSlope: pred.indicators?.obv?.slope ?? 0,
+        _volRatio: pred.indicators?.volume?.ratio ?? 1,
+        _bookImbal: pred.indicators?.book?.imbalance ?? 0,
+        _aggrBuy: pred.indicators?.flow?.buyRatio ?? 50,
+        _funding: pred.derivatives?.funding ?? 0,
+        _cvdSlope: pred.cvd?.slope ?? 0,
         _squeezeScore: pred.squeeze ? (pred.squeeze.severity === 'high' ? 2 : 1) : 0,
-        _squeezeType:  pred.squeeze?.type ?? null,
-        _cbPremium:  cfmSnap.sources?.CB > 0 && cfmSnap.cfmRate > 0 ? ((cfmSnap.sources.CB - cfmSnap.cfmRate) / cfmSnap.cfmRate) * 100 : 0,
+        _squeezeType: pred.squeeze?.type ?? null,
+        _cbPremium: cfmSnap.sources?.CB > 0 && cfmSnap.cfmRate > 0 ? ((cfmSnap.sources.CB - cfmSnap.cfmRate) / cfmSnap.cfmRate) * 100 : 0,
         _mktConsensus: window.PredictionMarkets?.getCoin(pred.sym)?.combinedProb ?? null,
-        _xSentiment:   window.SocialSentiment?.getCoin(pred.sym)?.score ?? null,
+        _xSentiment: window.SocialSentiment?.getCoin(pred.sym)?.score ?? null,
       } : null;
-      const gs   = gsVals ? computeGroundState(gsVals, pred, wClass) : null;
-      const eq   = gs     ? computeEntryQuality(gs, detectMarketRegime(pred), pred) : null;
+      const gs = gsVals ? computeGroundState(gsVals, pred, wClass) : null;
+      const eq = gs ? computeEntryQuality(gs, detectMarketRegime(pred), pred) : null;
 
       const gsRow = gs ? `
         <div class="dc-gs-row">
@@ -6888,7 +8403,7 @@
           ${horizon ? `<span class="dc-horizon">${horizon}</span>` : ''}
           ${mktRow}
           ${gsRow}
-          ${primary   ? `<span class="dc-rationale-primary">${primary}</span>`     : ''}
+          ${primary ? `<span class="dc-rationale-primary">${primary}</span>` : ''}
           ${secondary ? `<span class="dc-rationale-secondary">${secondary}</span>` : ''}
         </div>`;
     }).join('');
@@ -6914,32 +8429,32 @@
   // last 5 resolutions. Collapsed by default, toggled by clicking the header.
   function buildKalshiDebugPanel() {
     try {
-      const snaps   = window._lastKalshiSnapshot || {};
-      const log     = (window._kalshiLog         || []).slice(-20).reverse();
-      const errors  = (window._kalshiErrors      || []).slice(-8).reverse();
-      const resLog  = (window._15mResolutionLog  || []).slice(-10).reverse();
-      const orchLog = (window._orchLog           || []).slice(-15).reverse();
+      const snaps = window._lastKalshiSnapshot || {};
+      const log = (window._kalshiLog || []).slice(-20).reverse();
+      const errors = (window._kalshiErrors || []).slice(-8).reverse();
+      const resLog = (window._15mResolutionLog || []).slice(-10).reverse();
+      const orchLog = (window._orchLog || []).slice(-15).reverse();
 
-      const fmtPrice = v => v != null && v > 0 ? `$${Number(v).toLocaleString(undefined,{maximumFractionDigits:2})}` : '–';
-      const fmtPct   = v => v != null ? `${v}%` : '–';
-      const fmtTime  = ms => ms ? new Date(ms).toISOString().slice(11,19) : '–';
+      const fmtPrice = v => v != null && v > 0 ? `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '–';
+      const fmtPct = v => v != null ? `${v}%` : '–';
+      const fmtTime = ms => ms ? new Date(ms).toISOString().slice(11, 19) : '–';
       const fmtScore = v => v != null ? (v > 0 ? '+' : '') + Number(v).toFixed(3) : '–';
-      const fmtEdge  = v => v != null ? (v >= 0 ? '+' : '') + v + '¢' : '–';
-      const ok       = v => v === true
+      const fmtEdge = v => v != null ? (v >= 0 ? '+' : '') + v + '¢' : '–';
+      const ok = v => v === true
         ? '<span style="color:#4caf50;font-weight:700">✓</span>'
         : v === false ? '<span style="color:#f44336;font-weight:700">✗</span>'
-        : '<span style="color:#666">?</span>';
-      const colDir   = v => (v === 'UP' || v === 'up') ? 'color:#4caf50'
-                          : (v === 'DOWN' || v === 'down') ? 'color:#f44336' : 'color:#888';
-      const colAct   = a => a === 'trade'   ? 'color:#4caf50;font-weight:700'
-                          : a === 'watch'   ? 'color:#ffc107'
-                          : a === 'skip'    ? 'color:#f44336'
-                          : a === 'hold'    ? 'color:#80cbc4'
-                          : a === 'earlyExit' ? 'color:#e040fb' : 'color:#888';
+          : '<span style="color:#666">?</span>';
+      const colDir = v => (v === 'UP' || v === 'up') ? 'color:#4caf50'
+        : (v === 'DOWN' || v === 'down') ? 'color:#f44336' : 'color:#888';
+      const colAct = a => a === 'trade' ? 'color:#4caf50;font-weight:700'
+        : a === 'watch' ? 'color:#ffc107'
+          : a === 'skip' ? 'color:#f44336'
+            : a === 'hold' ? 'color:#80cbc4'
+              : a === 'earlyExit' ? 'color:#e040fb' : 'color:#888';
       const alignColor = al => ({
-        ALIGNED:'#4caf50', DIVERGENT:'#ff9800', MODEL_LEADS:'#4f9eff',
-        CROWD_FADE:'#e040fb', MODEL_ONLY:'#80cbc4', KALSHI_ONLY:'#ffc107',
-        SHELL_EVAL:'#ff5722', EARLY_EXIT:'#888',
+        ALIGNED: '#4caf50', DIVERGENT: '#ff9800', MODEL_LEADS: '#4f9eff',
+        CROWD_FADE: '#e040fb', MODEL_ONLY: '#80cbc4', KALSHI_ONLY: '#ffc107',
+        SHELL_EVAL: '#ff5722', EARLY_EXIT: '#888',
       }[al] || '#aaa');
 
       const th = 'style="color:#888;font-size:10px;font-weight:600;padding:3px 6px;border-bottom:1px solid #2a2a2a;white-space:nowrap"';
@@ -6967,19 +8482,19 @@
           if (!ki) return `<tr><td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
             <td colspan="7" style="${tdBase};color:#555;font-size:10px">no data — waiting for first prediction cycle</td></tr>`;
           const minsStr = ki.minsLeft != null ? ki.minsLeft.toFixed(1) + 'm'
-                        : ki.secsLeft != null ? ki.secsLeft.toFixed(0) + 's' : '–';
+            : ki.secsLeft != null ? ki.secsLeft.toFixed(0) + 's' : '–';
           const flags = (ki.sweetSpot ? '⭐' : '') + (ki.crowdFade ? '🔄' : '') + (ki.signalLocked ? '🔒' : '');
           return `<tr>
             <td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
-            <td style="${tdBase};${colAct(ki.action)}">${(ki.action||'–').toUpperCase()}</td>
-            <td style="${tdBase};${ki.side==='YES'?'color:#4caf50':ki.side==='NO'?'color:#f44336':'color:#888'};font-weight:700">${ki.side??'–'}</td>
-            <td style="${tdBase};color:${alignColor(ki.alignment)};font-size:10px">${ki.alignment??'–'}</td>
-            <td style="${tdBase};color:${(ki.edgeCents??0)>=8?'#4caf50':'#f44336'}">${fmtEdge(ki.edgeCents)}</td>
+            <td style="${tdBase};${colAct(ki.action)}">${(ki.action || '–').toUpperCase()}</td>
+            <td style="${tdBase};${ki.side === 'YES' ? 'color:#4caf50' : ki.side === 'NO' ? 'color:#f44336' : 'color:#888'};font-weight:700">${ki.side ?? '–'}</td>
+            <td style="${tdBase};color:${alignColor(ki.alignment)};font-size:10px">${ki.alignment ?? '–'}</td>
+            <td style="${tdBase};color:${(ki.edgeCents ?? 0) >= 8 ? '#4caf50' : '#f44336'}">${fmtEdge(ki.edgeCents)}</td>
             <td style="${tdBase};${colDir(ki.direction)}">${fmtScore(ki.modelScore)}</td>
             <td style="${tdBase};color:#888">${minsStr}</td>
-            <td style="${tdBase};font-size:12px">${flags||'–'}</td>
+            <td style="${tdBase};font-size:12px">${flags || '–'}</td>
           </tr>`;
-        } catch(e) {
+        } catch (e) {
           return `<tr><td style="${tdBase};color:#fff">${coin.sym}</td><td colspan="7" style="${tdBase};color:#f44336;font-size:10px">render error: ${e.message}</td></tr>`;
         }
       }).join('');
@@ -6988,35 +8503,35 @@
       const scorecardRows = PREDICTION_COINS.map((coin, idx) => {
         try {
           // Count all contracts with outcome (resolved), not just those marked _settled
-          const entries = (window._kalshiLog||[]).filter(e => e.sym===coin.sym && e.outcome);
-          const resE    = (window._15mResolutionLog||[]).filter(e => e.sym===coin.sym && e.modelCorrect!==null);
-          
+          const entries = (window._kalshiLog || []).filter(e => e.sym === coin.sym && e.outcome);
+          const resE = (window._15mResolutionLog || []).filter(e => e.sym === coin.sym && e.modelCorrect !== null);
+
           // ADD HISTORICAL DATA FROM CALCULATOR
           const historical = (window.getHistoricalContracts?.() || [])
             .filter(h => h.symbol === coin.sym && (h.modelCorrect !== null || h.outcome));
-          
-          const total   = entries.length + resE.length + historical.length;
+
+          const total = entries.length + resE.length + historical.length;
           if (!total) return `<tr><td style="${tdBase};color:#fff;font-weight:700">${coin.sym}</td>
             <td colspan="5" style="${tdBase};color:#555;font-size:10px">no settled data yet</td></tr>`;
-          const modelOk = entries.filter(e=>e.modelCorrect===true).length + resE.filter(e=>e.modelCorrect===true).length + historical.filter(h=>h.modelCorrect===true).length;
-          const mktOk   = entries.filter(e=>e.marketCorrect===true).length + resE.filter(e=>e.marketCorrect===true).length;
-          const fadeE   = entries.filter(e=>e.fadeActive && e.fadeCorrect!==null);
-          const fadeOk  = fadeE.filter(e=>e.fadeCorrect===true).length;
-          const modelPct = Math.round(modelOk/total*100);
-          const mktPct   = Math.round(mktOk/total*100);
-          const fadePct  = fadeE.length ? Math.round(fadeOk/fadeE.length*100) : null;
-          const last8    = [...entries, ...resE, ...historical].sort((a,b) => (b.settledTs||b.ts||0) - (a.settledTs||a.ts||0)).slice(0, 8);
-          const l8ok     = last8.filter(e=>e.modelCorrect===true).length;
-          const trend    = last8.length>=4 ? (l8ok/last8.length>=0.6?'↑':l8ok/last8.length<=0.35?'↓':'→') : '?';
-          const tC       = trend==='↑'?'#4caf50':trend==='↓'?'#f44336':'#ffc107';
-          const mC       = modelPct>=55?'#4caf50':modelPct>=45?'#ffc107':'#f44336';
-          const fC       = fadePct==null?'#555':fadePct>=55?'#4caf50':fadePct>=45?'#ffc107':'#f44336';
-          
+          const modelOk = entries.filter(e => e.modelCorrect === true).length + resE.filter(e => e.modelCorrect === true).length + historical.filter(h => h.modelCorrect === true).length;
+          const mktOk = entries.filter(e => e.marketCorrect === true).length + resE.filter(e => e.marketCorrect === true).length;
+          const fadeE = entries.filter(e => e.fadeActive && e.fadeCorrect !== null);
+          const fadeOk = fadeE.filter(e => e.fadeCorrect === true).length;
+          const modelPct = Math.round(modelOk / total * 100);
+          const mktPct = Math.round(mktOk / total * 100);
+          const fadePct = fadeE.length ? Math.round(fadeOk / fadeE.length * 100) : null;
+          const last8 = [...entries, ...resE, ...historical].sort((a, b) => (b.settledTs || b.ts || 0) - (a.settledTs || a.ts || 0)).slice(0, 8);
+          const l8ok = last8.filter(e => e.modelCorrect === true).length;
+          const trend = last8.length >= 4 ? (l8ok / last8.length >= 0.6 ? '↑' : l8ok / last8.length <= 0.35 ? '↓' : '→') : '?';
+          const tC = trend === '↑' ? '#4caf50' : trend === '↓' ? '#f44336' : '#ffc107';
+          const mC = modelPct >= 55 ? '#4caf50' : modelPct >= 45 ? '#ffc107' : '#f44336';
+          const fC = fadePct == null ? '#555' : fadePct >= 55 ? '#4caf50' : fadePct >= 45 ? '#ffc107' : '#f44336';
+
           // Build debug context: split last contracts by UP/DOWN
-          const allContracts = [...entries, ...resE, ...historical].sort((a,b) => (b.ts||b.settledTs||0) - (a.ts||a.settledTs||0));
-          const ups = allContracts.filter(e => (e.modelDir==='UP' || e.direction==='UP' || e.outcome==='YES' || e._kalshiResult==='YES')).slice(0,3);
-          const downs = allContracts.filter(e => (e.modelDir==='DOWN' || e.direction==='DOWN' || e.outcome==='NO' || e._kalshiResult==='NO')).slice(0,3);
-          
+          const allContracts = [...entries, ...resE, ...historical].sort((a, b) => (b.ts || b.settledTs || 0) - (a.ts || a.settledTs || 0));
+          const ups = allContracts.filter(e => (e.modelDir === 'UP' || e.direction === 'UP' || e.outcome === 'YES' || e._kalshiResult === 'YES')).slice(0, 3);
+          const downs = allContracts.filter(e => (e.modelDir === 'DOWN' || e.direction === 'DOWN' || e.outcome === 'NO' || e._kalshiResult === 'NO')).slice(0, 3);
+
           const detailsId = `scorecard-${coin.sym}-${idx}`;
           const debugHtml = `
             <div style="margin:6px 0;padding:8px;background:#0a0a0a;border-left:3px solid #80cbc4;font-size:10px;border-radius:4px">
@@ -7025,29 +8540,29 @@
                 <div style="border-right:1px solid #222">
                   <div style="color:#4caf50;font-weight:600;margin-bottom:3px;font-size:9px">🔼 UP (${ups.length})</div>
                   ${ups.map(u => {
-                    const correct = u.modelCorrect===true ? '✓' : u.modelCorrect===false ? '✗' : '?';
-                    const dir = u.modelDir || u.direction || '?';
-                    const actual = u._kalshiResult || u.kalshiResult || u.actualOutcome || u.outcome || '?';
-                    const ts = new Date(u.ts || u.settledTs || 0).toISOString().slice(11,19);
-                    return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(76,175,80,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
-                  }).join('')}
+            const correct = u.modelCorrect === true ? '✓' : u.modelCorrect === false ? '✗' : '?';
+            const dir = u.modelDir || u.direction || '?';
+            const actual = u._kalshiResult || u.kalshiResult || u.actualOutcome || u.outcome || '?';
+            const ts = new Date(u.ts || u.settledTs || 0).toISOString().slice(11, 19);
+            return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(76,175,80,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
+          }).join('')}
                   ${ups.length === 0 ? '<div style="font-size:9px;color:#555">—</div>' : ''}
                 </div>
                 <div>
                   <div style="color:#f44336;font-weight:600;margin-bottom:3px;font-size:9px">🔽 DOWN (${downs.length})</div>
                   ${downs.map(d => {
-                    const correct = d.modelCorrect===true ? '✓' : d.modelCorrect===false ? '✗' : '?';
-                    const dir = d.modelDir || d.direction || '?';
-                    const actual = d._kalshiResult || d.kalshiResult || d.actualOutcome || d.outcome || '?';
-                    const ts = new Date(d.ts || d.settledTs || 0).toISOString().slice(11,19);
-                    return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(244,67,54,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
-                  }).join('')}
+            const correct = d.modelCorrect === true ? '✓' : d.modelCorrect === false ? '✗' : '?';
+            const dir = d.modelDir || d.direction || '?';
+            const actual = d._kalshiResult || d.kalshiResult || d.actualOutcome || d.outcome || '?';
+            const ts = new Date(d.ts || d.settledTs || 0).toISOString().slice(11, 19);
+            return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(244,67,54,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
+          }).join('')}
                   ${downs.length === 0 ? '<div style="font-size:9px;color:#555">—</div>' : ''}
                 </div>
               </div>
             </div>
           `;
-          
+
           return `<tr style="background:rgba(128,203,196,0.02)">
             <td style="${tdBase};color:#fff;font-weight:700;cursor:pointer;user-select:none;padding:6px;border-radius:4px 0 0 4px" 
                 onclick="const d=document.getElementById('${detailsId}');d.style.display=d.style.display==='none'?'table-row':'none'">
@@ -7056,7 +8571,7 @@
             <td style="${tdBase};color:#888">${total}</td>
             <td style="${tdBase};color:${mC};font-weight:700">${modelPct}%</td>
             <td style="${tdBase};color:#888">${mktPct}%</td>
-            <td style="${tdBase};color:${fC}">${fadePct!=null ? fadePct+'% ('+fadeE.length+')' : '–'}</td>
+            <td style="${tdBase};color:${fC}">${fadePct != null ? fadePct + '% (' + fadeE.length + ')' : '–'}</td>
             <td style="${tdBase};color:${tC};font-weight:700;border-radius:0 4px 4px 0">${trend} ${last8.length}/${8}</td>
           </tr>
           <tr id="${detailsId}" style="display:none;background:#0a0a0a">
@@ -7064,7 +8579,7 @@
               ${debugHtml}
             </td>
           </tr>`;
-        } catch(e) {
+        } catch (e) {
           return `<tr><td style="${tdBase};color:#fff">${coin.sym}</td><td colspan="5" style="${tdBase};color:#f44336;font-size:10px">err: ${e.message}</td></tr>`;
         }
       }).join('');
@@ -7072,51 +8587,51 @@
       // ── 3. CURRENT SNAPSHOTS ──────────────────────────────────────────────
       const snapRows = Object.entries(snaps).map(([sym, s]) => {
         const conflict = s.dirConflict ? '⚠️' : '';
-        const confCol  = s.dirConflict ? 'color:#f44336;font-weight:700' : 'color:#4caf50';
-        const fadeTag  = s.fadeActive
+        const confCol = s.dirConflict ? 'color:#f44336;font-weight:700' : 'color:#4caf50';
+        const fadeTag = s.fadeActive
           ? (s.fadeSolid ? '<span style="color:#ff9800;font-weight:700">🔥FADE</span>'
-                        : '<span style="color:#ffc107">~fade</span>') : '';
+            : '<span style="color:#ffc107">~fade</span>') : '';
         return `<tr>
           <td style="${tdBase};color:#fff;font-weight:600">${sym}</td>
-          <td style="${tdBase}">${fmtPrice(s.floorPrice||s.ref)}</td>
-          <td style="${tdBase};${s.strikeDir==='below'?'color:#f44336':'color:#4caf50'}">${s.strikeDir||'above'}</td>
-          <td style="${tdBase};${colDir(s.modelDir)}">${s.modelDir||'–'}</td>
+          <td style="${tdBase}">${fmtPrice(s.floorPrice || s.ref)}</td>
+          <td style="${tdBase};${s.strikeDir === 'below' ? 'color:#f44336' : 'color:#4caf50'}">${s.strikeDir || 'above'}</td>
+          <td style="${tdBase};${colDir(s.modelDir)}">${s.modelDir || '–'}</td>
           <td style="${tdBase}">${fmtPct(s.mYesPct)}</td>
           <td style="${tdBase}">${fmtPct(s.kYesPct)}</td>
-          <td style="${tdBase};${confCol}">${conflict}${s.cdfImpliedDir||'–'}</td>
-          <td style="${tdBase};font-size:10px">${fadeTag||'–'}</td>
+          <td style="${tdBase};${confCol}">${conflict}${s.cdfImpliedDir || '–'}</td>
+          <td style="${tdBase};font-size:10px">${fadeTag || '–'}</td>
           <td style="${tdBase};color:#888;font-size:10px">${fmtTime(s.closeTimeMs)}</td>
         </tr>`;
       }).join('') || `<tr><td colspan="9" style="${tdBase};color:#666;text-align:center">No snapshots yet</td></tr>`;
 
       // ── 4. CONTRACT LOG ───────────────────────────────────────────────────
-      const logRows = log.slice(0,10).map(e => {
+      const logRows = log.slice(0, 10).map(e => {
         const settled = e._settled
-          ? `<span style="color:#4caf50">✓${e._kalshiResult||''}</span>`
+          ? `<span style="color:#4caf50">✓${e._kalshiResult || ''}</span>`
           : (e._pendingAuth ? '<span style="color:#ffc107">⏳</span>' : '–');
         const match = e._settled
           ? (e._proxyMismatch ? '<span style="color:#f44336">MM</span>' : '<span style="color:#4caf50">✓</span>') : '';
         const fadeCol = e.fadeActive
-          ? (e.fadeCorrect===true  ? '<span style="color:#4caf50">F✓</span>'
-           : e.fadeCorrect===false ? '<span style="color:#f44336">F✗</span>'
-           :                        '<span style="color:#ff9800">F?</span>')
+          ? (e.fadeCorrect === true ? '<span style="color:#4caf50">F✓</span>'
+            : e.fadeCorrect === false ? '<span style="color:#f44336">F✗</span>'
+              : '<span style="color:#ff9800">F?</span>')
           : '<span style="color:#555">–</span>';
-        const mdivBadge = e.mdivPhase && e.mdivPhase!=='STALE'
+        const mdivBadge = e.mdivPhase && e.mdivPhase !== 'STALE'
           ? `<span style="font-size:9px;color:#888">${e.mdivPhase}</span>` : '–';
         const betTag = e.betAction
-          ? `<span style="color:${e.betAction==='YES'?'#4caf50':'#f44336'};font-weight:700">${e.betAction}</span>` : '–';
-        const flags = [e._wickStraddle?'🔥':'', e._nearRef?'≈':'', e._dirConflict?'⚠️':''].filter(Boolean).join('');
+          ? `<span style="color:${e.betAction === 'YES' ? '#4caf50' : '#f44336'};font-weight:700">${e.betAction}</span>` : '–';
+        const flags = [e._wickStraddle ? '🔥' : '', e._nearRef ? '≈' : '', e._dirConflict ? '⚠️' : ''].filter(Boolean).join('');
         return `<tr>
           <td style="${tdBase};color:#fff;font-weight:700">${e.sym}</td>
-          <td style="${tdBase};${e.outcome==='YES'?'color:#4caf50':'color:#f44336'}">${e.outcome||'–'}</td>
+          <td style="${tdBase};${e.outcome === 'YES' ? 'color:#4caf50' : 'color:#f44336'}">${e.outcome || '–'}</td>
           <td style="${tdBase};color:#888;font-size:10px">${fmtPrice(e.ref)}</td>
-          <td style="${tdBase};color:#aaa;font-size:10px">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':'–'}</td>
+          <td style="${tdBase};color:#aaa;font-size:10px">${e.refDiffPct != null ? e.refDiffPct.toFixed(3) + '%' : '–'}</td>
           <td style="${tdBase};${colDir(e.modelDir)}">${fmtScore(e.modelScore)}</td>
           <td style="${tdBase}">${betTag}</td>
           <td style="${tdBase}">${fadeCol}</td>
           <td style="${tdBase};font-size:10px">${mdivBadge}</td>
           <td style="${tdBase}">${settled}${match}</td>
-          <td style="${tdBase};color:#ffc107;font-size:10px">${flags||'–'}</td>
+          <td style="${tdBase};color:#ffc107;font-size:10px">${flags || '–'}</td>
         </tr>`;
       }).join('') || `<tr><td colspan="10" style="${tdBase};color:#666;text-align:center">No contract log entries yet</td></tr>`;
 
@@ -7124,46 +8639,46 @@
       const resRows = resLog.map(r => {
         const missedTag = r.missedOpportunity
           ? '<span style="color:#e040fb;font-size:9px">MISSED</span>' : '';
-        const orchTag = r.orchestratorAction==='trade'
+        const orchTag = r.orchestratorAction === 'trade'
           ? '<span style="color:#4caf50;font-size:9px">TRADED</span>' : '';
         return `<tr>
           <td style="${tdBase};color:#fff;font-weight:700">${r.sym}</td>
-          <td style="${tdBase};color:${r.actualOutcome==='UP'?'#4caf50':'#f44336'};font-weight:700">${r.actualOutcome||'–'}</td>
-          <td style="${tdBase};color:#888;font-size:10px">${r.kalshiResult||'–'}</td>
-          <td style="${tdBase}">${r.modelDir||'–'} ${ok(r.modelCorrect)}</td>
-          <td style="${tdBase};${colAct(r.orchestratorAction)};font-size:10px">${r.orchestratorAction||'–'} ${orchTag}${missedTag}</td>
-          <td style="${tdBase};color:${(r.edgeCents??0)>=8?'#4caf50':'#888'}">${fmtEdge(r.edgeCents)}</td>
-          <td style="${tdBase};font-size:10px;color:#aaa">${r.cbSettlePrice ? '$'+Number(r.cbSettlePrice).toLocaleString() : fmtPrice(r.floorPrice||r.refPrice)}</td>
-          <td style="${tdBase};color:${(r.confidence??0)>=90?'#4caf50':'#ffc107'};font-size:10px">${r.confidence!=null?r.confidence+'%':'–'}</td>
+          <td style="${tdBase};color:${r.actualOutcome === 'UP' ? '#4caf50' : '#f44336'};font-weight:700">${r.actualOutcome || '–'}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${r.kalshiResult || '–'}</td>
+          <td style="${tdBase}">${r.modelDir || '–'} ${ok(r.modelCorrect)}</td>
+          <td style="${tdBase};${colAct(r.orchestratorAction)};font-size:10px">${r.orchestratorAction || '–'} ${orchTag}${missedTag}</td>
+          <td style="${tdBase};color:${(r.edgeCents ?? 0) >= 8 ? '#4caf50' : '#888'}">${fmtEdge(r.edgeCents)}</td>
+          <td style="${tdBase};font-size:10px;color:#aaa">${r.cbSettlePrice ? '$' + Number(r.cbSettlePrice).toLocaleString() : fmtPrice(r.floorPrice || r.refPrice)}</td>
+          <td style="${tdBase};color:${(r.confidence ?? 0) >= 90 ? '#4caf50' : '#ffc107'};font-size:10px">${r.confidence != null ? r.confidence + '%' : '–'}</td>
           <td style="${tdBase};color:#888;font-size:10px">${fmtTime(r.settledTs)}</td>
         </tr>`;
       }).join('') || `<tr><td colspan="9" style="${tdBase};color:#666;text-align:center">No settled contracts yet — first settlement fires ~2 min after contract close_time</td></tr>`;
 
       // ── 6. ORCHESTRATOR HISTORY ──────────────────────────────────────────
-      const orchLogRows = orchLog.slice(0,12).map(e => {
-        const flags = (e.sweetSpot?'⭐':'')+(e.crowdFade?'🔄':'')+(e.signalLocked?'🔒':'');
+      const orchLogRows = orchLog.slice(0, 12).map(e => {
+        const flags = (e.sweetSpot ? '⭐' : '') + (e.crowdFade ? '🔄' : '') + (e.signalLocked ? '🔒' : '');
         return `<tr>
           <td style="${tdBase};color:#fff;font-weight:700">${e.sym}</td>
-          <td style="${tdBase};${colAct(e.action)}">${(e.action||'–').toUpperCase()}</td>
-          <td style="${tdBase};${e.side==='YES'?'color:#4caf50':e.side==='NO'?'color:#f44336':'color:#888'}">${e.side??'–'}</td>
-          <td style="${tdBase};color:${alignColor(e.alignment)};font-size:10px">${e.alignment??'–'}</td>
-          <td style="${tdBase};color:${(e.edgeCents??0)>=8?'#4caf50':'#888'}">${fmtEdge(e.edgeCents)}</td>
+          <td style="${tdBase};${colAct(e.action)}">${(e.action || '–').toUpperCase()}</td>
+          <td style="${tdBase};${e.side === 'YES' ? 'color:#4caf50' : e.side === 'NO' ? 'color:#f44336' : 'color:#888'}">${e.side ?? '–'}</td>
+          <td style="${tdBase};color:${alignColor(e.alignment)};font-size:10px">${e.alignment ?? '–'}</td>
+          <td style="${tdBase};color:${(e.edgeCents ?? 0) >= 8 ? '#4caf50' : '#888'}">${fmtEdge(e.edgeCents)}</td>
           <td style="${tdBase};${colDir(e.direction)}">${fmtScore(e.modelScore)}</td>
           <td style="${tdBase};color:#888;font-size:10px">${fmtTime(e.ts)}</td>
-          <td style="${tdBase};font-size:12px">${flags||'–'}</td>
+          <td style="${tdBase};font-size:12px">${flags || '–'}</td>
         </tr>`;
       }).join('') || `<tr><td colspan="8" style="${tdBase};color:#666;text-align:center">No orchestrator history yet — logs on first actionable signal</td></tr>`;
 
       // ── 7. ERRORS ─────────────────────────────────────────────────────────
       const errRows = errors.map(e => {
-        const typeCol = e.type==='proxy_mismatch'?'#f44336':e.type==='wick_straddle'?'#ff9800':
-                        e.type==='dir_conflict'?'#e040fb':e.type==='fetch_fail'?'#f44336':'#ffc107';
+        const typeCol = e.type === 'proxy_mismatch' ? '#f44336' : e.type === 'wick_straddle' ? '#ff9800' :
+          e.type === 'dir_conflict' ? '#e040fb' : e.type === 'fetch_fail' ? '#f44336' : '#ffc107';
         return `<tr>
           <td style="${tdBase};color:${typeCol};font-weight:600;font-size:10px">${e.type}</td>
           <td style="${tdBase};color:#fff">${e.sym}</td>
-          <td style="${tdBase};color:#888;font-size:10px">${e.tsIso?.slice(11,19)||'–'}</td>
-          <td style="${tdBase};font-size:10px">${e.proxy||''}${e.proxy&&e.authoritative?' → ':''}${e.authoritative||''}</td>
-          <td style="${tdBase};font-size:10px;color:#aaa">${e.refDiffPct!=null?e.refDiffPct.toFixed(3)+'%':''} ${e.wickStraddle?'🔥':''} ${e.nearRef?'≈':''}</td>
+          <td style="${tdBase};color:#888;font-size:10px">${e.tsIso?.slice(11, 19) || '–'}</td>
+          <td style="${tdBase};font-size:10px">${e.proxy || ''}${e.proxy && e.authoritative ? ' → ' : ''}${e.authoritative || ''}</td>
+          <td style="${tdBase};font-size:10px;color:#aaa">${e.refDiffPct != null ? e.refDiffPct.toFixed(3) + '%' : ''} ${e.wickStraddle ? '🔥' : ''} ${e.nearRef ? '≈' : ''}</td>
         </tr>`;
       }).join('') || `<tr><td colspan="5" style="${tdBase};color:#4caf50;text-align:center">No errors 🎉</td></tr>`;
 
@@ -7187,8 +8702,8 @@
             <td style="${tdBase};color:#fff;font-weight:700">${t.sym || '—'}</td>
             <td style="${tdBase};color:#aaa;font-size:10px">${t.ticker || '—'}</td>
             <td style="${tdBase};color:#888;font-size:10px">${fmtTime(t.closeTimeMs)}</td>
-            <td style="${tdBase};color:${flips>0?'#ff9800':'#4caf50'}">${points.length}</td>
-            <td style="${tdBase};color:${flips>0?'#f44336':'#888'}">${flips}</td>
+            <td style="${tdBase};color:${flips > 0 ? '#ff9800' : '#4caf50'}">${points.length}</td>
+            <td style="${tdBase};color:${flips > 0 ? '#f44336' : '#888'}">${flips}</td>
             <td style="${tdBase};font-size:10px;color:#ddd;max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${seq || '—'}</td>
           </tr>`;
         }).join('') || `<tr><td colspan="6" style="${tdBase};color:#666;text-align:center">No 2-minute prediction trails yet</td></tr>`;
@@ -7200,7 +8715,7 @@
         <summary style="cursor:pointer;padding:8px 14px;font-size:12px;font-weight:700;color:#ffc107;letter-spacing:.5px;display:flex;align-items:center;gap:8px;user-select:none">
           🔬 KALSHI CONTRACT DEBUG
           <span style="font-size:10px;color:#666;font-weight:400;margin-left:auto">
-            snap:${Object.keys(snaps).length} log:${(window._kalshiLog||[]).length} trail:${Object.keys(window._kalshiPredictionTrail||{}).length} err:${errors.length} res:${resLog.length} pending:${pendingN} orch:${(window._orchLog||[]).length}
+            snap:${Object.keys(snaps).length} log:${(window._kalshiLog || []).length} trail:${Object.keys(window._kalshiPredictionTrail || {}).length} err:${errors.length} res:${resLog.length} pending:${pendingN} orch:${(window._orchLog || []).length}
           </span>
         </summary>
         <div style="padding:10px 14px;border-radius:0 0 8px 8px">
@@ -7283,15 +8798,15 @@
           </table></div>
 
           <div style="margin-top:8px;font-size:10px;color:#555;font-family:monospace">
-            DevTools: KalshiDebug.audit('ETH') · .errors() · .pending() · .last('ETH') · .contract('ETH') · .trail('ETH') · .orch('BTC') · .scorecard() · MarketResolver.getMissedOpps()
+            DevTools: KalshiDebug.audit('ETH') · .errors() · .pending() · .suspects({topN:5}) · .replayIncident({topN:2}) · .contract('ETH') · .trail('ETH') · .orch('BTC') · .scorecard()
           </div>
         </div>
       </details>`;
-    } catch(panelErr) {
+    } catch (panelErr) {
       console.error('[KalshiDebug] panel render error:', panelErr);
       return `<details style="margin:8px 0 14px;background:#111;border:1px solid #f44336;border-radius:8px">
         <summary style="padding:8px 14px;color:#f44336;font-size:12px">🔬 KALSHI DEBUG — render error</summary>
-        <div style="padding:10px 14px;color:#f44336;font-size:11px">${panelErr.message}<br><small style="color:#888">${panelErr.stack||''}</small></div>
+        <div style="padding:10px 14px;color:#f44336;font-size:11px">${panelErr.message}<br><small style="color:#888">${panelErr.stack || ''}</small></div>
       </details>`;
     }
   }
@@ -7445,12 +8960,12 @@
             Live Scalp & Contrarian Setups
           </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px">
-            ${allSetups.sort((a,b) => (b.strength === 'high' ? 2 : b.strength === 'medium' ? 1 : 0) - (a.strength === 'high' ? 2 : a.strength === 'medium' ? 1 : 0)).map(s => {
-              const dirIcon = s.direction === 'long' || s.direction === 'up' ? '\u2191' : s.direction === 'short' || s.direction === 'down' ? '\u2193' : '\u2014';
-              const dirColor = s.direction === 'long' || s.direction === 'up' ? 'var(--color-green)' : s.direction === 'short' || s.direction === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
-              const strengthColor = s.strength === 'high' ? 'var(--color-gold)' : s.strength === 'warning' ? 'var(--color-orange)' : 'var(--color-text-muted)';
-              const isCon = s.type.startsWith('contrarian_');
-              return `
+            ${allSetups.sort((a, b) => (b.strength === 'high' ? 2 : b.strength === 'medium' ? 1 : 0) - (a.strength === 'high' ? 2 : a.strength === 'medium' ? 1 : 0)).map(s => {
+      const dirIcon = s.direction === 'long' || s.direction === 'up' ? '\u2191' : s.direction === 'short' || s.direction === 'down' ? '\u2193' : '\u2014';
+      const dirColor = s.direction === 'long' || s.direction === 'up' ? 'var(--color-green)' : s.direction === 'short' || s.direction === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
+      const strengthColor = s.strength === 'high' ? 'var(--color-gold)' : s.strength === 'warning' ? 'var(--color-orange)' : 'var(--color-text-muted)';
+      const isCon = s.type.startsWith('contrarian_');
+      return `
                 <div style="padding:10px 12px;background:var(--color-surface-2);border-radius:var(--radius-md);border-left:3px solid ${s.color || 'var(--color-border)'}">
                   <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                     <span style="font-size:13px;font-weight:700;color:${s.color}">${s.coin}</span>
@@ -7463,7 +8978,7 @@
                   <div style="font-size:11px;color:var(--color-text-muted);line-height:1.4">${s.desc}</div>
                 </div>
               `;
-            }).join('')}
+    }).join('')}
           </div>
         </div>
       ` : ''}
@@ -7474,15 +8989,15 @@
       </div>
       <div class="pred-grid">
         ${predArr.map(p => {
-          try { return predictionCard(p); }
-          catch (cardErr) {
-            console.error('[predictionCard] crash:', p?.sym, cardErr);
-            return `<div class="pred-card" style="padding:20px 16px;border-left:4px solid var(--color-red,#ff4444)">
+      try { return predictionCard(p); }
+      catch (cardErr) {
+        console.error('[predictionCard] crash:', p?.sym, cardErr);
+        return `<div class="pred-card" style="padding:20px 16px;border-left:4px solid var(--color-red,#ff4444)">
               <div style="font-weight:700;color:var(--color-red,#ff4444);font-size:13px">⚠ ${p?.sym || '?'} — Render Error</div>
               <div style="font-size:11px;color:var(--color-text-muted,#aaa);margin-top:6px;font-family:monospace;white-space:pre-wrap">${cardErr.message}</div>
             </div>`;
-          }
-        }).join('')}
+      }
+    }).join('')}
       </div>
     `;
     _lastPredRenderTs = Date.now();
@@ -7549,75 +9064,66 @@
     //   4. Kalshi tiebreak — when model is neutral and Kalshi has clear edge
     // Raw model score (UP/DOWN) = "will price move?" — WRONG basis for binary "close above strike" contracts.
     // modelYesPct = P(projected target ≥ strike) via normal CDF — this is the RIGHT metric.
-    const _k15mCV    = window.PredictionMarkets?.getCoin(p.sym);
-    const _k15mV     = _k15mCV?.kalshi15m ?? null;
+    const _k15mCV = window.PredictionMarkets?.getCoin(p.sym);
+    const _k15mV = _k15mCV?.kalshi15m ?? null;
     const kalshiProb = _k15mV?.probability ?? _k15mCV?.combinedProb ?? null;
-    const kalshiPct  = kalshiProb !== null ? Math.round(kalshiProb * 100) : null;
-    const kalshiEdge = kalshiProb !== null ? Math.abs(kalshiProb - 0.5)  : null;
+    const kalshiPct = kalshiProb !== null ? Math.round(kalshiProb * 100) : null;
+    const kalshiEdge = kalshiProb !== null ? Math.abs(kalshiProb - 0.5) : null;
     const _kAlignEarly = p.projections?.p15?.kalshiAlign ?? null;
     const _strikeDirEarly = (_kAlignEarly?.strikeDir ?? _k15mV?.strikeDir) === 'below' ? 'below' : 'above';
     const _yesDirEarly = _strikeDirEarly === 'below' ? 'down' : 'up';
     const _noDirEarly = _yesDirEarly === 'up' ? 'down' : 'up';
 
-    const modelDir  = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'wait';
+    const modelDir = p.score > 0.12 ? 'up' : p.score < -0.12 ? 'down' : 'wait';
     const kalshiDir = kalshiProb !== null ? (kalshiProb >= 0.5 ? _yesDirEarly : _noDirEarly) : null;
 
     let verdictDir, verdictSource;
-    if (kalshiProb !== null && kalshiProb >= 0.90) {
-      // ≥90% YES — near-certain; no model edge justifies fading this
-      verdictDir    = _yesDirEarly;
-      verdictSource = 'kalshi-certain';
-    } else if (kalshiProb !== null && kalshiProb <= 0.10) {
-      // ≤10% YES — near-certain NO; trust the market
-      verdictDir    = _noDirEarly;
-      verdictSource = 'kalshi-certain';
-    } else if (_kAlignEarly?.modelYesPct != null) {
+    // MODEL-AGNOSTIC PRINCIPLE: Verdict color reflects MODEL conviction ONLY, never Kalshi odds.
+    // Kalshi is used for divergence awareness + comparison bar only (not verdict color override).
+
+    if (_kAlignEarly?.modelYesPct != null) {
       // Use CDF P(close ≥ strike) — correct for binary contracts
       const myp = _kAlignEarly.modelYesPct;
-      if      (myp >= 58) { verdictDir = _yesDirEarly; verdictSource = 'model-cdf'; }
-      else if (myp <= 42) { verdictDir = _noDirEarly;  verdictSource = 'model-cdf'; }
-      else if (kalshiProb !== null && kalshiEdge >= 0.15) { verdictDir = kalshiDir; verdictSource = 'kalshi'; }
-      else                { verdictDir = 'wait';   verdictSource = 'neutral'; }
+      if (myp >= 58) { verdictDir = _yesDirEarly; verdictSource = 'model-cdf'; }
+      else if (myp <= 42) { verdictDir = _noDirEarly; verdictSource = 'model-cdf'; }
+      else { verdictDir = 'wait'; verdictSource = 'model-cdf-neutral'; }
     } else if (modelDir !== 'wait') {
-      // Model has conviction — USE IT (cards show model colors, not market colors)
-      verdictDir    = modelDir;
+      // Model has conviction (raw score > ±0.12) — USE IT for verdict color
+      verdictDir = modelDir;
       verdictSource = 'model';
-    } else if (kalshiProb !== null && kalshiEdge >= 0.15) {
-      // Model uncertain, but market has strong edge — use market as fallback only
-      verdictDir    = kalshiDir;
-      verdictSource = 'kalshi';
     } else {
-      verdictDir    = 'wait';
-      verdictSource = 'neutral';
+      // Model has no conviction → show as WAIT (don't fade to Kalshi)
+      verdictDir = 'wait';
+      verdictSource = 'model-uncertain';
     }
 
     // Fade flag: raw price direction conflicts with Kalshi crowd (informational only — betAction does NOT use this)
     const _fadeActive = kalshiDir !== null && modelDir !== 'wait' && modelDir !== kalshiDir;
-    const _fadeSolid  = _fadeActive && Math.abs(p.score) >= 0.20;
-    const _fadeSoft   = _fadeActive && !_fadeSolid;
+    const _fadeSolid = _fadeActive && Math.abs(p.score) >= 0.20;
+    const _fadeSoft = _fadeActive && !_fadeSolid;
     // Bet action derived from verdictDir (Kalshi-certainty and CDF-aware — not raw score direction)
-    const _betAction  = verdictDir === _yesDirEarly ? 'YES' : verdictDir === _noDirEarly ? 'NO' : null;
+    const _betAction = verdictDir === _yesDirEarly ? 'YES' : verdictDir === _noDirEarly ? 'NO' : null;
     const compositeEdge = 0.75 * Math.abs(p.score) + 0.25 * (kalshiEdge ?? 0);
 
     const verdictMain = verdictDir === 'up' ? '▲ UP' : verdictDir === 'down' ? '▼ DOWN' : '◆ WAIT';
-    const strength    = verdictDir === 'wait' ? 'NEUTRAL'
+    const strength = verdictDir === 'wait' ? 'NEUTRAL'
       : compositeEdge >= 0.42 ? 'STRONG' : compositeEdge >= 0.22 ? 'MODERATE' : 'LIGHT';
-    const scoreStr  = Number.isFinite(p.score) ? (p.score > 0 ? '+' : '') + p.score.toFixed(2) : '—';
+    const scoreStr = Number.isFinite(p.score) ? (p.score > 0 ? '+' : '') + p.score.toFixed(2) : '—';
 
     // ── Pre-compute model probability (outer scope — used in verdict banner + comparison bar) ──
-    const _modelUpPct     = Math.round(Math.min(99, Math.max(1, 50 + (p.score || 0) * 50)));
-    const _modelDownPct   = 100 - _modelUpPct;
+    const _modelUpPct = Math.round(Math.min(99, Math.max(1, 50 + (p.score || 0) * 50)));
+    const _modelDownPct = 100 - _modelUpPct;
     const _modelYesPctCard = _kAlignEarly?.modelYesPct ?? (_strikeDirEarly === 'below' ? _modelDownPct : _modelUpPct);
-    const _modelProbStr   = verdictDir === 'up'   ? `${_modelUpPct}% UP`
-                          : verdictDir === 'down' ? `${_modelDownPct}% DOWN` : 'NEUTRAL';
-    const _modelProbColor = verdictDir === 'up'   ? 'var(--color-green)'
-                          : verdictDir === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
-    const _liveKProbCard  = window.PredictionMarkets?.getCoin?.(p.sym)?.kalshi15m?.probability ?? kalshiProb;
-    const _liveKPctCard   = _liveKProbCard != null ? Math.round(_liveKProbCard * 100) : null;
-    const _edgePpCard     = _liveKPctCard  != null ? Math.abs(_modelYesPctCard - _liveKPctCard) : null;
-    const _liveKDirCard   = _liveKProbCard == null ? null : (_liveKProbCard >= 0.5 ? _yesDirEarly : _noDirEarly);
-    const _liveKColorCard = _liveKProbCard == null  ? 'var(--color-text-muted)'
-                          : _liveKDirCard === 'up'  ? 'var(--color-green)' : 'var(--color-red)';
+    const _modelProbStr = verdictDir === 'up' ? `${_modelUpPct}% UP`
+      : verdictDir === 'down' ? `${_modelDownPct}% DOWN` : 'NEUTRAL';
+    const _modelProbColor = verdictDir === 'up' ? 'var(--color-green)'
+      : verdictDir === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
+    const _liveKProbCard = window.PredictionMarkets?.getCoin?.(p.sym)?.kalshi15m?.probability ?? kalshiProb;
+    const _liveKPctCard = _liveKProbCard != null ? Math.round(_liveKProbCard * 100) : null;
+    const _edgePpCard = _liveKPctCard != null ? Math.abs(_modelYesPctCard - _liveKPctCard) : null;
+    const _liveKDirCard = _liveKProbCard == null ? null : (_liveKProbCard >= 0.5 ? _yesDirEarly : _noDirEarly);
+    const _liveKColorCard = _liveKProbCard == null ? 'var(--color-text-muted)'
+      : _liveKDirCard === 'up' ? 'var(--color-green)' : 'var(--color-red)';
 
     // Session badge (informational only — session multipliers removed; all sessions treated equally)
     const _nowUTC = new Date().getUTCHours();
@@ -7711,35 +9217,35 @@
     // YES resolves if closePrice ≥ targetPriceNum (meet or exceed the reference).
     // NO  resolves if closePrice  < targetPriceNum (falls below the reference).
     // Show both sides: Kalshi YES/NO prices + model P(≥ ref) / P(< ref).
-    const _k15mCoin  = window.PredictionMarkets?.getCoin(p.sym);
-    const _k15m      = _k15mCoin?.kalshi15m ?? null;
-    const _kProb     = ind.mktSentiment?.kalshi ?? _k15m?.probability ?? null;
-    const _kAlign    = p.projections?.p15?.kalshiAlign ?? null;
+    const _k15mCoin = window.PredictionMarkets?.getCoin(p.sym);
+    const _k15m = _k15mCoin?.kalshi15m ?? null;
+    const _kProb = ind.mktSentiment?.kalshi ?? _k15m?.probability ?? null;
+    const _kAlign = p.projections?.p15?.kalshiAlign ?? null;
     const kalshi15mRow = (() => {
       if (_kProb === null) return '';
 
       // YES and NO are complementary — always sum to 100%
       const kYesPct = Math.round(_kProb * 100);
-      const kNoPct  = 100 - kYesPct;
+      const kNoPct = 100 - kYesPct;
       const _rowStrikeDir = (_kAlign?.strikeDir ?? _k15m?.strikeDir ?? _strikeDirEarly) === 'below' ? 'below' : 'above';
-      const _rowYesDir    = _rowStrikeDir === 'below' ? 'down' : 'up';
-      const _rowNoDir     = _rowYesDir === 'up' ? 'down' : 'up';
-      const kDir          = _kProb >= 0.5 ? _rowYesDir : _rowNoDir;
-      const kCls    = kDir === 'up' ? 'bull' : 'bear';
+      const _rowYesDir = _rowStrikeDir === 'below' ? 'down' : 'up';
+      const _rowNoDir = _rowYesDir === 'up' ? 'down' : 'up';
+      const kDir = _kProb >= 0.5 ? _rowYesDir : _rowNoDir;
+      const kCls = kDir === 'up' ? 'bull' : 'bear';
 
       let probLine;
       if (_kAlign?.modelYesPct != null) {
         // Reference price is set — show full YES/NO breakdown for both sides
         const mYesPct = _kAlign.modelYesPct;
-        const mNoPct  = 100 - mYesPct;
-        const div     = _kAlign.divergence;
-        const status  = _kAlign.status;
+        const mNoPct = 100 - mYesPct;
+        const div = _kAlign.divergence;
+        const status = _kAlign.status;
 
         const divBadge = status === 'divergent'
           ? `<span class="k15-divergent">⚡ ${div}pp</span>`
           : status === 'soft-split'
-          ? `<span class="k15-soft-split">${div}pp</span>`
-          : `<span class="k15-agree">✓</span>`;
+            ? `<span class="k15-soft-split">${div}pp</span>`
+            : `<span class="k15-agree">✓</span>`;
 
         // K: YES 68% / NO 32%   M: YES 72% / NO 28%   ⚡badge
         // YES = price meets/exceeds ref = bullish = always green (k15-yes)
@@ -7756,10 +9262,10 @@
           ` ${divBadge}`;
       } else {
         // Reference TBD — show direction + YES/NO split while waiting
-        const agree    = verdictDir !== 'wait' && verdictDir === kDir;
+        const agree = verdictDir !== 'wait' && verdictDir === kDir;
         const disagree = verdictDir !== 'wait' && verdictDir !== kDir;
-        const agBadge  = agree    ? `<span class="k15-agree">✓ AGREE</span>`
-                       : disagree ? `<span class="k15-disagree">⚡ DIVERGENT</span>` : '';
+        const agBadge = agree ? `<span class="k15-agree">✓ AGREE</span>`
+          : disagree ? `<span class="k15-disagree">⚡ DIVERGENT</span>` : '';
         probLine =
           `<span class="k15-yes">Y ${kYesPct}%</span>` +
           `<span class="k15-sep">/</span>` +
@@ -7774,15 +9280,15 @@
         : (_k15m?.targetPrice ? ` <span class="k15-target">≥ ${_k15m.targetPrice}</span>` : '');
 
       // Gap from current price to reference — show dollar amount + % + BORDERLINE warning
-      const _gapRaw   = _kAlign?.gapPct ?? null;
+      const _gapRaw = _kAlign?.gapPct ?? null;
       const _gapDollar = (_kAlign?.ref != null && p.price > 0)
         ? (_kAlign.ref - p.price) : null;
       const _borderline = _gapRaw !== null && Math.abs(_gapRaw) < 0.12; // within 0.12% of strike
       const gapLine = _gapRaw !== null && Math.abs(_gapRaw) > 0.001
         ? ` <span class="k15-gap ${_gapRaw > 0 ? 'k15-gap-up' : 'k15-gap-down'} ${_borderline ? 'k15-borderline' : ''}">` +
-          `${_gapRaw > 0 ? '▲' : '▼'} ${_gapDollar !== null ? '$' + Math.abs(_gapDollar).toFixed(4) + ' ' : ''}` +
-          `(${_gapRaw > 0 ? '+' : ''}${_gapRaw.toFixed(3)}%)` +
-          `${_borderline ? ' ⚠ BORDERLINE' : ''}</span>`
+        `${_gapRaw > 0 ? '▲' : '▼'} ${_gapDollar !== null ? '$' + Math.abs(_gapDollar).toFixed(4) + ' ' : ''}` +
+        `(${_gapRaw > 0 ? '+' : ''}${_gapRaw.toFixed(3)}%)` +
+        `${_borderline ? ' ⚠ BORDERLINE' : ''}</span>`
         : (_gapRaw !== null ? ` <span class="k15-gap k15-gap-down k15-borderline">✓ AT STRIKE</span>` : '');
 
       // Countdown to settlement
@@ -7814,11 +9320,11 @@
           <div>
             <div class="pred-coin-price">${fmtPrice(p.price)}</div>
             <div class="pred-coin-src">${p.source === 'error'
-              ? `<span style="color:var(--color-orange,#f90);font-size:9px">⚠ ${p.error ? p.error.slice(0, 50) : 'compute error'} — will retry</span>`
-              : p.source === 'loading'
-                ? `<span style="color:var(--color-text-muted,#888);font-size:9px">⏳ loading candles…</span>`
-                : `${p.source} &middot; ${p.candleCount || '?'} x 5m${p.candleCount1m ? ` · ${p.candleCount1m} x 1m` : ''}`
-            }</div>
+        ? `<span style="color:var(--color-orange,#f90);font-size:9px">⚠ ${p.error ? p.error.slice(0, 50) : 'compute error'} — will retry</span>`
+        : p.source === 'loading'
+          ? `<span style="color:var(--color-text-muted,#888);font-size:9px">⏳ loading candles…</span>`
+          : `${p.source} &middot; ${p.candleCount || '?'} x 5m${p.candleCount1m ? ` · ${p.candleCount1m} x 1m` : ''}`
+      }</div>
           </div>
           <div class="pred-expand-icon">${expanded ? '−' : '+'}</div>
         </div>
@@ -7833,8 +9339,8 @@
             <span class="pred-source-badge model">MODEL</span>
             ${llmBadge}
             ${_liveKPctCard !== null
-              ? `<span class="pred-source-badge ${_fadeActive ? 'kalshi-fade' : 'kalshi-align'}">${_fadeActive ? '⚡ ' : ''}KALSHI ${_liveKPctCard}% YES</span>`
-              : ''}
+        ? `<span class="pred-source-badge ${_fadeActive ? 'kalshi-fade' : 'kalshi-align'}">${_fadeActive ? '⚡ ' : ''}KALSHI ${_liveKPctCard}% YES</span>`
+        : ''}
             <span style="color:${_modelProbColor};font-weight:700">${_modelProbStr}</span>
             <span>·</span>
             <span>${p.confidence}% conf</span>
@@ -7869,62 +9375,62 @@
           ` : ''}
           ${kalshi15mRow}
           ${(() => {
-            // ── Market Divergence row ─────────────────────────────────────
-            const _md = window._marketDivergence?.[p.sym];
-            if (!_md?.active || _md.phase === 'STALE') return '';
+        // ── Market Divergence row ─────────────────────────────────────
+        const _md = window._marketDivergence?.[p.sym];
+        if (!_md?.active || _md.phase === 'STALE') return '';
 
-            const phaseColors = {
-              PRIME:    ['rgba(38,212,126,0.10)', 'rgba(38,212,126,0.40)', 'var(--color-green)'],
-              ACTIVE:   ['rgba(0,150,255,0.09)',  'rgba(0,150,255,0.35)', '#4f9eff'],
-              CATCHING: ['rgba(255,215,0,0.10)',  'rgba(255,215,0,0.40)', '#ffd700'],
-              DIVERGING:['rgba(220,60,60,0.09)',  'rgba(220,60,60,0.35)', 'var(--color-red)'],
-              LATE:     ['rgba(130,130,130,0.07)','rgba(130,130,130,0.25)','var(--color-text-muted)'],
-            };
-            const [bg, border, textColor] = phaseColors[_md.phase] || phaseColors.LATE;
+        const phaseColors = {
+          PRIME: ['rgba(38,212,126,0.10)', 'rgba(38,212,126,0.40)', 'var(--color-green)'],
+          ACTIVE: ['rgba(0,150,255,0.09)', 'rgba(0,150,255,0.35)', '#4f9eff'],
+          CATCHING: ['rgba(255,215,0,0.10)', 'rgba(255,215,0,0.40)', '#ffd700'],
+          DIVERGING: ['rgba(220,60,60,0.09)', 'rgba(220,60,60,0.35)', 'var(--color-red)'],
+          LATE: ['rgba(130,130,130,0.07)', 'rgba(130,130,130,0.25)', 'var(--color-text-muted)'],
+        };
+        const [bg, border, textColor] = phaseColors[_md.phase] || phaseColors.LATE;
 
-            const phaseLabels = {
-              PRIME:    '🟢 PRIME WINDOW',
-              ACTIVE:   '🔵 ACTIVE',
-              CATCHING: '🟡 CROWD CATCHING',
-              DIVERGING:'🔴 CROWD DOUBLING DOWN',
-              LATE:     '⬜ LATE',
-            };
+        const phaseLabels = {
+          PRIME: '🟢 PRIME WINDOW',
+          ACTIVE: '🔵 ACTIVE',
+          CATCHING: '🟡 CROWD CATCHING',
+          DIVERGING: '🔴 CROWD DOUBLING DOWN',
+          LATE: '⬜ LATE',
+        };
 
-            // Compute elapsed time live from firstDivTs (not from stale durationMs)
-            const secElapsed = _md.firstDivTs ? Math.floor((Date.now() - _md.firstDivTs) / 1000) : 0;
-            const minSec     = secElapsed >= 60
-              ? Math.floor(secElapsed / 60) + 'm ' + (secElapsed % 60) + 's'
-              : secElapsed + 's';
+        // Compute elapsed time live from firstDivTs (not from stale durationMs)
+        const secElapsed = _md.firstDivTs ? Math.floor((Date.now() - _md.firstDivTs) / 1000) : 0;
+        const minSec = secElapsed >= 60
+          ? Math.floor(secElapsed / 60) + 'm ' + (secElapsed % 60) + 's'
+          : secElapsed + 's';
 
-            // Read live Kalshi probability directly — don't rely on stale snapshot value
-            const liveKalshiPct = window.PredictionMarkets?.getCoin?.(p.sym)?.kalshi15m?.probability != null
-              ? window.PredictionMarkets.getCoin(p.sym).kalshi15m.probability * 100
-              : (_md.currentKalshiPct ?? null);
+        // Read live Kalshi probability directly — don't rely on stale snapshot value
+        const liveKalshiPct = window.PredictionMarkets?.getCoin?.(p.sym)?.kalshi15m?.probability != null
+          ? window.PredictionMarkets.getCoin(p.sym).kalshi15m.probability * 100
+          : (_md.currentKalshiPct ?? null);
 
-            // Recompute catchupDelta from live odds
-            const liveCatchupDelta = (liveKalshiPct != null && _md.entryKalshiPct != null)
-              ? (_md.entryModelDir === 'up' || _md.entryModelDir === 'UP'
-                  ? liveKalshiPct - _md.entryKalshiPct
-                  : _md.entryKalshiPct - liveKalshiPct)
-              : (_md.catchupDelta ?? 0);
+        // Recompute catchupDelta from live odds
+        const liveCatchupDelta = (liveKalshiPct != null && _md.entryKalshiPct != null)
+          ? (_md.entryModelDir === 'up' || _md.entryModelDir === 'UP'
+            ? liveKalshiPct - _md.entryKalshiPct
+            : _md.entryKalshiPct - liveKalshiPct)
+          : (_md.catchupDelta ?? 0);
 
-            const deltaStr = Math.abs(liveCatchupDelta) >= 0.5
-              ? (liveCatchupDelta > 0
-                  ? `+${liveCatchupDelta.toFixed(1)}pp crowd → model`
-                  : `${liveCatchupDelta.toFixed(1)}pp crowd away`)
-              : '';
+        const deltaStr = Math.abs(liveCatchupDelta) >= 0.5
+          ? (liveCatchupDelta > 0
+            ? `+${liveCatchupDelta.toFixed(1)}pp crowd → model`
+            : `${liveCatchupDelta.toFixed(1)}pp crowd away`)
+          : '';
 
-            const entryHint = _md.phase === 'PRIME'
-              ? 'Best entry window — model ahead of crowd'
-              : _md.phase === 'ACTIVE'
-              ? 'Divergence holding — monitor for catchup'
-              : _md.phase === 'CATCHING'
+        const entryHint = _md.phase === 'PRIME'
+          ? 'Best entry window — model ahead of crowd'
+          : _md.phase === 'ACTIVE'
+            ? 'Divergence holding — monitor for catchup'
+            : _md.phase === 'CATCHING'
               ? 'Crowd moving toward model — entry closing'
               : _md.phase === 'DIVERGING'
-              ? 'Crowd opposing model — elevated risk'
-              : 'Signal aging — verify before entry';
+                ? 'Crowd opposing model — elevated risk'
+                : 'Signal aging — verify before entry';
 
-            return `
+        return `
               <div style="margin-top:5px;padding:7px 10px;border-radius:4px;background:${bg};border:1px solid ${border};font-size:11px;font-family:var(--font-mono)">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                   <span style="font-weight:900;letter-spacing:.3px;color:${textColor}">MKT DIV</span>
@@ -7934,172 +9440,172 @@
                 </div>
                 <div style="margin-top:3px;color:var(--color-text-muted);font-size:10px;font-family:var(--font-sans)">${entryHint}${_md.entryKalshiPct != null ? ` · Entry K: ${_md.entryKalshiPct.toFixed(0)}% → now ${liveKalshiPct != null ? liveKalshiPct.toFixed(0) : '?'}%` : ''}</div>
               </div>`;
-          })()}
+      })()}
           ${(() => {
-            const ki = window.KalshiOrchestrator?.getIntent?.(p.sym);
-            if (!ki || ki.action === 'skip') return '';
+        const ki = window.KalshiOrchestrator?.getIntent?.(p.sym);
+        if (!ki || ki.action === 'skip') return '';
 
-            // ── Model probability: convert score (-1..+1) to directional % ───
-            const modelUpPct   = Math.round(Math.min(99, Math.max(1, 50 + (p.score || 0) * 50)));
-            const modelDownPct = 100 - modelUpPct;
-            const _strikeDirKi = (_k15mV?.strikeDir ?? _kAlignEarly?.strikeDir ?? 'above') === 'below' ? 'below' : 'above';
-            const _yesDirKi    = _strikeDirKi === 'below' ? 'down' : 'up';
-            const _noDirKi     = _yesDirKi === 'up' ? 'down' : 'up';
-            const modelYesPct  = Number.isFinite(_kAlignEarly?.modelYesPct)
-              ? _kAlignEarly.modelYesPct
-              : (_strikeDirKi === 'below' ? modelDownPct : modelUpPct);
-            const modelLean    = modelYesPct >= 58 ? _yesDirKi : modelYesPct <= 42 ? _noDirKi : 'neutral';
-            const modelLeanStr = modelLean === 'up'   ? `${modelUpPct}% UP`
-                               : modelLean === 'down' ? `${modelDownPct}% DOWN`
-                               : 'NEUTRAL';
-            const modelColor   = modelLean === 'up'   ? 'var(--color-green)'
-                               : modelLean === 'down' ? 'var(--color-red)'
-                               : 'var(--color-text-muted)';
+        // ── Model probability: convert score (-1..+1) to directional % ───
+        const modelUpPct = Math.round(Math.min(99, Math.max(1, 50 + (p.score || 0) * 50)));
+        const modelDownPct = 100 - modelUpPct;
+        const _strikeDirKi = (_k15mV?.strikeDir ?? _kAlignEarly?.strikeDir ?? 'above') === 'below' ? 'below' : 'above';
+        const _yesDirKi = _strikeDirKi === 'below' ? 'down' : 'up';
+        const _noDirKi = _yesDirKi === 'up' ? 'down' : 'up';
+        const modelYesPct = Number.isFinite(_kAlignEarly?.modelYesPct)
+          ? _kAlignEarly.modelYesPct
+          : (_strikeDirKi === 'below' ? modelDownPct : modelUpPct);
+        const modelLean = modelYesPct >= 58 ? _yesDirKi : modelYesPct <= 42 ? _noDirKi : 'neutral';
+        const modelLeanStr = modelLean === 'up' ? `${modelUpPct}% UP`
+          : modelLean === 'down' ? `${modelDownPct}% DOWN`
+            : 'NEUTRAL';
+        const modelColor = modelLean === 'up' ? 'var(--color-green)'
+          : modelLean === 'down' ? 'var(--color-red)'
+            : 'var(--color-text-muted)';
 
-            // ── Live Kalshi probability (always fresh from PredictionMarkets) ─
-            const _pmCoin      = window.PredictionMarkets?.getCoin?.(p.sym);
-            const _pmK15       = _pmCoin?.kalshi15m ?? null;
-            const liveKProb    = _pmK15?.probability ?? kalshiProb;
-            const liveKPct     = liveKProb != null ? Math.round(liveKProb * 100) : null;
-            const kalshiLean   = liveKProb != null ? (liveKProb >= 0.5 ? _yesDirKi : _noDirKi) : null;
-            const kalshiLeanStr = liveKProb == null ? '—'
-                               : liveKProb >= 0.5  ? `${liveKPct}% YES`
-                               : `${100 - liveKPct}% NO`;
-            const kalshiColor  = liveKProb == null ? 'var(--color-text-muted)'
-                               : kalshiLean === 'up' ? 'var(--color-green)' : 'var(--color-red)';
+        // ── Live Kalshi probability (always fresh from PredictionMarkets) ─
+        const _pmCoin = window.PredictionMarkets?.getCoin?.(p.sym);
+        const _pmK15 = _pmCoin?.kalshi15m ?? null;
+        const liveKProb = _pmK15?.probability ?? kalshiProb;
+        const liveKPct = liveKProb != null ? Math.round(liveKProb * 100) : null;
+        const kalshiLean = liveKProb != null ? (liveKProb >= 0.5 ? _yesDirKi : _noDirKi) : null;
+        const kalshiLeanStr = liveKProb == null ? '—'
+          : liveKProb >= 0.5 ? `${liveKPct}% YES`
+            : `${100 - liveKPct}% NO`;
+        const kalshiColor = liveKProb == null ? 'var(--color-text-muted)'
+          : kalshiLean === 'up' ? 'var(--color-green)' : 'var(--color-red)';
 
-            // ── Alignment badge ───────────────────────────────────────────────
-            const proAgree = modelLean !== 'neutral' && kalshiLean !== null && modelLean === kalshiLean;
-            const proFade  = modelLean !== 'neutral' && kalshiLean !== null && modelLean !== kalshiLean;
-            const edgePp   = liveKPct != null ? Math.abs(modelUpPct - liveKPct) : null;
-            const alignBadge = proAgree ? `<span style="color:var(--color-green);font-weight:800">✓ AGREE</span>`
-                             : proFade  ? `<span style="color:#ff9800;font-weight:800">⚡ FADE</span>`
-                             : `<span style="color:var(--color-text-muted)">—</span>`;
+        // ── Alignment badge ───────────────────────────────────────────────
+        const proAgree = modelLean !== 'neutral' && kalshiLean !== null && modelLean === kalshiLean;
+        const proFade = modelLean !== 'neutral' && kalshiLean !== null && modelLean !== kalshiLean;
+        const edgePp = liveKPct != null ? Math.abs(modelUpPct - liveKPct) : null;
+        const alignBadge = proAgree ? `<span style="color:var(--color-green);font-weight:800">✓ AGREE</span>`
+          : proFade ? `<span style="color:#ff9800;font-weight:800">⚡ FADE</span>`
+            : `<span style="color:var(--color-text-muted)">—</span>`;
 
-            // ── Styling ───────────────────────────────────────────────────────
-            const isExit  = ki.action === 'earlyExit';
-            const isHold  = ki.action === 'hold';
-            const isTrade = ki.action === 'trade';
-            const isCrowdFade = ki.alignment === 'CROWD_FADE' || !!ki.crowdFade;
-            const isDivergent = ki.alignment === 'DIVERGENT';
-            const rowBg   = isExit  ? 'rgba(255,80,80,0.07)'  : isHold  ? 'rgba(255,180,0,0.07)'
-                          : isCrowdFade ? 'rgba(224,64,251,0.08)'
-                          : isTrade ? 'rgba(0,200,100,0.07)'  : 'rgba(200,200,0,0.05)';
-            const rowBdr  = isExit  ? 'rgba(255,80,80,0.2)'   : isHold  ? 'rgba(255,180,0,0.25)'
-                          : isCrowdFade ? 'rgba(224,64,251,0.25)'
-                          : isTrade ? 'rgba(0,200,100,0.2)'   : 'rgba(200,200,0,0.15)';
+        // ── Styling ───────────────────────────────────────────────────────
+        const isExit = ki.action === 'earlyExit';
+        const isHold = ki.action === 'hold';
+        const isTrade = ki.action === 'trade';
+        const isCrowdFade = ki.alignment === 'CROWD_FADE' || !!ki.crowdFade;
+        const isDivergent = ki.alignment === 'DIVERGENT';
+        const rowBg = isExit ? 'rgba(255,80,80,0.07)' : isHold ? 'rgba(255,180,0,0.07)'
+          : isCrowdFade ? 'rgba(224,64,251,0.08)'
+            : isTrade ? 'rgba(0,200,100,0.07)' : 'rgba(200,200,0,0.05)';
+        const rowBdr = isExit ? 'rgba(255,80,80,0.2)' : isHold ? 'rgba(255,180,0,0.25)'
+          : isCrowdFade ? 'rgba(224,64,251,0.25)'
+            : isTrade ? 'rgba(0,200,100,0.2)' : 'rgba(200,200,0,0.15)';
 
-            // ── Contract expiry guard ─────────────────────────────────────────
-            // ki is stale cache — if closeTimeMs is in the past, new contract not yet listed.
-            const contractExpired = ki.closeTimeMs && (Date.now() - ki.closeTimeMs) > 5_000;
-            if (contractExpired) {
-              // ── Build rotating insight carousel ──────────────────────────────
-              const _ins = [];
+        // ── Contract expiry guard ─────────────────────────────────────────
+        // ki is stale cache — if closeTimeMs is in the past, new contract not yet listed.
+        const contractExpired = ki.closeTimeMs && (Date.now() - ki.closeTimeMs) > 5_000;
+        if (contractExpired) {
+          // ── Build rotating insight carousel ──────────────────────────────
+          const _ins = [];
 
-              // 1. Model direction + score
-              _ins.push({
-                label: 'MODEL SIGNAL',
-                icon:  modelLean === 'up' ? '▲' : modelLean === 'down' ? '▼' : '◆',
-                value: modelLeanStr,
-                color: modelColor,
-                detail: `score ${(p.score > 0 ? '+' : '') + (p.score?.toFixed(2) ?? '—')}`,
-              });
+          // 1. Model direction + score
+          _ins.push({
+            label: 'MODEL SIGNAL',
+            icon: modelLean === 'up' ? '▲' : modelLean === 'down' ? '▼' : '◆',
+            value: modelLeanStr,
+            color: modelColor,
+            detail: `score ${(p.score > 0 ? '+' : '') + (p.score?.toFixed(2) ?? '—')}`,
+          });
 
-              // 2. Agree / Fade alignment vs Kalshi
-              if (liveKPct != null) {
-                _ins.push({
-                  label: proAgree ? 'AGREE W/ KALSHI' : proFade ? 'FADE SIGNAL' : 'NEUTRAL',
-                  icon:  proAgree ? '✓' : proFade ? '⚡' : '—',
-                  value: `Model ${modelLeanStr}  ↔  Kalshi ${kalshiLeanStr}`,
-                  color: proAgree ? 'var(--color-green)' : proFade ? '#ff9800' : 'var(--color-text-muted)',
-                  detail: edgePp != null ? edgePp + 'pp gap' : '',
-                });
-              }
+          // 2. Agree / Fade alignment vs Kalshi
+          if (liveKPct != null) {
+            _ins.push({
+              label: proAgree ? 'AGREE W/ KALSHI' : proFade ? 'FADE SIGNAL' : 'NEUTRAL',
+              icon: proAgree ? '✓' : proFade ? '⚡' : '—',
+              value: `Model ${modelLeanStr}  ↔  Kalshi ${kalshiLeanStr}`,
+              color: proAgree ? 'var(--color-green)' : proFade ? '#ff9800' : 'var(--color-text-muted)',
+              detail: edgePp != null ? edgePp + 'pp gap' : '',
+            });
+          }
 
-              // 3. Last settled contract for this coin
-              const _lastRes = window._resolutionMap?.[p.sym];
-              if (_lastRes) {
-                const _icon = _lastRes.modelCorrect === true ? '✅' : _lastRes.modelCorrect === false ? '❌' : '—';
-                _ins.push({
-                  label: 'LAST CONTRACT',
-                  icon:  _icon,
-                  value: (_lastRes.actualOutcome ?? '—') + '  ·  K: ' + (_lastRes.kalshiResult?.toUpperCase() ?? '—'),
-                  color: _lastRes.modelCorrect === true ? 'var(--color-green)' : _lastRes.modelCorrect === false ? 'var(--color-red)' : 'var(--color-text-muted)',
-                  detail: _lastRes.wickedOut ? '⚡ wicked out' : `entry K: ${Math.round((_lastRes.entryProb ?? 0) * 100)}%`,
-                });
-              }
+          // 3. Last settled contract for this coin
+          const _lastRes = window._resolutionMap?.[p.sym];
+          if (_lastRes) {
+            const _icon = _lastRes.modelCorrect === true ? '✅' : _lastRes.modelCorrect === false ? '❌' : '—';
+            _ins.push({
+              label: 'LAST CONTRACT',
+              icon: _icon,
+              value: (_lastRes.actualOutcome ?? '—') + '  ·  K: ' + (_lastRes.kalshiResult?.toUpperCase() ?? '—'),
+              color: _lastRes.modelCorrect === true ? 'var(--color-green)' : _lastRes.modelCorrect === false ? 'var(--color-red)' : 'var(--color-text-muted)',
+              detail: _lastRes.wickedOut ? '⚡ wicked out' : `entry K: ${Math.round((_lastRes.entryProb ?? 0) * 100)}%`,
+            });
+          }
 
-              // 4. Session accuracy for this coin
-              const _resLog = (window._15mResolutionLog || []).filter(e => e.sym === p.sym);
-              if (_resLog.length >= 2) {
-                const _corr  = _resLog.filter(e => e.modelCorrect === true).length;
-                const _wr    = Math.round(_corr / _resLog.length * 100);
-                const _trd   = _resLog.filter(e => e.orchestratorAction === 'trade');
-                const _tWr   = _trd.length ? Math.round(_trd.filter(e => e.modelCorrect).length / _trd.length * 100) : null;
-                _ins.push({
-                  label: 'SESSION ACCURACY',
-                  icon:  _wr >= 55 ? '📈' : _wr >= 45 ? '📊' : '📉',
-                  value: `${_wr}%  (${_corr}/${_resLog.length} calls)`,
-                  color: _wr >= 55 ? 'var(--color-green)' : _wr >= 45 ? '#ffd700' : 'var(--color-red)',
-                  detail: _tWr != null ? `Traded WR: ${_tWr}%` : '',
-                });
-              }
+          // 4. Session accuracy for this coin
+          const _resLog = (window._15mResolutionLog || []).filter(e => e.sym === p.sym);
+          if (_resLog.length >= 2) {
+            const _corr = _resLog.filter(e => e.modelCorrect === true).length;
+            const _wr = Math.round(_corr / _resLog.length * 100);
+            const _trd = _resLog.filter(e => e.orchestratorAction === 'trade');
+            const _tWr = _trd.length ? Math.round(_trd.filter(e => e.modelCorrect).length / _trd.length * 100) : null;
+            _ins.push({
+              label: 'SESSION ACCURACY',
+              icon: _wr >= 55 ? '📈' : _wr >= 45 ? '📊' : '📉',
+              value: `${_wr}%  (${_corr}/${_resLog.length} calls)`,
+              color: _wr >= 55 ? 'var(--color-green)' : _wr >= 45 ? '#ffd700' : 'var(--color-red)',
+              detail: _tWr != null ? `Traded WR: ${_tWr}%` : '',
+            });
+          }
 
-              // 5. CFM momentum
-              const _cfm = (window._cfmAll || window._lastCfm || {})[p.sym];
-              if (_cfm?.momentum != null) {
-                const _mom = _cfm.momentum;
-                _ins.push({
-                  label: 'CFM MOMENTUM',
-                  icon:  _mom > 0.008 ? '⚡' : _mom < -0.008 ? '⬇' : '◆',
-                  value: (_mom > 0 ? '+' : '') + _mom.toFixed(4) + '  ·  ' + (_cfm.trend ?? 'neutral'),
-                  color: _mom > 0.004 ? 'var(--color-green)' : _mom < -0.004 ? 'var(--color-red)' : 'var(--color-text-muted)',
-                  detail: (_cfm.sourceCount ?? 0) + ' sources',
-                });
-              }
+          // 5. CFM momentum
+          const _cfm = (window._cfmAll || window._lastCfm || {})[p.sym];
+          if (_cfm?.momentum != null) {
+            const _mom = _cfm.momentum;
+            _ins.push({
+              label: 'CFM MOMENTUM',
+              icon: _mom > 0.008 ? '⚡' : _mom < -0.008 ? '⬇' : '◆',
+              value: (_mom > 0 ? '+' : '') + _mom.toFixed(4) + '  ·  ' + (_cfm.trend ?? 'neutral'),
+              color: _mom > 0.004 ? 'var(--color-green)' : _mom < -0.004 ? 'var(--color-red)' : 'var(--color-text-muted)',
+              detail: (_cfm.sourceCount ?? 0) + ' sources',
+            });
+          }
 
-              // 6. Wick warning if recent wicks exist
-              const _wicks = _resLog.filter(e => e.wickedOut).length;
-              if (_wicks > 0) {
-                _ins.push({
-                  label: 'WICK ALERT',
-                  icon:  '⚡',
-                  value: `${_wicks} wick${_wicks > 1 ? 's' : ''} this session — enter early`,
-                  color: '#ff9800',
-                  detail: 'last-45s price manipulation risk',
-                });
-              }
+          // 6. Wick warning if recent wicks exist
+          const _wicks = _resLog.filter(e => e.wickedOut).length;
+          if (_wicks > 0) {
+            _ins.push({
+              label: 'WICK ALERT',
+              icon: '⚡',
+              value: `${_wicks} wick${_wicks > 1 ? 's' : ''} this session — enter early`,
+              color: '#ff9800',
+              detail: 'last-45s price manipulation risk',
+            });
+          }
 
-              // 7. Sweet spot window hint
-              _ins.push({
-                label: 'SWEET SPOT WINDOW',
-                icon:  '⭐',
-                value: '3 – 6 min after contract opens',
-                color: '#ffd700',
-                detail: 'payout ≥1.65×  ·  best entry window',
-              });
+          // 7. Sweet spot window hint
+          _ins.push({
+            label: 'SWEET SPOT WINDOW',
+            icon: '⭐',
+            value: '3 – 6 min after contract opens',
+            color: '#ffd700',
+            detail: 'payout ≥1.65×  ·  best entry window',
+          });
 
-              // 8. Trade recommendation preview
-              if (modelLean !== 'neutral' && (proAgree || proFade)) {
-                const modelSide = modelLean === _yesDirKi ? 'YES' : modelLean === _noDirKi ? 'NO' : '—';
-                const _rec = proFade
-                  ? `Fade the crowd — bet ${modelSide} when contract opens`
-                  : `${modelSide} side favoured — watch for entry`;
-                _ins.push({
-                  label: proFade ? 'FADE OPPORTUNITY' : 'ENTRY WATCH',
-                  icon:  proFade ? '🔄' : '👁',
-                  value: _rec,
-                  color: proFade ? '#ff9800' : 'var(--color-text)',
-                  detail: `confidence ready when contract lists`,
-                });
-              }
+          // 8. Trade recommendation preview
+          if (modelLean !== 'neutral' && (proAgree || proFade)) {
+            const modelSide = modelLean === _yesDirKi ? 'YES' : modelLean === _noDirKi ? 'NO' : '—';
+            const _rec = proFade
+              ? `Fade the crowd — bet ${modelSide} when contract opens`
+              : `${modelSide} side favoured — watch for entry`;
+            _ins.push({
+              label: proFade ? 'FADE OPPORTUNITY' : 'ENTRY WATCH',
+              icon: proFade ? '🔄' : '👁',
+              value: _rec,
+              color: proFade ? '#ff9800' : 'var(--color-text)',
+              detail: `confidence ready when contract lists`,
+            });
+          }
 
-              // Store in global map for the rotation interval to read
-              window._kiInsights = window._kiInsights || {};
-              window._kiInsights[p.sym] = _ins;
+          // Store in global map for the rotation interval to read
+          window._kiInsights = window._kiInsights || {};
+          window._kiInsights[p.sym] = _ins;
 
-              const _insFirst = _ins[0];
-              return `<div id="ki-await-${p.sym}" style="margin-top:6px;padding:8px 10px;border-radius:5px;background:rgba(100,100,100,0.06);border:1px solid rgba(120,120,120,0.15);font-family:var(--font-mono);transition:opacity 0.25s ease">
+          const _insFirst = _ins[0];
+          return `<div id="ki-await-${p.sym}" style="margin-top:6px;padding:8px 10px;border-radius:5px;background:rgba(100,100,100,0.06);border:1px solid rgba(120,120,120,0.15);font-family:var(--font-mono);transition:opacity 0.25s ease">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                   <span style="font-size:9px;font-weight:700;color:var(--color-text-faint);letter-spacing:.5px;text-transform:uppercase;min-width:110px">${_insFirst.label}</span>
                   <strong style="font-size:13px;color:${_insFirst.color}">${_insFirst.icon} ${_insFirst.value}</strong>
@@ -8107,39 +9613,39 @@
                 </div>
                 <div style="display:flex;gap:3px;margin-top:4px">${_ins.map((_, j) => `<span style="width:16px;height:2px;border-radius:1px;background:${j === 0 ? 'var(--color-primary,#7c6aff)' : 'rgba(255,255,255,0.12)'}" id="ki-dot-${p.sym}-${j}"></span>`).join('')}</div>
               </div>`;
-            }
+        }
 
-            // ── Active contract ───────────────────────────────────────────────
-            const sideColor   = ki.side === 'YES' ? 'var(--color-green)' : ki.side === 'NO' ? 'var(--color-red)' : 'var(--color-orange)';
-            const sideBg      = ki.side === 'YES' ? 'rgba(0,200,100,0.18)' : ki.side === 'NO' ? 'rgba(220,60,60,0.18)' : 'transparent';
-            const actionLabel = isTrade ? '🟢 TRADE' : isExit ? '🔴 EXIT' : isHold ? '⏳ HOLD' : '👁 WATCH';
-            const strikeLabel = (() => { const m = ki.contractTicker?.match(/T(\d+(?:\.\d+)?)$/); return m ? 'T' + Number(m[1]).toLocaleString() : ''; })();
-            const liveSecsLeft = ki.closeTimeMs ? Math.max(0, (ki.closeTimeMs - Date.now()) / 1000) : null;
-            const fmtSecsLeft  = s => s == null ? null : s < 60 ? Math.round(s) + 's' : (s / 60).toFixed(1) + 'm';
-            const minsStr      = fmtSecsLeft(liveSecsLeft);
-            const alignTag     = {
-              ALIGNED: '✓ Both agree',
-              DIVERGENT: '⚡ Model vs crowd',
-              CROWD_FADE: '🔄 Mispricing fade',
-              MODEL_LEADS: 'Model leads',
-              KALSHI_ONLY: 'Kalshi only',
-              MODEL_ONLY: 'Model only',
-              EARLY_EXIT: 'Early exit',
-              SHELL_EVAL: 'Evaluating',
-            }[ki.alignment] ?? (ki.alignment ?? '');
-            return `
+        // ── Active contract ───────────────────────────────────────────────
+        const sideColor = ki.side === 'YES' ? 'var(--color-green)' : ki.side === 'NO' ? 'var(--color-red)' : 'var(--color-orange)';
+        const sideBg = ki.side === 'YES' ? 'rgba(0,200,100,0.18)' : ki.side === 'NO' ? 'rgba(220,60,60,0.18)' : 'transparent';
+        const actionLabel = isTrade ? '🟢 TRADE' : isExit ? '🔴 EXIT' : isHold ? '⏳ HOLD' : '👁 WATCH';
+        const strikeLabel = (() => { const m = ki.contractTicker?.match(/T(\d+(?:\.\d+)?)$/); return m ? 'T' + Number(m[1]).toLocaleString() : ''; })();
+        const liveSecsLeft = ki.closeTimeMs ? Math.max(0, (ki.closeTimeMs - Date.now()) / 1000) : null;
+        const fmtSecsLeft = s => s == null ? null : s < 60 ? Math.round(s) + 's' : (s / 60).toFixed(1) + 'm';
+        const minsStr = fmtSecsLeft(liveSecsLeft);
+        const alignTag = {
+          ALIGNED: '✓ Both agree',
+          DIVERGENT: '⚡ Model vs crowd',
+          CROWD_FADE: '🔄 Mispricing fade',
+          MODEL_LEADS: 'Model leads',
+          KALSHI_ONLY: 'Kalshi only',
+          MODEL_ONLY: 'Model only',
+          EARLY_EXIT: 'Early exit',
+          SHELL_EVAL: 'Evaluating',
+        }[ki.alignment] ?? (ki.alignment ?? '');
+        return `
             <div style="margin-top:6px;padding:8px 10px;border-radius:5px;background:${rowBg};border:1px solid ${rowBdr};font-family:var(--font-mono)">
               ${isExit
-                ? `<div style="display:flex;align-items:center;gap:8px">
+            ? `<div style="display:flex;align-items:center;gap:8px">
                      <span style="background:rgba(255,80,80,0.22);color:var(--color-red);padding:4px 14px;border-radius:4px;font-size:13px;font-weight:800;letter-spacing:.6px">STAND ASIDE</span>
                      <span style="font-size:11px;color:var(--color-text-muted)">CFM early-exit — do not enter</span>
                    </div>`
-                : isHold
-                ? `<div style="display:flex;align-items:center;gap:8px">
+            : isHold
+              ? `<div style="display:flex;align-items:center;gap:8px">
                      <span style="background:rgba(255,180,0,0.22);color:var(--color-gold,#f90);padding:4px 14px;border-radius:4px;font-size:13px;font-weight:800;letter-spacing:.6px">⏳ EVALUATING WALL</span>
                      <span style="font-size:11px;color:var(--color-text-muted)">Collecting sell-pressure data…</span>
                    </div>`
-                : `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              : `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                      <span style="background:${sideBg};color:${sideColor};padding:4px 14px;border-radius:4px;font-size:15px;font-weight:800;letter-spacing:.8px">${ki.side}</span>
                      <span style="font-size:12px;font-weight:700;color:var(--color-text)">KALSHI${strikeLabel ? ' · ' + strikeLabel : ''}</span>
                      <span style="margin-left:auto;background:${isTrade ? 'rgba(0,200,100,0.15)' : 'rgba(200,200,0,0.12)'};color:${isTrade ? 'var(--color-green)' : 'var(--color-orange)'};padding:3px 10px;border-radius:3px;font-size:12px;font-weight:700">${actionLabel}</span>
@@ -8161,12 +9667,12 @@
                 <div style="display:grid;grid-template-columns:44px 1fr;row-gap:3px;align-items:center;font-size:9px">
                   <span style="color:var(--color-text-muted);text-align:right;padding-right:5px">MDL</span>
                   <div style="height:5px;border-radius:2px;background:rgba(255,255,255,0.07);position:relative;overflow:hidden">
-                    <div style="position:absolute;inset:0 ${100-modelUpPct}% 0 0;background:${modelColor};border-radius:2px"></div>
+                    <div style="position:absolute;inset:0 ${100 - modelUpPct}% 0 0;background:${modelColor};border-radius:2px"></div>
                     <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.18)"></div>
                   </div>
                   <span style="color:var(--color-text-muted);text-align:right;padding-right:5px">KAL</span>
                   <div style="height:5px;border-radius:2px;background:rgba(255,255,255,0.07);position:relative;overflow:hidden">
-                    <div style="position:absolute;inset:0 ${100-liveKPct}% 0 0;background:${kalshiColor};border-radius:2px"></div>
+                    <div style="position:absolute;inset:0 ${100 - liveKPct}% 0 0;background:${kalshiColor};border-radius:2px"></div>
                     <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.18)"></div>
                   </div>
                 </div>` : ''}
@@ -8178,14 +9684,14 @@
               </div>
               ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:5px;line-height:1.4;font-family:var(--font-sans)">${ki.humanReason}</div>` : ''}
               ${renderFifteenMinuteMovePlan(ki)}
-              ${ki.sweetSpot    ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — <span id="kalshi-ss-${p.sym}" data-close-ms="${ki.closeTimeMs ?? ''}">${minsStr ?? '?'}</span> until close · ${ki.payoutMult?.toFixed(2)}x payout · best entry window (3–6 min)</div>` : ''}
-              ${ki.crowdFade    ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — blockchain momentum leads · going ${ki.direction}</div>` : ''}
+              ${ki.sweetSpot ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — <span id="kalshi-ss-${p.sym}" data-close-ms="${ki.closeTimeMs ?? ''}">${minsStr ?? '?'}</span> until close · ${ki.payoutMult?.toFixed(2)}x payout · best entry window (3–6 min)</div>` : ''}
+              ${ki.crowdFade ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — blockchain momentum leads · going ${ki.direction}</div>` : ''}
               ${ki.crowdFadeSuggested && !ki.crowdFade ? `<div style="font-size:11px;color:#ffb74d;font-weight:700;margin-top:4px">⏳ CROWD FADE SETUP — mispricing persisting (${ki.crowdFadeMispricingPp ?? '?'}pp), confirm in ${ki.crowdFadeConfirmLeftSec ?? '?'}s</div>` : ''}
               ${ki.signalLocked ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">🔒 Signal locked (${ki.humanReason?.match(/\d+s/)?.[0] || '?'} ago) — holding position</div>` : ''}
               ${ki.illiquid ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Low liquidity ($${ki.liquidity?.toFixed(0)}) — size carefully</div>` : ''}
               ${!isTrade && isDivergent ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Kalshi vs model disagree — watch only, do not trade</div>` : ''}
             </div>`;
-          })()}
+      })()}
         </div>
 
         ${rfRow}
@@ -8232,8 +9738,8 @@
               ${topDrivers.map(driver => `<span style="font-size:9px;padding:3px 6px;background:var(--color-surface-2);border-radius:9999px;color:${driver.direction === 'up' ? 'var(--color-green)' : 'var(--color-red)'}">${driver.label}: ${driver.detail}</span>`).join('')}
               ${fastTiming ? `<span style="font-size:9px;padding:3px 6px;background:var(--color-surface-2);border-radius:9999px;color:${fastTiming.score > 0 ? 'var(--color-green)' : fastTiming.score < 0 ? 'var(--color-red)' : 'var(--color-text-muted)'}">1m pulse: ${fastTiming.label}</span>` : ''}
               ${routedRiskFlags.map(flag => `<span style="font-size:9px;padding:3px 6px;background:var(--color-red-dim);border-radius:9999px;color:var(--color-red)">${flag}</span>`).join('')}
-              ${mdtPath.slice(0,5).map(step => `
-                <span style="font-size:9px;padding:3px 6px;background:var(--color-surface-2);border-radius:9999px;color:${step.pass === false ? 'var(--color-text-faint)' : mdtBias==='bullish'?'var(--color-green)':mdtBias==='bearish'?'var(--color-red)':'var(--color-text-muted)'}">
+              ${mdtPath.slice(0, 5).map(step => `
+                <span style="font-size:9px;padding:3px 6px;background:var(--color-surface-2);border-radius:9999px;color:${step.pass === false ? 'var(--color-text-faint)' : mdtBias === 'bullish' ? 'var(--color-green)' : mdtBias === 'bearish' ? 'var(--color-red)' : 'var(--color-text-muted)'}">
                   MDT/${step.node}${step.result ? ': ' + step.result : ''}
                 </span>`).join('')}
             </div>
@@ -8323,15 +9829,15 @@
 
     // Build order book ladder
     const MAX_LEVELS = 15;
-    const allQtys = [...book.bids.slice(0,MAX_LEVELS), ...book.asks.slice(0,MAX_LEVELS)].map(([,q])=>q);
+    const allQtys = [...book.bids.slice(0, MAX_LEVELS), ...book.asks.slice(0, MAX_LEVELS)].map(([, q]) => q);
     const maxQty = allQtys.length > 0 ? Math.max(...allQtys) : 1;
     const minQty = window.OB?.WALL_MIN_QTY?.[selSym] || 0;
-    const avgQty = allQtys.length > 0 ? allQtys.reduce((a,b)=>a+b,0)/allQtys.length : 1;
+    const avgQty = allQtys.length > 0 ? allQtys.reduce((a, b) => a + b, 0) / allQtys.length : 1;
     const wallThresh = Math.max(minQty, avgQty * (window.OB?.WALL_MULTI || 3.5));
 
     const fmtPrice = (p) => {
-      if (p >= 1000) return p.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-      if (p >= 1)    return p.toFixed(4);
+      if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (p >= 1) return p.toFixed(4);
       return p.toFixed(6);
     };
 
@@ -8368,15 +9874,15 @@
     const alertRows = coinAlerts.length === 0
       ? `<div class="ob-alert-empty">No wall events yet — monitoring live</div>`
       : coinAlerts.map(a => {
-          const ago = Math.round((Date.now() - a.ts) / 1000);
-          const agoStr = ago < 60 ? `${ago}s` : `${Math.round(ago/60)}m`;
-          return `<div class="ob-alert-row ${a.bias.toLowerCase()}">
+        const ago = Math.round((Date.now() - a.ts) / 1000);
+        const agoStr = ago < 60 ? `${ago}s` : `${Math.round(ago / 60)}m`;
+        return `<div class="ob-alert-row ${a.bias.toLowerCase()}">
             <span class="ob-alert-dot ${a.bias.toLowerCase()}"></span>
             <span class="ob-alert-text">${a.side}-WALL <strong>${a.type}</strong> @ $${fmtPrice(a.price)}</span>
             <span class="ob-alert-qty">qty: ${fmtQty(a.qty)}</span>
             <span class="ob-alert-age">${agoStr}</span>
           </div>`;
-        }).join('');
+      }).join('');
 
     const el = document.getElementById('content');
     el.innerHTML = `
@@ -8448,7 +9954,7 @@
     };
 
     _depthBookSym = sym;
-    _depthBookFn  = handler;
+    _depthBookFn = handler;
     window.OB.onBook(sym, handler);
 
     // Also redraw liquidity map every 2s
@@ -8485,15 +9991,15 @@
     if (!ladder) return;
     // Full re-render of the book section only — simpler than diffing
     const MAX_LEVELS = 15;
-    const allQtys = [...book.bids.slice(0,MAX_LEVELS), ...book.asks.slice(0,MAX_LEVELS)].map(([,q])=>q);
+    const allQtys = [...book.bids.slice(0, MAX_LEVELS), ...book.asks.slice(0, MAX_LEVELS)].map(([, q]) => q);
     const maxQty = allQtys.length > 0 ? Math.max(...allQtys) : 1;
-    const avgQty = allQtys.length > 0 ? allQtys.reduce((a,b)=>a+b,0)/allQtys.length : 1;
+    const avgQty = allQtys.length > 0 ? allQtys.reduce((a, b) => a + b, 0) / allQtys.length : 1;
     const minQty = window.OB?.WALL_MIN_QTY?.[sym] || 0;
     const wallThresh = Math.max(minQty, avgQty * (window.OB?.WALL_MULTI || 3.5));
 
     const fmtPrice = (p) => {
-      if (p >= 1000) return p.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
-      if (p >= 1)    return p.toFixed(4);
+      if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (p >= 1) return p.toFixed(4);
       return p.toFixed(6);
     };
     const fmtQty = (q) => window.OB?.formatQty?.(sym, q) ?? q.toFixed(2);
@@ -8509,20 +10015,20 @@
       </div>`;
     };
 
-    const askHTML = book.asks.slice(0,MAX_LEVELS).reverse().map(([p,q])=>makeRow(p,q,'ask')).join('');
-    const bidHTML = book.bids.slice(0,MAX_LEVELS).map(([p,q])=>makeRow(p,q,'bid')).join('');
+    const askHTML = book.asks.slice(0, MAX_LEVELS).reverse().map(([p, q]) => makeRow(p, q, 'ask')).join('');
+    const bidHTML = book.bids.slice(0, MAX_LEVELS).map(([p, q]) => makeRow(p, q, 'bid')).join('');
     const spreadHTML = `<div class="ob-spread-row">
-      <span>Spread: ${fmtPrice(book.spread||0)}</span>
-      <span>${book.spreadPct?.toFixed(4)||''}%</span>
-      <span class="ob-mid">$${fmtPrice(book.mid||0)}</span>
+      <span>Spread: ${fmtPrice(book.spread || 0)}</span>
+      <span>${book.spreadPct?.toFixed(4) || ''}%</span>
+      <span class="ob-mid">$${fmtPrice(book.mid || 0)}</span>
     </div>`;
 
     ladder.innerHTML = `
       <div class="ob-section-label ask">ASK / RESISTANCE</div>
-      ${askHTML||'<div class="ob-empty">Connecting…</div>'}
+      ${askHTML || '<div class="ob-empty">Connecting…</div>'}
       ${spreadHTML}
       <div class="ob-section-label bid">BID / SUPPORT</div>
-      ${bidHTML||'<div class="ob-empty">Connecting…</div>'}`;
+      ${bidHTML || '<div class="ob-empty">Connecting…</div>'}`;
   }
 
   function updateDepthAlerts(sym) {
@@ -8530,14 +10036,14 @@
     if (!container) return;
     const alerts = (window.OB?.wallAlerts || []).filter(a => a.sym === sym).slice(0, 20);
     if (alerts.length === 0) { container.innerHTML = '<div class="ob-alert-empty">No wall events yet</div>'; return; }
-    const fmtP = (p) => p >= 1000 ? p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : p >= 1 ? p.toFixed(4) : p.toFixed(6);
+    const fmtP = (p) => p >= 1000 ? p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : p >= 1 ? p.toFixed(4) : p.toFixed(6);
     container.innerHTML = alerts.map(a => {
-      const ago = Math.round((Date.now()-a.ts)/1000);
+      const ago = Math.round((Date.now() - a.ts) / 1000);
       return `<div class="ob-alert-row ${a.bias.toLowerCase()}">
         <span class="ob-alert-dot ${a.bias.toLowerCase()}"></span>
         <span class="ob-alert-text">${a.side}-WALL <strong>${a.type}</strong> @ $${fmtP(a.price)}</span>
         <span class="ob-alert-qty">qty: ${window.OB?.formatQty?.(sym, a.qty) ?? a.qty.toFixed(2)}</span>
-        <span class="ob-alert-age">${ago<60?ago+'s':Math.round(ago/60)+'m'}</span>
+        <span class="ob-alert-age">${ago < 60 ? ago + 's' : Math.round(ago / 60) + 'm'}</span>
       </div>`;
     }).join('');
   }
@@ -8547,7 +10053,7 @@
     if (!container) return;
     const tracker = window.OB?.wallTracker?.[sym];
     if (!tracker) { container.innerHTML = '<span style="color:var(--color-text-faint);font-size:0.8em;">Waiting for data…</span>'; return; }
-    const fmtP = (p) => p >= 1000 ? p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : p >= 1 ? p.toFixed(4) : p.toFixed(6);
+    const fmtP = (p) => p >= 1000 ? p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : p >= 1 ? p.toFixed(4) : p.toFixed(6);
     const fmtQ = (q) => window.OB?.formatQty?.(sym, q) ?? q.toFixed(2);
     const now = Date.now();
 
@@ -8564,7 +10070,7 @@
           <div style="display:grid;grid-template-columns:100px 1fr 56px;gap:6px;align-items:center;padding:3px 0;font-size:0.78em;font-family:var(--font-mono);">
             <span style="color:${side === 'bid' ? 'var(--color-green)' : 'var(--color-red)'};font-weight:600;">$${fmtP(w.price)}</span>
             <span style="color:var(--color-text-muted);">${fmtQ(w.qty)}</span>
-            <span style="color:var(--color-text-faint);">${w.age < 60 ? w.age + 's' : Math.round(w.age/60) + 'm'}</span>
+            <span style="color:var(--color-text-faint);">${w.age < 60 ? w.age + 's' : Math.round(w.age / 60) + 'm'}</span>
           </div>`).join('');
 
     container.innerHTML = `
@@ -8587,7 +10093,7 @@
 
     // Use getBoundingClientRect for reliable CSS dimensions in flex containers
     const rect = canvas.getBoundingClientRect();
-    const W = Math.max(rect.width  || canvas.offsetWidth  || canvas.parentElement?.clientWidth  || 400, 200);
+    const W = Math.max(rect.width || canvas.offsetWidth || canvas.parentElement?.clientWidth || 400, 200);
     const H = Math.max(rect.height || canvas.offsetHeight || 280, 200);
 
     // If canvas has no layout dimensions yet, defer — only one retry chain at a time
@@ -8600,7 +10106,7 @@
     }
     _drawLiqRetryPending = false;
 
-    canvas.width  = W;
+    canvas.width = W;
     canvas.height = H;
 
     const snaps = window.OB?.liquiditySnaps?.[sym];
@@ -8620,7 +10126,7 @@
     ctx.fillRect(0, 0, W, H);
 
     const PRICE_AXIS_W = 56;
-    const TIME_AXIS_H  = 18;
+    const TIME_AXIS_H = 18;
     const mapW = W - PRICE_AXIS_W;
     const mapH = H - TIME_AXIS_H;
 
@@ -8630,7 +10136,7 @@
 
     const currentMid = displaySnaps[displaySnaps.length - 1].mid || 1;
     const PRICE_RANGE = 0.015; // ±1.5%
-    const N_BUCKETS   = 80;
+    const N_BUCKETS = 80;
     const priceLo = currentMid * (1 - PRICE_RANGE);
     const priceHi = currentMid * (1 + PRICE_RANGE);
     const bucketSize = (priceHi - priceLo) / N_BUCKETS;
@@ -8660,7 +10166,7 @@
     // 95th percentile max for color scale
     const nonZero = [];
     for (let i = 0; i < grid.length; i++) { if (grid[i] > 0) nonZero.push(grid[i]); }
-    nonZero.sort((a,b) => a-b);
+    nonZero.sort((a, b) => a - b);
     const p95 = nonZero[Math.floor(nonZero.length * 0.95)] || 1;
 
     // Draw columns
@@ -8693,7 +10199,7 @@
     const midY = mapH - midBucket * rowH;
     ctx.strokeStyle = 'rgba(255,255,255,0.7)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([3,3]);
+    ctx.setLineDash([3, 3]);
     ctx.beginPath();
     ctx.moveTo(PRICE_AXIS_W, midY);
     ctx.lineTo(W, midY);
@@ -8703,7 +10209,7 @@
     // Wall event markers
     const events = window.OB?.wallEventLog?.[sym] || [];
     const firstSnapTs = displaySnaps[0].ts;
-    const lastSnapTsVal  = displaySnaps[displaySnaps.length-1].ts;
+    const lastSnapTsVal = displaySnaps[displaySnaps.length - 1].ts;
     const tsRange = lastSnapTsVal - firstSnapTs || 1;
 
     for (const ev of events) {
@@ -8731,7 +10237,7 @@
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font = '9px monospace';
     ctx.textAlign = 'right';
-    const fmtP = (p) => p >= 1000 ? '$' + (p/1000).toFixed(1)+'K' : p >= 1 ? '$'+p.toFixed(2) : '$'+p.toFixed(4);
+    const fmtP = (p) => p >= 1000 ? '$' + (p / 1000).toFixed(1) + 'K' : p >= 1 ? '$' + p.toFixed(2) : '$' + p.toFixed(4);
     for (let i = 0; i <= 4; i++) {
       const price = priceLo + (i / 4) * (priceHi - priceLo);
       const y = mapH - (i / 4) * mapH;
@@ -8765,12 +10271,12 @@
         return `<button class="hud-pill ${active}" data-hud-filter="${s}">${s}</button>`;
       }).join('');
 
-      const fmtP = (p) => p >= 1000 ? p.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : p >= 1 ? p.toFixed(3) : p.toFixed(5);
+      const fmtP = (p) => p >= 1000 ? p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : p >= 1 ? p.toFixed(3) : p.toFixed(5);
 
       const rows = shown.map(a => {
         const ago = Math.round((Date.now() - a.ts) / 1000);
-        const agoStr = ago < 60 ? `${ago}s` : `${Math.round(ago/60)}m`;
-        return `<div class="hud-row ${a.bias.toLowerCase()} ${Date.now()-a.ts<2000?'hud-new':''}">
+        const agoStr = ago < 60 ? `${ago}s` : `${Math.round(ago / 60)}m`;
+        return `<div class="hud-row ${a.bias.toLowerCase()} ${Date.now() - a.ts < 2000 ? 'hud-new' : ''}">
           <span class="hud-dot ${a.bias.toLowerCase()}"></span>
           <span class="hud-sym">${a.sym}</span>
           <span class="hud-msg">${a.side} ${a.type}</span>
@@ -8844,8 +10350,8 @@
           }
           return;
         }
-        const s   = Math.floor(msLeft / 1000);
-        const m   = Math.floor(s / 60);
+        const s = Math.floor(msLeft / 1000);
+        const m = Math.floor(s / 60);
         const sec = s % 60;
         if (el.classList.contains('k15-expiry')) {
           el.textContent = `⏱ ${m}m${String(sec).padStart(2, '0')}s`;
@@ -8872,16 +10378,16 @@
       <div class="universe-header">
         <h2 style="font-size:18px;font-weight:700;color:var(--color-text)">Market Universe</h2>
         <div class="universe-toggle">
-          <button class="universe-tab ${_t==='table'?'active':''}"   data-tab="table">Periodic Table</button>
-          <button class="universe-tab ${_t==='orbital'?'active':''}" data-tab="orbital">Orbital View</button>
-          <button class="universe-tab ${_t==='cex'?'active':''}"     data-tab="cex">CEX Flows</button>
+          <button class="universe-tab ${_t === 'table' ? 'active' : ''}"   data-tab="table">Periodic Table</button>
+          <button class="universe-tab ${_t === 'orbital' ? 'active' : ''}" data-tab="orbital">Orbital View</button>
+          <button class="universe-tab ${_t === 'cex' ? 'active' : ''}"     data-tab="cex">CEX Flows</button>
         </div>
       </div>
-      <div id="universe-table"   class="universe-panel" style="${_t!=='table'?'display:none':''}"></div>
-      <div id="universe-orbital" class="universe-panel" style="${_t==='orbital'?'display:block':'display:none'}">
+      <div id="universe-table"   class="universe-panel" style="${_t !== 'table' ? 'display:none' : ''}"></div>
+      <div id="universe-orbital" class="universe-panel" style="${_t === 'orbital' ? 'display:block' : 'display:none'}">
         <canvas id="orbital-canvas" width="900" height="620" style="max-width:100%;display:block;margin:0 auto"></canvas>
       </div>
-      <div id="universe-cex" class="universe-panel" style="${_t==='cex'?'display:block':'display:none'}"></div>
+      <div id="universe-cex" class="universe-panel" style="${_t === 'cex' ? 'display:block' : 'display:none'}"></div>
     `;
 
     document.querySelectorAll('.universe-tab').forEach(tab => {
@@ -8890,9 +10396,9 @@
         document.querySelectorAll('.universe-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
         const tabName = tab.dataset.tab;
-        document.getElementById('universe-table').style.display   = tabName === 'table'  ? 'block' : 'none';
-        document.getElementById('universe-orbital').style.display = tabName === 'orbital'? 'block' : 'none';
-        document.getElementById('universe-cex').style.display     = tabName === 'cex'    ? 'block' : 'none';
+        document.getElementById('universe-table').style.display = tabName === 'table' ? 'block' : 'none';
+        document.getElementById('universe-orbital').style.display = tabName === 'orbital' ? 'block' : 'none';
+        document.getElementById('universe-cex').style.display = tabName === 'cex' ? 'block' : 'none';
         if (orbitalAnimationFrame) { cancelAnimationFrame(orbitalAnimationFrame); orbitalAnimationFrame = null; }
         if (tabName === 'orbital') setTimeout(drawOrbital, 50);
         if (tabName === 'cex') renderCexFlow();
@@ -8911,9 +10417,9 @@
 
     // Map each PREDICTION_COIN to its universe group
     const grouped = {
-      core:     PREDICTION_COINS.filter(c => ['BTC','ETH','BNB'].includes(c.sym)),
-      platform: PREDICTION_COINS.filter(c => ['SOL','XRP','HYPE'].includes(c.sym)),
-      meme:     PREDICTION_COINS.filter(c => ['DOGE'].includes(c.sym)),
+      core: PREDICTION_COINS.filter(c => ['BTC', 'ETH', 'BNB'].includes(c.sym)),
+      platform: PREDICTION_COINS.filter(c => ['SOL', 'XRP', 'HYPE'].includes(c.sym)),
+      meme: PREDICTION_COINS.filter(c => ['DOGE'].includes(c.sym)),
     };
 
     let html = `<div class="periodic-table">`;
@@ -8925,12 +10431,12 @@
         <div class="group-label" style="color:${grp.color}">${grp.emoji} ${grp.name}</div>`;
 
       coins.forEach(coin => {
-        const cfm  = window._cfmAll?.[coin.sym] || {};
+        const cfm = window._cfmAll?.[coin.sym] || {};
         const pred = window._predictions?.[coin.sym] || {};
         const rawSig = pred.signal || 'neutral';
         // Map prediction engine signals → display direction
-        const sigDir = ['strong_bull','bullish'].includes(rawSig) ? 'up'
-                     : ['strong_bear','bearish'].includes(rawSig) ? 'down' : 'neutral';
+        const sigDir = ['strong_bull', 'bullish'].includes(rawSig) ? 'up'
+          : ['strong_bear', 'bearish'].includes(rawSig) ? 'down' : 'neutral';
         const conf = pred.confidence || 0;
         const cfmLabel = cfm.cfmRate != null ? (cfm.cfmRate >= 0 ? '+' : '') + cfm.cfmRate.toFixed(2) + '%' : '—';
         const arrow = sigDir === 'up' ? '↑' : sigDir === 'down' ? '↓' : '—';
@@ -9005,10 +10511,10 @@
 
     // Coin nodes
     PREDICTION_COINS.forEach((coin, index) => {
-      const pred  = window._predictions?.[coin.sym] || {};
+      const pred = window._predictions?.[coin.sym] || {};
       const score = pred.score || 0;
       const angle = (index * (Math.PI * 2 / PREDICTION_COINS.length)) + (Date.now() / 8000);
-      const orbitIdx = ['BTC','ETH','BNB'].includes(coin.sym) ? 0 : ['SOL','XRP'].includes(coin.sym) ? 1 : 2;
+      const orbitIdx = ['BTC', 'ETH', 'BNB'].includes(coin.sym) ? 0 : ['SOL', 'XRP'].includes(coin.sym) ? 1 : 2;
       const r = 110 + orbitIdx * 95;
       const x = cx + Math.cos(angle) * r;
       const y = cy + Math.sin(angle) * r;
@@ -9056,9 +10562,9 @@
     if (!el) return;
     _cexActiveSym = sym;
 
-    const data    = window.CexFlow?.get(sym) ?? null;
-    const chain   = window.ChainRouter?.get(sym) ?? null;
-    const COINS   = ['BTC','ETH','SOL','XRP','BNB','DOGE','HYPE'];
+    const data = window.CexFlow?.get(sym) ?? null;
+    const chain = window.ChainRouter?.get(sym) ?? null;
+    const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
     const loading = !data;
 
     // Coin selector tabs
@@ -9096,18 +10602,18 @@
     const exchanges = data?.exchanges ?? [];
     const exRows = exchanges.length
       ? exchanges.map(ex => {
-          if (!ex.available) {
-            return `<tr class="cex-row cex-na">
+        if (!ex.available) {
+          return `<tr class="cex-row cex-na">
               <td class="cex-name">${ex.exchange}</td>
               <td colspan="4" style="color:var(--color-text-faint);font-size:11px">${ex.reason ?? 'Not listed'}</td>
             </tr>`;
-          }
-          const sigColor = ex.color === 'red' ? 'var(--color-red)' : ex.color === 'green' ? 'var(--color-green)' : ex.color === 'orange' ? 'var(--color-orange)' : 'var(--color-text-muted)';
-          const sigDot = ex.color === 'red' ? '🔴' : ex.color === 'green' ? '🟢' : ex.color === 'orange' ? '🟠' : '⚪';
-          const fundStr = ex.fundingPct != null ? `${ex.fundingPct > 0 ? '+' : ''}${ex.fundingPct.toFixed(3)}%` : '—';
-          const volStr  = ex.volMult    != null ? `${ex.volMult.toFixed(1)}×` : '—';
-          const volColor = ex.volMult != null && ex.volMult > 2 ? 'var(--color-orange)' : ex.volMult != null && ex.volMult > 1.4 ? 'var(--color-gold)' : 'var(--color-text-muted)';
-          return `<tr class="cex-row">
+        }
+        const sigColor = ex.color === 'red' ? 'var(--color-red)' : ex.color === 'green' ? 'var(--color-green)' : ex.color === 'orange' ? 'var(--color-orange)' : 'var(--color-text-muted)';
+        const sigDot = ex.color === 'red' ? '🔴' : ex.color === 'green' ? '🟢' : ex.color === 'orange' ? '🟠' : '⚪';
+        const fundStr = ex.fundingPct != null ? `${ex.fundingPct > 0 ? '+' : ''}${ex.fundingPct.toFixed(3)}%` : '—';
+        const volStr = ex.volMult != null ? `${ex.volMult.toFixed(1)}×` : '—';
+        const volColor = ex.volMult != null && ex.volMult > 2 ? 'var(--color-orange)' : ex.volMult != null && ex.volMult > 1.4 ? 'var(--color-gold)' : 'var(--color-text-muted)';
+        return `<tr class="cex-row">
             <td class="cex-name">${ex.exchange}</td>
             <td class="cex-buysell">
               <span style="color:var(--color-green)">${ex.buyPct.toFixed(0)}%B</span>
@@ -9118,7 +10624,7 @@
             <td style="color:${ex.fundingPct != null && ex.fundingPct > 0.02 ? 'var(--color-red)' : ex.fundingPct != null && ex.fundingPct < -0.02 ? 'var(--color-green)' : 'var(--color-text-muted)'}">${fundStr}</td>
             <td><span style="color:${sigColor};font-weight:700">${sigDot} ${ex.signal}</span></td>
           </tr>`;
-        }).join('')
+      }).join('')
       : `<tr><td colspan="5" style="text-align:center;color:var(--color-text-faint);padding:24px">
           ${loading ? 'Loading exchange data…' : 'No data available'}
          </td></tr>`;
@@ -9200,18 +10706,19 @@
 
     try {
       switch (currentView) {
-        case 'markets':    renderMarkets(); break;
-        case 'markets5m':  renderMarkets5M(); break;
-        case 'debuglog':   renderDebugLog();  break;
+        case 'markets': renderMarkets(); break;
+        case 'markets5m': renderMarkets5M(); break;
+        case 'debuglog': renderDebugLog(); break;
+        case 'observability': renderObservability(); break;
         case 'portfolio': renderPortfolio(); break;
-        case 'charts':    renderCharts(); break;
-        case 'onchain':   renderOnChain(); break;
-        case 'cfm':         renderCFM(); break;
+        case 'charts': renderCharts(); break;
+        case 'onchain': renderOnChain(); break;
+        case 'cfm': renderCFM(); break;
         case 'predictions': renderPredictions(); break;
-        case 'screener':  renderScreener(); break;
-        case 'depth':     renderDepth(); break;
-        case 'universe':  renderUniverse(); break;
-        case 'log':       content.innerHTML = renderContractLog(); break;
+        case 'screener': renderScreener(); break;
+        case 'depth': renderDepth(); break;
+        case 'universe': renderUniverse(); break;
+        case 'log': content.innerHTML = renderContractLog(); break;
       }
     } catch (e) {
       console.error('[render] Panel error:', e);
@@ -9228,15 +10735,15 @@
     const runtimeLog = (window._15mResolutionLog || []).slice().reverse();
     const kalshiLog = (window._kalshiLog || []).filter(e => e._settled).slice().reverse();
     const cacheSettlements = (window.MultiDriveCache?.data?.settlements || []).slice().reverse();
-    
+
     // Load localStorage cache
     let lsLog = [];
-    try { lsLog = JSON.parse(localStorage.getItem('wc_contract_log') || '[]'); } catch (_) {}
-    
+    try { lsLog = JSON.parse(localStorage.getItem('wc_contract_log') || '[]'); } catch (_) { }
+
     // Merge all sources (dedupe by ID)
     const seenIds = new Set();
     const allContracts = [];
-    
+
     // Add runtime log first (most recent)
     runtimeLog.forEach(e => {
       const id = `${e.sym}-${e.settledTs || e.ts}`;
@@ -9245,7 +10752,7 @@
         seenIds.add(id);
       }
     });
-    
+
     // Add Kalshi log (Kalshi API data)
     kalshiLog.forEach(e => {
       const id = `${e.sym}-${e.settledTs || e.ts}`;
@@ -9263,7 +10770,7 @@
         seenIds.add(id);
       }
     });
-    
+
     // Add cache settlements
     cacheSettlements.forEach(e => {
       const id = `${e.coin}-${e.timestamp}`;
@@ -9279,7 +10786,7 @@
         seenIds.add(id);
       }
     });
-    
+
     // Add localStorage cache
     lsLog.forEach(e => {
       const id = `${e.sym}-${e.settledTs || e.ts}`;
@@ -9289,28 +10796,32 @@
       }
     });
 
-    const log = allContracts.slice().reverse();
-    const traded    = log.filter(e => e.orchestratorAction === 'trade');
-    const correct   = traded.filter(e => e.modelCorrect === true).length;
-    const wr        = traded.length ? Math.round(correct / traded.length * 100) : null;
+    const log = allContracts.sort((a, b) => {
+      const aTs = a.settledTs || a.resolved_at || a.ts || 0;
+      const bTs = b.settledTs || b.resolved_at || b.ts || 0;
+      return bTs - aTs;
+    });
+    const traded = log.filter(e => e.orchestratorAction === 'trade');
+    const correct = traded.filter(e => e.modelCorrect === true).length;
+    const wr = traded.length ? Math.round(correct / traded.length * 100) : null;
     const wickCount = traded.filter(e => e.wickedOut).length;
     const sweetTrades = traded.filter(e => e.sweetSpot);
-    const sweetWr   = sweetTrades.length ? Math.round(sweetTrades.filter(e => e.modelCorrect).length / sweetTrades.length * 100) : null;
+    const sweetWr = sweetTrades.length ? Math.round(sweetTrades.filter(e => e.modelCorrect).length / sweetTrades.length * 100) : null;
     const fadeTrades = traded.filter(e => e.crowdFade);
-    const fadeWr    = fadeTrades.length ? Math.round(fadeTrades.filter(e => e.modelCorrect).length / fadeTrades.length * 100) : null;
-    const missed    = log.filter(e => e.missedOpportunity).length;
+    const fadeWr = fadeTrades.length ? Math.round(fadeTrades.filter(e => e.modelCorrect).length / fadeTrades.length * 100) : null;
+    const missed = log.filter(e => e.missedOpportunity).length;
 
     const statBar = `
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px">
         ${[
-          ['Total Contracts', log.length, 'var(--color-text)'],
-          ['Overall WR',    wr != null ? wr + '%' : '—',         wr >= 55 ? 'var(--color-green)' : wr >= 45 ? '#ffd700' : 'var(--color-red)'],
-          ['Sweet Spot WR', sweetWr != null ? sweetWr + '%' : '—', sweetWr >= 55 ? 'var(--color-green)' : '#ffd700'],
-          ['Fade WR',       fadeWr != null ? fadeWr + '%' : '—',  fadeWr >= 55 ? 'var(--color-green)' : '#ffd700'],
-          ['Wick-outs',     wickCount + (traded.length ? '/' + traded.length : ''), wickCount > 2 ? 'var(--color-red)' : 'var(--color-text-muted)'],
-          ['Missed Opps',   missed,       missed > 0 ? '#ff9800' : 'var(--color-text-muted)'],
-          ['Trades',        traded.length, 'var(--color-text)'],
-        ].map(([lbl, val, col]) => `
+        ['Total Contracts', log.length, 'var(--color-text)'],
+        ['Overall WR', wr != null ? wr + '%' : '—', wr >= 55 ? 'var(--color-green)' : wr >= 45 ? '#ffd700' : 'var(--color-red)'],
+        ['Sweet Spot WR', sweetWr != null ? sweetWr + '%' : '—', sweetWr >= 55 ? 'var(--color-green)' : '#ffd700'],
+        ['Fade WR', fadeWr != null ? fadeWr + '%' : '—', fadeWr >= 55 ? 'var(--color-green)' : '#ffd700'],
+        ['Wick-outs', wickCount + (traded.length ? '/' + traded.length : ''), wickCount > 2 ? 'var(--color-red)' : 'var(--color-text-muted)'],
+        ['Missed Opps', missed, missed > 0 ? '#ff9800' : 'var(--color-text-muted)'],
+        ['Trades', traded.length, 'var(--color-text)'],
+      ].map(([lbl, val, col]) => `
           <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:6px;padding:8px 14px;min-width:90px">
             <div style="font-size:10px;color:var(--color-text-muted);font-weight:600;letter-spacing:.5px;text-transform:uppercase">${lbl}</div>
             <div style="font-size:20px;font-weight:800;color:${col};font-family:var(--font-mono)">${val}</div>
@@ -9321,22 +10832,23 @@
       </div>`;
 
     const rows = log.slice(0, 200).map(e => {
-      const time        = e.settledTs ? new Date(e.settledTs).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
-      const dir         = e.modelDir ?? '—';
-      const dirColor    = dir === 'up' ? 'var(--color-green)' : dir === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
-      const outcome     = e.actualOutcome ?? '—';
-      const outcomeColor= outcome === 'UP' ? 'var(--color-green)' : outcome === 'DOWN' ? 'var(--color-red)' : 'var(--color-text-muted)';
-      const correct     = e.modelCorrect === true ? '✅' : e.modelCorrect === false ? '❌' : '—';
-      const wick        = e.wickedOut ? '<span style="color:var(--color-red);font-weight:800">⚡WICK</span>' : '';
-      const sweet       = e.sweetSpot ? '⭐' : '';
-      const fade        = e.crowdFade ? '🔄' : '';
-      const align       = e.orchestratorAlign ?? e.alignment ?? '—';
-      const kalshiPct   = e.entryProb != null ? Math.round(e.entryProb * 100) + '%' : '—';
-      const modelPct    = e.modelProbUp != null ? Math.round(e.modelProbUp * 100) + '%' : (e.modelScore != null ? Math.round(50 + e.modelScore * 50) + '%' : '—');
-      const tradedStr   = e.orchestratorAction === 'trade' ? '<span style="color:var(--color-green)">TRADE</span>' : `<span style="color:var(--color-text-muted)">${e.orchestratorAction ?? 'skip'}</span>`;
-      const snap60      = (e.closeSnapshots || []).find(s => s.secsLeft >= 30 && s.secsLeft <= 90);
-      const snapStr     = snap60 ? `K@T-${snap60.secsLeft}s: ${Math.round(snap60.kalshiProb * 100)}%` : '';
-      const sourceTag   = `<span style="font-size:9px;color:var(--color-text-faint);background:rgba(255,255,255,0.05);padding:2px 6px;border-radius:3px">${e._source || '?'}</span>`;
+      const timeSource = e.settledTs || e.resolved_at || e.ts;
+      const time = timeSource ? new Date(timeSource).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+      const dir = e.modelDir ?? '—';
+      const dirColor = dir === 'up' ? 'var(--color-green)' : dir === 'down' ? 'var(--color-red)' : 'var(--color-text-muted)';
+      const outcome = e.actualOutcome ?? e.outcome ?? '—';
+      const outcomeColor = outcome === 'UP' ? 'var(--color-green)' : outcome === 'DOWN' ? 'var(--color-red)' : 'var(--color-text-muted)';
+      const correct = e.modelCorrect === true ? '✅' : e.modelCorrect === false ? '❌' : '—';
+      const wick = e.wickedOut ? '<span style="color:var(--color-red);font-weight:800">⚡WICK</span>' : '';
+      const sweet = e.sweetSpot ? '⭐' : '';
+      const fade = e.crowdFade ? '🔄' : '';
+      const align = e.orchestratorAlign ?? e.alignment ?? '—';
+      const kalshiPct = e.entryProb != null ? Math.round(e.entryProb * 100) + '%' : '—';
+      const modelPct = e.modelProbUp != null ? Math.round(e.modelProbUp * 100) + '%' : (e.modelScore != null ? Math.round(50 + e.modelScore * 50) + '%' : '—');
+      const tradedStr = e.orchestratorAction === 'trade' ? '<span style="color:var(--color-green)">TRADE</span>' : `<span style="color:var(--color-text-muted)">${e.orchestratorAction ?? 'skip'}</span>`;
+      const snap60 = (e.closeSnapshots || []).find(s => s.secsLeft >= 30 && s.secsLeft <= 90);
+      const snapStr = snap60 ? `K@T-${snap60.secsLeft}s: ${Math.round(snap60.kalshiProb * 100)}%` : '';
+      const sourceTag = `<span style="font-size:9px;color:var(--color-text-faint);background:rgba(255,255,255,0.05);padding:2px 6px;border-radius:3px">${e._source || '?'}</span>`;
       return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04)">
         <td style="padding:7px 8px;font-weight:700;color:var(--color-text)">${e.sym}</td>
         <td style="padding:7px 8px;color:var(--color-text-muted);font-size:10px">${time}</td>
@@ -9371,9 +10883,9 @@
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead>
               <tr style="border-bottom:2px solid rgba(255,255,255,0.1)">
-                ${['Sym','Time','Model Dir','Outcome','✓','Model%','Kalshi%','Align','Action','Flags','Wick','Snap','Source'].map(h =>
-                  `<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px">${h}</th>`
-                ).join('')}
+                ${['Sym', 'Time', 'Model Dir', 'Outcome', '✓', 'Model%', 'Kalshi%', 'Align', 'Action', 'Flags', 'Wick', 'Snap', 'Source'].map(h =>
+      `<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px">${h}</th>`
+    ).join('')}
               </tr>
             </thead>
             <tbody>${rows || '<tr><td colspan="13" style="padding:20px;color:var(--color-text-muted);text-align:center">No contracts found in any source</td></tr>'}</tbody>
@@ -9383,7 +10895,7 @@
   }
 
   // ── Export contract log to all discovered drives + local ──────────────────
-  window._exportContractLog = async function() {
+  window._exportContractLog = async function () {
     const log = window._15mResolutionLog || [];
     const content = log.map(e => JSON.stringify(e)).join('\n');
     // Use DataLogger's discovered paths so we always write everywhere
@@ -9397,7 +10909,7 @@
       try {
         const ok = await window.dataStore.writeFile(p, content);
         if (ok) written++;
-      } catch (_) {}
+      } catch (_) { }
     }
     alert(`Exported ${log.length} contracts to ${written}/${paths.length} paths`);
   };
@@ -9440,9 +10952,9 @@
   window.addEventListener('shell:vetoConfirmed', (e) => {
     const { sym, amplifiedEnergy } = e.detail || {};
     if (!sym) return;
-    const coin  = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
-    const icon  = coin?.icon || sym;
-    const pct   = Math.round((amplifiedEnergy || 0) * 100 * 10) / 10;
+    const coin = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
+    const icon = coin?.icon || sym;
+    const pct = Math.round((amplifiedEnergy || 0) * 100 * 10) / 10;
     showEarlyExitToast(sym, 'current', `Shell energy ${pct}% — stand aside`, Math.min((amplifiedEnergy || 0) * 8, 1), 'coordinated_sell');
     console.log(`[ShellRouter] Toast: ${sym} wall CONFIRMED`);
   });
@@ -9455,8 +10967,8 @@
       activeToasts.get(sym).remove();
       activeToasts.delete(sym);
     }
-    const coin  = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
-    const icon  = coin?.icon || sym;
+    const coin = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
+    const icon = coin?.icon || sym;
     const toast = document.createElement('div');
     toast.setAttribute('data-exit-toast', sym + '-released');
     toast.style.cssText = [
@@ -9484,12 +10996,12 @@
   window.addEventListener('market15m:resolved', (e) => {
     const { sym, outcome, modelCorrect, prob, orchestratorAction, edgeCents } = e.detail || {};
     if (!sym) return;
-    const icon  = modelCorrect === true ? '✅' : modelCorrect === false ? '❌' : '❓';
-    const coin  = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
+    const icon = modelCorrect === true ? '✅' : modelCorrect === false ? '❌' : '❓';
+    const coin = (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).find(c => c.sym === sym);
     const label = coin?.icon ? coin.icon + ' ' + sym : sym;
     const orchStr = orchestratorAction ? ` orch:${orchestratorAction}` : '';
     const edgeStr = edgeCents != null ? ` edge:${edgeCents}¢` : '';
-    console.log('[Resolver] ' + label + ' 15M ' + outcome + ' ' + icon + ' | prob:' + Math.round((prob||0.5)*100) + '%' + orchStr + edgeStr);
+    console.log('[Resolver] ' + label + ' 15M ' + outcome + ' ' + icon + ' | prob:' + Math.round((prob || 0.5) * 100) + '%' + orchStr + edgeStr);
     if (currentView === 'predictions' && predsLoaded) {
       updateAccuracyBadge();
       // Refresh the debug panel so settled contracts appear immediately
@@ -9503,7 +11015,7 @@
         }
       }
     }
-    if (currentView === 'log') render();
+    if (currentView === 'log' || currentView === 'debuglog') render();
   });
 
   // ── Real-time ms countdown for last-call Kalshi contracts ────────────────
@@ -9514,13 +11026,13 @@
     // Scope to the active view to avoid scanning the entire document on every 100ms tick
     const activeView = document.querySelector('.view.active') || document.body;
     activeView.querySelectorAll('[data-close-ms]').forEach(el => {
-      const closeMs  = parseInt(el.getAttribute('data-close-ms'), 10);
-      const msLeft   = Math.max(0, closeMs - now);
+      const closeMs = parseInt(el.getAttribute('data-close-ms'), 10);
+      const msLeft = Math.max(0, closeMs - now);
       const secsLeft = msLeft / 1000;
       let label;
-      if (secsLeft < 10)      label = msLeft.toFixed(0) + 'ms';
+      if (secsLeft < 10) label = msLeft.toFixed(0) + 'ms';
       else if (secsLeft < 90) label = Math.round(secsLeft) + 's';
-      else                    label = (secsLeft / 60).toFixed(1) + 'm';
+      else label = (secsLeft / 60).toFixed(1) + 'm';
       if (el.id && el.id.startsWith('kalshi-lc-')) {
         el.textContent = '⚡ ' + label;
         // Pulse red when < 10s
@@ -9532,9 +11044,9 @@
     });
     // Live-tick sweet-spot countdown (kalshi-ss-* elements)
     activeView.querySelectorAll('[data-close-ms][id^="kalshi-ss-"]').forEach(el => {
-      const closeMs  = parseInt(el.getAttribute('data-close-ms'), 10);
+      const closeMs = parseInt(el.getAttribute('data-close-ms'), 10);
       if (!closeMs) return;
-      const msLeft   = closeMs - now;
+      const msLeft = closeMs - now;
       if (msLeft <= 0) { el.textContent = '—'; return; } // contract expired — new one pending
       const secsLeft = msLeft / 1000;
       el.textContent = secsLeft < 60 ? Math.round(secsLeft) + 's' : (secsLeft / 60).toFixed(1) + 'm';
@@ -9606,7 +11118,7 @@
           </div>
           <div style="display:flex;gap:3px;margin-top:4px">${dots}</div>`;
           el.style.opacity = '1';
-        } catch (_) {}
+        } catch (_) { }
       }, 220);
     });
   }, 3000);
@@ -9635,10 +11147,10 @@
         const modelDir = Number.isFinite(modelYesPct)
           ? (modelYesPct >= 58 ? yesDir : modelYesPct <= 42 ? noDir : 'wait')
           : (modelScore > 0.12 ? 'up' : modelScore < -0.12 ? 'down' : 'wait');
-        const kalshiDir  = liveKalshiPct >= 50 ? yesDir : noDir;
+        const kalshiDir = liveKalshiPct >= 50 ? yesDir : noDir;
         updateMarketDivergence(coin.sym, modelDir, kalshiDir, liveKalshiPct, modelScore);
       });
-    } catch(e) { /* non-critical */ }
+    } catch (e) { /* non-critical */ }
   }, 5000);
 
   // ── Blockchain scan live updates ──────────────────────────────────
@@ -9666,11 +11178,13 @@
 
   // Prewarm coin icons — populates browser HTTP cache before first render
   (function prewarmCoinIcons() {
-    const syms = ['BTC','ETH','SOL','XRP','HYPE','DOGE','BNB'];
+    const syms = ['BTC', 'ETH', 'SOL', 'XRP', 'HYPE', 'DOGE', 'BNB'];
     const cgBase = 'https://assets.coingecko.com/coins/images';
-    const cgIds  = { BTC:'1/large/bitcoin.png', ETH:'279/large/ethereum.png', SOL:'4128/large/solana.png',
-                     XRP:'44/large/xrp-symbol-white-128.png', HYPE:'39198/large/hyperliquid.png',
-                     DOGE:'5/large/dogecoin.png', BNB:'825/large/bnb-icon2_2x.png' };
+    const cgIds = {
+      BTC: '1/large/bitcoin.png', ETH: '279/large/ethereum.png', SOL: '4128/large/solana.png',
+      XRP: '44/large/xrp-symbol-white-128.png', HYPE: '39198/large/hyperliquid.png',
+      DOGE: '5/large/dogecoin.png', BNB: '825/large/bnb-icon2_2x.png'
+    };
     syms.forEach(sym => {
       const img = new Image();
       img.src = `${cgBase}/${cgIds[sym]}`;
@@ -9693,16 +11207,22 @@
     fetchAll().then(() => {
       clearTimeout(_bootGuard);
       resetTimer();
+      startCountdownTicker();
+      startAsyncRefreshEngine();
       // Stagger heavy background modules so they don't contend with first render
       startPythLazerStream();   // wire Lazer WS live ticker overlay
-      setTimeout(() => { if (window.PredictionMarkets) window.PredictionMarkets.start(); },  500); // +0.5s
-      setTimeout(() => { if (window.BlockchainScan)   window.BlockchainScan.start(); },     2000); // +2s
-      setTimeout(() => { if (window.CexFlow)          window.CexFlow.start(); },             4000); // +4s
+      setTimeout(() => { if (window.PredictionMarkets) window.PredictionMarkets.start(); }, 500); // +0.5s
+      setTimeout(() => { if (window.BlockchainScan) window.BlockchainScan.start(); }, 2000); // +2s
+      setTimeout(() => { if (window.CexFlow) window.CexFlow.start(); }, 4000); // +4s
       // ── Settlement pulse: big coordinated blast at every :00/:15/:30/:45 ──
       // Regular streaming via resetTimer() keeps running between pulses.
       setTimeout(() => {
-        scheduleOnQuarterHours(settlementPull);
-        console.info('[WE] ⚡ Settlement pulse scheduler armed — fires at :00/:15/:30/:45');
+        if (!window._asyncRefreshEngine?.running) {
+          scheduleOnQuarterHours(settlementPull);
+          console.info('[WE] ⚡ Settlement pulse scheduler armed — fires at :00/:15/:30/:45');
+        } else {
+          console.info('[WE] ⚡ Async refresh engine active — settlement pulses handled in background');
+        }
       }, 4500); // arm after all modules are up
     });
   });
@@ -9717,13 +11237,14 @@
     // appear immediately when the burst-retry fetches them instead of waiting
     // for the next PredictionEngine.runAll() cycle (up to 15s later).
     if (['predictions', 'cfm', 'universe'].includes(currentView) && predsLoaded && !predictionRunInFlight) {
-      try { renderPredictions(); } catch (_) {}
+      try { renderPredictions(); } catch (_) { }
     }
   });
 
   // Prediction live-stream watchdog — keeps cards updated between manual refreshes.
   // Important: snapshotPredictions() stability lock assumes ~15s snapshots (see MIN_FLIP_STREAK comment).
   setInterval(async () => {
+    if (window._asyncRefreshEngine?.running) return;
     if (!['predictions', 'cfm', 'universe'].includes(currentView) || document.hidden) return;
     if (predictionRunInFlight) return;
     try {
@@ -9744,7 +11265,7 @@
         snapshotPredictions();
         renderPredictions();
       }
-    } catch (_) {}
+    } catch (_) { }
   }, 10000);
 
   // ── Order Book HUD — initialise after DOM is ready ──────────────
@@ -9857,45 +11378,45 @@
   // ── KalshiDebug console API ──────────────────────────────────────
   // Accessible from DevTools console for live inspection.
   window.KalshiDebug = {
-    audit:     sym => (window._kalshiLog||[]).filter(e => !sym || e.sym===sym),
-    errors:    ()  => (window._kalshiErrors||[]),
-    pending:   ()  => window.MarketResolver?.getPending?.() ?? [],
-    last:      sym => (window._lastKalshiSnapshot||{})[sym] ?? null,
-    contract:  sym => (window._kalshiLog||[]).filter(e=>e.sym===sym).slice(-1)[0] ?? null,
-    trail:     sym => Object.values(window._kalshiPredictionTrail||{}).filter(t => !sym || t.sym === sym),
-    orch:      sym => sym ? (window._orchLog||[]).filter(e=>e.sym===sym).slice(-5)
-                          : (window._orchLog||[]).slice(-20),
-    liveOrch:  sym => window.KalshiOrchestrator?.getIntent?.(sym) ?? null,
-    scorecard: ()  => {
+    audit: sym => (window._kalshiLog || []).filter(e => !sym || e.sym === sym),
+    errors: () => (window._kalshiErrors || []),
+    pending: () => window.MarketResolver?.getPending?.() ?? [],
+    last: sym => (window._lastKalshiSnapshot || {})[sym] ?? null,
+    contract: sym => (window._kalshiLog || []).filter(e => e.sym === sym).slice(-1)[0] ?? null,
+    trail: sym => Object.values(window._kalshiPredictionTrail || {}).filter(t => !sym || t.sym === sym),
+    orch: sym => sym ? (window._orchLog || []).filter(e => e.sym === sym).slice(-5)
+      : (window._orchLog || []).slice(-20),
+    liveOrch: sym => window.KalshiOrchestrator?.getIntent?.(sym) ?? null,
+    scorecard: () => {
       const out = {};
       (typeof PREDICTION_COINS !== 'undefined' ? PREDICTION_COINS : []).forEach(c => {
         // Check BOTH _kalshiLog AND multi-drive cache
-        const kalshiSettlements = (window._kalshiLog||[]).filter(x=>x.sym===c.sym&&x._settled);
+        const kalshiSettlements = (window._kalshiLog || []).filter(x => x.sym === c.sym && x._settled);
         const cacheSettlements = window.MultiDriveCache?.data?.settlements?.filter(s => s.coin === c.sym) || [];
-        
+
         const allSettlements = [...kalshiSettlements, ...cacheSettlements];
-        
-        if (!allSettlements.length) { 
-          out[c.sym] = { n:0, source: 'none' }; 
-          return; 
+
+        if (!allSettlements.length) {
+          out[c.sym] = { n: 0, source: 'none' };
+          return;
         }
-        
+
         // Count correct predictions from both sources
         const mOk = allSettlements.filter(x => {
           // Check modelCorrect from Kalshi log or cache settlement
           return x.modelCorrect === true || (x.modelCorrect !== false && x.modelCorrect !== null);
         }).length;
-        
-        const fE  = kalshiSettlements.filter(x=>x.fadeActive&&x.fadeCorrect!==null);
-        const fOk = fE.filter(x=>x.fadeCorrect===true).length;
-        
+
+        const fE = kalshiSettlements.filter(x => x.fadeActive && x.fadeCorrect !== null);
+        const fOk = fE.filter(x => x.fadeCorrect === true).length;
+
         out[c.sym] = {
           n: allSettlements.length,
           kalshiN: kalshiSettlements.length,
           cacheN: cacheSettlements.length,
-          modelPct: Math.round(mOk/allSettlements.length*100),
-          fadePct:  fE.length ? Math.round(fOk/fE.length*100) : null,
-          fadeN:    fE.length,
+          modelPct: Math.round(mOk / allSettlements.length * 100),
+          fadePct: fE.length ? Math.round(fOk / fE.length * 100) : null,
+          fadeN: fE.length,
           source: 'kalshi+cache'
         };
       });
@@ -9908,14 +11429,22 @@
       return { status, accuracy };
     },
     missedOpps: () => window.MarketResolver?.getMissedOpps?.() ?? [],
-    clearOrch:  () => { window._orchLog = []; saveOrchLog(); console.log('[KalshiDebug] _orchLog cleared'); },
+    suspects: (opts = {}) => window.KalshiForensics?.identifySuspects?.(opts)
+      ?? { error: 'KalshiForensics unavailable' },
+    replayIncident: (opts = {}) => window.KalshiForensics?.replay?.(opts)
+      ?? { error: 'KalshiForensics unavailable' },
+    replayTrade: (suspect, opts = {}) => window.KalshiForensics?.replayTrade?.(suspect, opts)
+      ?? { error: 'KalshiForensics unavailable' },
+    classifyTrade: suspect => window.KalshiForensics?.classify?.(suspect)
+      ?? { error: 'KalshiForensics unavailable' },
+    clearOrch: () => { window._orchLog = []; saveOrchLog(); console.log('[KalshiDebug] _orchLog cleared'); },
     clearTrail: () => { window._kalshiPredictionTrail = {}; saveKalshiTrail(); console.log('[KalshiDebug] 2m prediction trail cleared'); },
-    dump:       sym => ({
-      snapshot: (window._lastKalshiSnapshot||{})[sym],
-      log:      (window._kalshiLog||[]).filter(e=>e.sym===sym).slice(-5),
-      trail:    Object.values(window._kalshiPredictionTrail||{}).filter(t => t.sym===sym).slice(-5),
-      orch:     (window._orchLog||[]).filter(e=>e.sym===sym).slice(-5),
-      resolved: (window._15mResolutionLog||[]).filter(e=>e.sym===sym).slice(-3),
+    dump: sym => ({
+      snapshot: (window._lastKalshiSnapshot || {})[sym],
+      log: (window._kalshiLog || []).filter(e => e.sym === sym).slice(-5),
+      trail: Object.values(window._kalshiPredictionTrail || {}).filter(t => t.sym === sym).slice(-5),
+      orch: (window._orchLog || []).filter(e => e.sym === sym).slice(-5),
+      resolved: (window._15mResolutionLog || []).filter(e => e.sym === sym).slice(-3),
       cache: {
         predictions: window.MultiDriveCache?.data?.predictions?.filter(p => p.coin === sym).slice(-5) || [],
         settlements: window.MultiDriveCache?.data?.settlements?.filter(s => s.coin === sym).slice(-5) || [],
@@ -9923,13 +11452,13 @@
       }
     }),
   };
-  console.log('[KalshiDebug] API ready — KalshiDebug.audit(sym) .trail(sym) .orch(sym) .scorecard() .cacheStatus() .dump(sym)');
+  console.log('[KalshiDebug] API ready — KalshiDebug.audit(sym) .trail(sym) .orch(sym) .scorecard() .suspects(opts) .replayIncident(opts) .dump(sym)');
 
   // ── ContractCacheDebug console API (NEW) ─────────────────────────────
   window.ContractCacheDebug = {
-    status:   ()  => window._contractCache?.getStatus?.() ?? { error: 'Cache not initialized' },
-    accuracy: ()  => window._contractCache?.getAllAccuracy?.() ?? null,
-    byCoins:  ()  => {
+    status: () => window._contractCache?.getStatus?.() ?? { error: 'Cache not initialized' },
+    accuracy: () => window._contractCache?.getAllAccuracy?.() ?? null,
+    byCoins: () => {
       const coins = new Set((window._contractCache?.predictions || []).map(p => p.coin));
       const result = {};
       for (const coin of coins) {
@@ -9937,16 +11466,16 @@
       }
       return result;
     },
-    recent:   (minutes = 60) => ({
+    recent: (minutes = 60) => ({
       predictions: window._contractCache?.getRecentPredictions?.(null, minutes) ?? [],
       settlements: window._contractCache?.getRecentSettlements?.(null, minutes) ?? [],
       errors: window._contractCache?.getRecentErrors?.(null, minutes) ?? []
     }),
-    errors:   (type = null) => window._contractCache?.getRecentErrors?.(type, 120) ?? [],
-    print:    ()  => window._contractCache?.printReport?.() ?? console.log('Cache not initialized'),
-    export:   ()  => window._contractCache?.exportJSON?.() ?? null,
+    errors: (type = null) => window._contractCache?.getRecentErrors?.(type, 120) ?? [],
+    print: () => window._contractCache?.printReport?.() ?? console.log('Cache not initialized'),
+    export: () => window._contractCache?.exportJSON?.() ?? null,
     exportCSV: () => window._contractCache?.exportCSV?.() ?? null,
-    clear:    ()  => {
+    clear: () => {
       localStorage.removeItem('contract-cache-2h');
       console.log('[ContractCacheDebug] Cleared cache from localStorage');
     }

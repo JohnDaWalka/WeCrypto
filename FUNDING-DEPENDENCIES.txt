@@ -1,0 +1,63 @@
+we-cfm-orchestrator@2.15.5
+
+Generated from: npm fund
+
+- https://dotenvx.com
+    - dotenv@16.6.1, dotenv-expand@11.0.7
+
+- https://opencollective.com/express
+    - express@5.2.1, body-parser@2.2.2, iconv-lite@0.7.2, content-disposition@1.1.0, finalhandler@2.1.1, http-errors@2.0.1, mime-types@3.0.2, send@1.2.1, serve-static@2.2.1, path-to-regexp@8.4.2
+    - https://github.com/sponsors/sindresorhus
+        - merge-descriptors@2.0.0, decompress-response@6.0.0, mimic-response@3.1.0, responselike@2.0.1, clone-response@1.0.3, get-stream@5.2.0, normalize-url@6.1.0, quick-lru@5.1.1, serialize-error@7.0.1, type-fest@0.13.1, escape-string-regexp@4.0.0, p-limit@3.1.0, yocto-queue@0.1.0
+    - https://github.com/sponsors/ljharb
+        - qs@6.15.1, side-channel@1.1.0, object-inspect@1.13.4, side-channel-list@1.0.1, side-channel-map@1.0.1, call-bound@1.0.4, function-bind@1.1.2, get-intrinsic@1.3.0, gopd@1.2.0, has-symbols@1.1.0, side-channel-weakmap@1.0.2, globalthis@1.0.4, define-properties@1.2.1, define-data-property@1.1.4, has-property-descriptors@1.0.2, minimist@1.2.8, has-tostringtag@1.0.2
+
+- https://opencollective.com/tauri
+    - @tauri-apps/cli@2.11.0
+
+- https://github.com/sponsors/feross
+    - base64-js@1.5.1, safe-buffer@5.2.1, buffer@6.0.3, ieee754@1.2.1
+
+- https://opencollective.com/node-fetch
+    - node-fetch@3.3.2
+    - https://github.com/sponsors/jimmywarting
+        - fetch-blob@3.2.0, node-domexception@1.0.0
+
+- https://github.com/sindresorhus/got?sponsor=1
+    - got@11.8.6
+    - https://github.com/sindresorhus/is?sponsor=1
+        - @sindresorhus/is@4.6.0
+
+- https://github.com/chalk/chalk?sponsor=1
+    - chalk@4.1.2
+    - https://github.com/chalk/ansi-styles?sponsor=1
+        - ansi-styles@4.3.0
+
+- https://github.com/sponsors/sibiraj-s
+    - ci-info@4.3.1
+
+- https://opencollective.com/webpack
+    - @develar/schema-utils@2.6.5
+    - https://github.com/sponsors/epoberezkin
+        - ajv@6.15.0
+
+- https://github.com/sponsors/gjtorikian/
+    - isbinaryfile@4.0.10
+
+- https://github.com/sponsors/isaacs
+    - minimatch@9.0.9, glob@7.2.3
+
+- https://github.com/sponsors/jet2jet
+    - resedit@1.7.2, pe-library@0.4.1
+
+- https://github.com/sponsors/malept
+    - @malept/cross-spawn-promise@2.0.0
+
+- https://github.com/sponsors/SuperchupuDev
+    - tinyglobby@0.2.16
+    - https://github.com/sponsors/jonschlinkert
+        - picomatch@4.0.4
+
+- https://github.com/chalk/wrap-ansi?sponsor=1
+    - wrap-ansi@7.0.0
+

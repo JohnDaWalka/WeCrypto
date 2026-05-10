@@ -12,18 +12,18 @@
 (function () {
   'use strict';
 
-  const CACHE   = {};   // sym → latest result
-  const ERRORS  = {};   // sym → last error message
-  let   _timer  = null;
+  const CACHE = {};   // sym → latest result
+  const ERRORS = {};   // sym → last error message
+  let _timer = null;
 
-  const POLL_MS   = 30000;  // 30s polling interval
-  const TIMEOUT   = 8000;   // 8s per request
+  const POLL_MS = 30000;  // 30s polling interval
+  const TIMEOUT = 8000;   // 8s per request
 
   // ── Utility helpers ──────────────────────────────────────────────
 
   async function timedFetch(url, opts = {}) {
     const ctrl = new AbortController();
-    const tid  = setTimeout(() => ctrl.abort(), TIMEOUT);
+    const tid = setTimeout(() => ctrl.abort(), TIMEOUT);
     try {
       const r = await fetch(url, { ...opts, signal: ctrl.signal });
       clearTimeout(tid);
@@ -36,7 +36,7 @@
   }
 
   async function getJson(url, opts) { return (await timedFetch(url, opts)).json(); }
-  async function getText(url, opts) { return (await timedFetch(url, opts)).text();  }
+  async function getText(url, opts) { return (await timedFetch(url, opts)).text(); }
 
   function fmtCompact(n) {
     n = parseFloat(n);
@@ -61,12 +61,12 @@
     if (n >= 1e18) return (n / 1e18).toFixed(2) + ' EH/s';
     if (n >= 1e15) return (n / 1e15).toFixed(2) + ' PH/s';
     if (n >= 1e12) return (n / 1e12).toFixed(2) + ' TH/s';
-    if (n >= 1e9)  return (n / 1e9).toFixed(2)  + ' GH/s';
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GH/s';
     return n.toFixed(0) + ' H/s';
   }
 
   function scoreLabel(s) {
-    if (s >  0.15) return 'BULLISH';
+    if (s > 0.15) return 'BULLISH';
     if (s < -0.10) return 'BEARISH';
     return 'NEUTRAL';
   }
@@ -83,20 +83,20 @@
     const f = fR.status === 'fulfilled' ? fR.value : {};
     const h = hR.status === 'fulfilled' ? hR.value : null;
     if (!m.count && !f.fastestFee) throw new Error('mempool.space empty');
-    const vsize   = m.vsize || 0;
-    const feeFast = f.fastestFee   || 0;
-    const feeMed  = f.halfHourFee  || 0;
-    const feeSlow = f.minimumFee   || 0;
-    const score   = vsize > 200e6 ? 0.55 : vsize > 80e6 ? 0.25 : vsize < 5e6 ? -0.10 : 0;
+    const vsize = m.vsize || 0;
+    const feeFast = f.fastestFee || 0;
+    const feeMed = f.halfHourFee || 0;
+    const feeSlow = f.minimumFee || 0;
+    const score = vsize > 200e6 ? 0.55 : vsize > 80e6 ? 0.25 : vsize < 5e6 ? -0.10 : 0;
     return {
       sym: 'BTC', label: 'Bitcoin', chain: 'Bitcoin Network',
       source: 'mempool.space', explorerUrl: 'https://mempool.space',
       metrics: [
-        { k: 'Mempool Txs',  v: (m.count || 0).toLocaleString() },
+        { k: 'Mempool Txs', v: (m.count || 0).toLocaleString() },
         { k: 'Mempool Size', v: fmtBytes(vsize) },
-        { k: 'Fee Fast',     v: feeFast ? `${feeFast} sat/vB` : '—' },
-        { k: 'Fee Med',      v: feeMed  ? `${feeMed} sat/vB`  : '—' },
-        { k: 'Fee Slow',     v: feeSlow ? `${feeSlow} sat/vB` : '—' },
+        { k: 'Fee Fast', v: feeFast ? `${feeFast} sat/vB` : '—' },
+        { k: 'Fee Med', v: feeMed ? `${feeMed} sat/vB` : '—' },
+        { k: 'Fee Slow', v: feeSlow ? `${feeSlow} sat/vB` : '—' },
         { k: 'Block Height', v: h != null ? Number(h).toLocaleString() : '—' },
       ],
       congestion: vsize > 150e6 ? 'HIGH' : vsize > 60e6 ? 'MED' : 'LOW',
@@ -111,14 +111,14 @@
       getText('https://blockchain.info/q/getblockcount'),
     ]);
     const uc = ucR.status === 'fulfilled' ? parseInt(ucR.value) || 0 : 0;
-    const h  = hR.status  === 'fulfilled' ? parseInt(hR.value)  || 0 : 0;
+    const h = hR.status === 'fulfilled' ? parseInt(hR.value) || 0 : 0;
     if (!uc && !h) throw new Error('blockchain.info empty');
     const score = uc > 50000 ? 0.4 : uc > 20000 ? 0.2 : 0;
     return {
       sym: 'BTC', label: 'Bitcoin', chain: 'Bitcoin Network',
       source: 'blockchain.info', explorerUrl: 'https://blockchain.info',
       metrics: [
-        { k: 'Unconfirmed',  v: uc.toLocaleString() },
+        { k: 'Unconfirmed', v: uc.toLocaleString() },
         { k: 'Block Height', v: h.toLocaleString() },
         { k: 'Fee Fast', v: '—' }, { k: 'Fee Med', v: '—' },
         { k: 'Fee Slow', v: '—' }, { k: 'Mempool Size', v: '—' },
@@ -132,27 +132,29 @@
   // ── ETH: Blockscout (primary) → Etherscan proxy/free (fallback) ──
 
   async function ethBlockscout() {
-    const [sR, gR] = await Promise.allSettled([
+    const [sR, pR] = await Promise.allSettled([
       getJson('https://eth.blockscout.com/api/v2/stats'),
-      getJson('https://eth.blockscout.com/api/v2/gas-price-oracle'),
+      getJson('https://api.etherscan.io/api?module=proxy&action=eth_gasPrice'),
     ]);
     const s = sR.status === 'fulfilled' ? sR.value : {};
-    const g = gR.status === 'fulfilled' ? gR.value : {};
-    if (!Object.keys(s).length && !Object.keys(g).length) throw new Error('Blockscout ETH empty');
-    const gasAvg  = parseFloat(g.average || g.medium || 0);
-    const gasFast = parseFloat(g.fast    || g.high   || 0);
-    const gasSlow = parseFloat(g.slow    || g.low    || 0);
-    const score   = gasAvg > 60 ? 0.50 : gasAvg > 25 ? 0.20 : gasAvg < 5 ? -0.15 : 0;
+    const p = pR.status === 'fulfilled' ? pR.value : {};
+    const wei = p?.result ? parseInt(p.result, 16) || 0 : 0;
+    const gasGwei = wei > 0 ? (wei / 1e9) : 0;
+    const gasAvg = gasGwei;
+    const gasFast = gasGwei;
+    const gasSlow = gasGwei;
+    if (!Object.keys(s).length && !gasAvg && !gasFast && !gasSlow) throw new Error('Blockscout ETH empty');
+    const score = gasAvg > 60 ? 0.50 : gasAvg > 25 ? 0.20 : gasAvg < 5 ? -0.15 : 0;
     return {
       sym: 'ETH', label: 'Ethereum', chain: 'Ethereum Mainnet',
       source: 'Etherscan/Blockscout', explorerUrl: 'https://eth.blockscout.com',
       metrics: [
-        { k: 'Gas Avg',      v: gasAvg  ? `${gasAvg.toFixed(1)} Gwei`  : '—' },
-        { k: 'Gas Fast',     v: gasFast ? `${gasFast.toFixed(1)} Gwei` : '—' },
-        { k: 'Gas Slow',     v: gasSlow ? `${gasSlow.toFixed(1)} Gwei` : '—' },
-        { k: 'Txs Today',    v: s.transactions_today ? parseInt(s.transactions_today).toLocaleString() : '—' },
-        { k: 'Total Addrs',  v: s.total_addresses    ? parseInt(s.total_addresses).toLocaleString()    : '—' },
-        { k: 'Total Txs',    v: s.total_transactions ? parseInt(s.total_transactions).toLocaleString() : '—' },
+        { k: 'Gas Avg', v: gasAvg ? `${gasAvg.toFixed(1)} Gwei` : '—' },
+        { k: 'Gas Fast', v: gasFast ? `${gasFast.toFixed(1)} Gwei` : '—' },
+        { k: 'Gas Slow', v: gasSlow ? `${gasSlow.toFixed(1)} Gwei` : '—' },
+        { k: 'Txs Today', v: s.transactions_today ? parseInt(s.transactions_today).toLocaleString() : '—' },
+        { k: 'Total Addrs', v: s.total_addresses ? parseInt(s.total_addresses).toLocaleString() : '—' },
+        { k: 'Total Txs', v: s.total_transactions ? parseInt(s.total_transactions).toLocaleString() : '—' },
       ],
       congestion: gasAvg > 50 ? 'HIGH' : gasAvg > 20 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -165,8 +167,8 @@
       getJson('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber'),
       getJson('https://api.etherscan.io/api?module=proxy&action=eth_gasPrice'),
     ]);
-    const block   = bR.status === 'fulfilled' ? parseInt(bR.value?.result, 16) || 0 : 0;
-    const gasWei  = gR.status === 'fulfilled' ? parseInt(gR.value?.result, 16) || 0 : 0;
+    const block = bR.status === 'fulfilled' ? parseInt(bR.value?.result, 16) || 0 : 0;
+    const gasWei = gR.status === 'fulfilled' ? parseInt(gR.value?.result, 16) || 0 : 0;
     const gasGwei = gasWei / 1e9;
     if (!block && !gasGwei) throw new Error('Etherscan proxy empty');
     const score = gasGwei > 60 ? 0.50 : gasGwei > 25 ? 0.20 : gasGwei < 5 ? -0.15 : 0;
@@ -174,10 +176,10 @@
       sym: 'ETH', label: 'Ethereum', chain: 'Ethereum Mainnet',
       source: 'Etherscan', explorerUrl: 'https://etherscan.io',
       metrics: [
-        { k: 'Gas Price',  v: gasGwei ? `${gasGwei.toFixed(1)} Gwei` : '—' },
-        { k: 'Block',      v: block ? block.toLocaleString() : '—' },
-        { k: 'Gas Fast',   v: '—' }, { k: 'Gas Slow', v: '—' },
-        { k: 'Txs Today',  v: '—' }, { k: 'Total Addrs', v: '—' },
+        { k: 'Gas Price', v: gasGwei ? `${gasGwei.toFixed(1)} Gwei` : '—' },
+        { k: 'Block', v: block ? block.toLocaleString() : '—' },
+        { k: 'Gas Fast', v: '—' }, { k: 'Gas Slow', v: '—' },
+        { k: 'Txs Today', v: '—' }, { k: 'Total Addrs', v: '—' },
       ],
       congestion: gasGwei > 50 ? 'HIGH' : gasGwei > 20 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -188,34 +190,34 @@
   // ── SOL: mainnet-beta RPC (primary) → Ankr public RPC (fallback) ─
 
   async function solRpc(rpcUrl) {
-    const POST  = (body) => ({
+    const POST = (body) => ({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     const [perfR, epochR, slotR] = await Promise.allSettled([
       getJson(rpcUrl, POST({ jsonrpc: '2.0', id: 1, method: 'getRecentPerformanceSamples', params: [10] })),
-      getJson(rpcUrl, POST({ jsonrpc: '2.0', id: 2, method: 'getEpochInfo',  params: [] })),
-      getJson(rpcUrl, POST({ jsonrpc: '2.0', id: 3, method: 'getSlot',       params: [] })),
+      getJson(rpcUrl, POST({ jsonrpc: '2.0', id: 2, method: 'getEpochInfo', params: [] })),
+      getJson(rpcUrl, POST({ jsonrpc: '2.0', id: 3, method: 'getSlot', params: [] })),
     ]);
-    const samples = perfR.status  === 'fulfilled' ? (perfR.value?.result  || []) : [];
-    const epoch   = epochR.status === 'fulfilled' ? (epochR.value?.result || {}) : {};
-    const slot    = slotR.status  === 'fulfilled' ? (slotR.value?.result  ?? null) : null;
+    const samples = perfR.status === 'fulfilled' ? (perfR.value?.result || []) : [];
+    const epoch = epochR.status === 'fulfilled' ? (epochR.value?.result || {}) : {};
+    const slot = slotR.status === 'fulfilled' ? (slotR.value?.result ?? null) : null;
     if (!samples.length) throw new Error(`SOL RPC no samples (${rpcUrl})`);
-    const avgTPS  = Math.round(samples.reduce((a, x) => a + x.numTransactions / (x.samplePeriodSecs || 60), 0) / samples.length);
+    const avgTPS = Math.round(samples.reduce((a, x) => a + x.numTransactions / (x.samplePeriodSecs || 60), 0) / samples.length);
     const peakTPS = Math.round(Math.max(...samples.map(x => x.numTransactions / (x.samplePeriodSecs || 60))));
-    const score   = avgTPS > 3000 ? 0.50 : avgTPS > 1500 ? 0.20 : avgTPS < 500 ? -0.20 : 0;
+    const score = avgTPS > 3000 ? 0.50 : avgTPS > 1500 ? 0.20 : avgTPS < 500 ? -0.20 : 0;
     const srcName = rpcUrl.includes('ankr') ? 'Ankr/Solscan' : 'Solana RPC/Solscan';
     return {
       sym: 'SOL', label: 'Solana', chain: 'Solana Mainnet',
       source: srcName, explorerUrl: 'https://solscan.io',
       metrics: [
-        { k: 'Avg TPS',     v: avgTPS.toLocaleString() },
-        { k: 'Peak TPS',    v: peakTPS.toLocaleString() },
-        { k: 'Epoch',       v: epoch.epoch      != null ? epoch.epoch.toLocaleString()         : '—' },
-        { k: 'Slot Height', v: slot             != null ? Number(slot).toLocaleString()         : '—' },
-        { k: 'Slot Index',  v: epoch.slotIndex  != null ? epoch.slotIndex.toLocaleString()      : '—' },
-        { k: 'Samples',     v: `${samples.length} blk` },
+        { k: 'Avg TPS', v: avgTPS.toLocaleString() },
+        { k: 'Peak TPS', v: peakTPS.toLocaleString() },
+        { k: 'Epoch', v: epoch.epoch != null ? epoch.epoch.toLocaleString() : '—' },
+        { k: 'Slot Height', v: slot != null ? Number(slot).toLocaleString() : '—' },
+        { k: 'Slot Index', v: epoch.slotIndex != null ? epoch.slotIndex.toLocaleString() : '—' },
+        { k: 'Samples', v: `${samples.length} blk` },
       ],
       congestion: avgTPS > 3000 ? 'HIGH' : avgTPS > 1500 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -231,7 +233,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ method: 'server_info', params: [{}] }),
     });
-    const info   = data?.result?.info || {};
+    const info = data?.result?.info || {};
     const ledger = info.validated_ledger || {};
     if (!info.server_state) throw new Error(`XRP no server_state from ${url}`);
     const loadFactor = info.load_factor || 1;
@@ -241,12 +243,12 @@
       sym: 'XRP', label: 'XRP Ledger', chain: 'XRPL',
       source: srcName, explorerUrl: 'https://xrpscan.com',
       metrics: [
-        { k: 'Ledger Index',  v: ledger.seq           != null ? ledger.seq.toLocaleString()          : '—' },
-        { k: 'Txns/Ledger',   v: ledger.txn_count     != null ? ledger.txn_count.toLocaleString()    : '—' },
-        { k: 'Base Fee',      v: ledger.base_fee_xrp  != null ? `${ledger.base_fee_xrp} XRP`        : '—' },
-        { k: 'Load Factor',   v: loadFactor.toLocaleString() },
-        { k: 'Server State',  v: info.server_state    || '—' },
-        { k: 'Peers',         v: info.peers           != null ? info.peers.toString() : '—' },
+        { k: 'Ledger Index', v: ledger.seq != null ? ledger.seq.toLocaleString() : '—' },
+        { k: 'Txns/Ledger', v: ledger.txn_count != null ? ledger.txn_count.toLocaleString() : '—' },
+        { k: 'Base Fee', v: ledger.base_fee_xrp != null ? `${ledger.base_fee_xrp} XRP` : '—' },
+        { k: 'Load Factor', v: loadFactor.toLocaleString() },
+        { k: 'Server State', v: info.server_state || '—' },
+        { k: 'Peers', v: info.peers != null ? info.peers.toString() : '—' },
       ],
       congestion: loadFactor > 256 ? 'HIGH' : loadFactor > 16 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -257,27 +259,29 @@
   // ── BNB: BSC Blockscout (primary) → BSCScan proxy (fallback) ─────
 
   async function bnbBlockscout() {
-    const [sR, gR] = await Promise.allSettled([
+    const [sR, pR] = await Promise.allSettled([
       getJson('https://bsc.blockscout.com/api/v2/stats'),
-      getJson('https://bsc.blockscout.com/api/v2/gas-price-oracle'),
+      getJson('https://api.bscscan.com/api?module=proxy&action=eth_gasPrice'),
     ]);
     const s = sR.status === 'fulfilled' ? sR.value : {};
-    const g = gR.status === 'fulfilled' ? gR.value : {};
-    if (!Object.keys(s).length && !Object.keys(g).length) throw new Error('Blockscout BSC empty');
-    const gasAvg  = parseFloat(g.average || g.medium || 0);
-    const gasFast = parseFloat(g.fast    || g.high   || 0);
-    const gasSlow = parseFloat(g.slow    || g.low    || 0);
-    const score   = gasAvg > 8 ? 0.40 : gasAvg > 3 ? 0.10 : 0;
+    const p = pR.status === 'fulfilled' ? pR.value : {};
+    const wei = p?.result ? parseInt(p.result, 16) || 0 : 0;
+    const gasGwei = wei > 0 ? (wei / 1e9) : 0;
+    const gasAvg = gasGwei;
+    const gasFast = gasGwei;
+    const gasSlow = gasGwei;
+    if (!Object.keys(s).length && !gasAvg && !gasFast && !gasSlow) throw new Error('Blockscout BSC empty');
+    const score = gasAvg > 8 ? 0.40 : gasAvg > 3 ? 0.10 : 0;
     return {
       sym: 'BNB', label: 'BNB Chain', chain: 'BSC Mainnet',
       source: 'BSCScan/Blockscout', explorerUrl: 'https://bscscan.com',
       metrics: [
-        { k: 'Gas Avg',     v: gasAvg  ? `${gasAvg.toFixed(2)} Gwei`  : '—' },
-        { k: 'Gas Fast',    v: gasFast ? `${gasFast.toFixed(2)} Gwei` : '—' },
-        { k: 'Gas Slow',    v: gasSlow ? `${gasSlow.toFixed(2)} Gwei` : '—' },
-        { k: 'Txs Today',   v: s.transactions_today ? parseInt(s.transactions_today).toLocaleString() : '—' },
-        { k: 'Total Addrs', v: s.total_addresses    ? parseInt(s.total_addresses).toLocaleString()    : '—' },
-        { k: 'Total Txs',   v: s.total_transactions ? parseInt(s.total_transactions).toLocaleString() : '—' },
+        { k: 'Gas Avg', v: gasAvg ? `${gasAvg.toFixed(2)} Gwei` : '—' },
+        { k: 'Gas Fast', v: gasFast ? `${gasFast.toFixed(2)} Gwei` : '—' },
+        { k: 'Gas Slow', v: gasSlow ? `${gasSlow.toFixed(2)} Gwei` : '—' },
+        { k: 'Txs Today', v: s.transactions_today ? parseInt(s.transactions_today).toLocaleString() : '—' },
+        { k: 'Total Addrs', v: s.total_addresses ? parseInt(s.total_addresses).toLocaleString() : '—' },
+        { k: 'Total Txs', v: s.total_transactions ? parseInt(s.total_transactions).toLocaleString() : '—' },
       ],
       congestion: gasAvg > 5 ? 'HIGH' : gasAvg > 2 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -290,8 +294,8 @@
       getJson('https://api.bscscan.com/api?module=proxy&action=eth_blockNumber'),
       getJson('https://api.bscscan.com/api?module=proxy&action=eth_gasPrice'),
     ]);
-    const block   = bR.status === 'fulfilled' ? parseInt(bR.value?.result, 16) || 0 : 0;
-    const gasWei  = gR.status === 'fulfilled' ? parseInt(gR.value?.result, 16) || 0 : 0;
+    const block = bR.status === 'fulfilled' ? parseInt(bR.value?.result, 16) || 0 : 0;
+    const gasWei = gR.status === 'fulfilled' ? parseInt(gR.value?.result, 16) || 0 : 0;
     const gasGwei = gasWei / 1e9;
     if (!block && !gasGwei) throw new Error('BSCScan proxy empty');
     const score = gasGwei > 8 ? 0.40 : gasGwei > 3 ? 0.10 : 0;
@@ -299,10 +303,10 @@
       sym: 'BNB', label: 'BNB Chain', chain: 'BSC Mainnet',
       source: 'BSCScan', explorerUrl: 'https://bscscan.com',
       metrics: [
-        { k: 'Gas Price',   v: gasGwei ? `${gasGwei.toFixed(2)} Gwei` : '—' },
-        { k: 'Block',       v: block ? block.toLocaleString() : '—' },
-        { k: 'Gas Fast',    v: '—' }, { k: 'Gas Slow', v: '—' },
-        { k: 'Txs Today',   v: '—' }, { k: 'Total Addrs', v: '—' },
+        { k: 'Gas Price', v: gasGwei ? `${gasGwei.toFixed(2)} Gwei` : '—' },
+        { k: 'Block', v: block ? block.toLocaleString() : '—' },
+        { k: 'Gas Fast', v: '—' }, { k: 'Gas Slow', v: '—' },
+        { k: 'Txs Today', v: '—' }, { k: 'Total Addrs', v: '—' },
       ],
       congestion: gasGwei > 5 ? 'HIGH' : gasGwei > 2 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -315,19 +319,19 @@
 
   async function dogeBlockcypher() {
     const data = await getJson('https://api.blockcypher.com/v1/doge/main');
-    const uc   = data.unconfirmed_count || 0;
+    const uc = data.unconfirmed_count || 0;
     if (!data.height) throw new Error('BlockCypher DOGE empty');
     const score = uc > 10000 ? 0.40 : uc > 3000 ? 0.20 : 0;
     return {
       sym: 'DOGE', label: 'Dogecoin', chain: 'Dogecoin Network',
       source: 'BlockCypher/Dogescan', explorerUrl: 'https://live.blockcypher.com/doge',
       metrics: [
-        { k: 'Unconfirmed',   v: uc.toLocaleString() },
-        { k: 'Block Height',  v: data.height.toLocaleString() },
-        { k: 'Peer Count',    v: data.peer_count    != null ? data.peer_count.toLocaleString()           : '—' },
-        { k: 'Low Fee',       v: data.low_fee_per_kb    ? `${(data.low_fee_per_kb/1e8).toFixed(4)} Ð/KB` : '—' },
-        { k: 'Med Fee',       v: data.medium_fee_per_kb ? `${(data.medium_fee_per_kb/1e8).toFixed(4)} Ð/KB` : '—' },
-        { k: 'High Fee',      v: data.high_fee_per_kb   ? `${(data.high_fee_per_kb/1e8).toFixed(4)} Ð/KB` : '—' },
+        { k: 'Unconfirmed', v: uc.toLocaleString() },
+        { k: 'Block Height', v: data.height.toLocaleString() },
+        { k: 'Peer Count', v: data.peer_count != null ? data.peer_count.toLocaleString() : '—' },
+        { k: 'Low Fee', v: data.low_fee_per_kb ? `${(data.low_fee_per_kb / 1e8).toFixed(4)} Ð/KB` : '—' },
+        { k: 'Med Fee', v: data.medium_fee_per_kb ? `${(data.medium_fee_per_kb / 1e8).toFixed(4)} Ð/KB` : '—' },
+        { k: 'High Fee', v: data.high_fee_per_kb ? `${(data.high_fee_per_kb / 1e8).toFixed(4)} Ð/KB` : '—' },
       ],
       congestion: uc > 5000 ? 'HIGH' : uc > 1000 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -337,21 +341,21 @@
 
   async function dogeBlockchair() {
     const data = await getJson('https://api.blockchair.com/dogecoin/stats');
-    const s    = data?.data || {};
+    const s = data?.data || {};
     if (!Object.keys(s).length) throw new Error('Blockchair DOGE empty');
-    const txs  = s.transactions_24h || 0;
+    const txs = s.transactions_24h || 0;
     const mTxs = s.mempool_transactions || 0;
     const score = txs > 100000 ? 0.40 : txs > 50000 ? 0.20 : 0;
     return {
       sym: 'DOGE', label: 'Dogecoin', chain: 'Dogecoin Network',
       source: 'Blockchair/Dogescan', explorerUrl: 'https://blockchair.com/dogecoin',
       metrics: [
-        { k: 'Txs 24h',      v: txs.toLocaleString() },
-        { k: 'Mempool Txs',  v: mTxs.toLocaleString() },
+        { k: 'Txs 24h', v: txs.toLocaleString() },
+        { k: 'Mempool Txs', v: mTxs.toLocaleString() },
         { k: 'Block Height', v: s.best_block_height ? s.best_block_height.toLocaleString() : '—' },
         { k: 'Hashrate 24h', v: s.hashrate_24h ? fmtHashrate(s.hashrate_24h) : '—' },
-        { k: 'Difficulty',   v: s.difficulty ? Number(s.difficulty).toExponential(2) : '—' },
-        { k: 'Outputs 24h',  v: s.outputs_24h ? s.outputs_24h.toLocaleString() : '—' },
+        { k: 'Difficulty', v: s.difficulty ? Number(s.difficulty).toExponential(2) : '—' },
+        { k: 'Outputs 24h', v: s.outputs_24h ? s.outputs_24h.toLocaleString() : '—' },
       ],
       congestion: mTxs > 5000 ? 'HIGH' : mTxs > 1000 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -367,26 +371,26 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
     });
-    const meta  = Array.isArray(data) ? data[0] : {};
-    const ctxs  = Array.isArray(data) ? data[1] : [];
-    const idx   = (meta?.universe || []).findIndex(a => a.name === 'HYPE');
-    const ctx   = idx >= 0 ? ctxs[idx] : null;
+    const meta = Array.isArray(data) ? data[0] : {};
+    const ctxs = Array.isArray(data) ? data[1] : [];
+    const idx = (meta?.universe || []).findIndex(a => a.name === 'HYPE');
+    const ctx = idx >= 0 ? ctxs[idx] : null;
     if (!ctx) throw new Error('HYPE not found in HL universe');
     const funding = parseFloat(ctx.funding || 0);
-    const oi      = parseFloat(ctx.openInterest || 0);
-    const vol     = parseFloat(ctx.dayNtlVlm || 0);
+    const oi = parseFloat(ctx.openInterest || 0);
+    const vol = parseFloat(ctx.dayNtlVlm || 0);
     // Negative funding = shorts paying longs = bullish pressure
     const score = funding < -0.001 ? 0.30 : funding > 0.001 ? -0.20 : 0;
     return {
       sym: 'HYPE', label: 'HyperLiquid', chain: 'Hyperliquid L1',
       source: 'Hyperliquid/Hypurrscan', explorerUrl: 'https://hypurrscan.io',
       metrics: [
-        { k: 'Funding Rate',  v: `${(funding * 100).toFixed(4)}%/hr` },
+        { k: 'Funding Rate', v: `${(funding * 100).toFixed(4)}%/hr` },
         { k: 'Open Interest', v: `$${fmtCompact(oi)}` },
-        { k: 'Day Volume',    v: `$${fmtCompact(vol)}` },
-        { k: 'Mark Price',    v: ctx.markPx    ? `$${parseFloat(ctx.markPx).toFixed(4)}`    : '—' },
-        { k: 'Prev Day Px',   v: ctx.prevDayPx ? `$${parseFloat(ctx.prevDayPx).toFixed(4)}` : '—' },
-        { k: 'Universe Sz',   v: (meta?.universe?.length ?? '—').toString() },
+        { k: 'Day Volume', v: `$${fmtCompact(vol)}` },
+        { k: 'Mark Price', v: ctx.markPx ? `$${parseFloat(ctx.markPx).toFixed(4)}` : '—' },
+        { k: 'Prev Day Px', v: ctx.prevDayPx ? `$${parseFloat(ctx.prevDayPx).toFixed(4)}` : '—' },
+        { k: 'Universe Sz', v: (meta?.universe?.length ?? '—').toString() },
       ],
       congestion: Math.abs(funding) > 0.001 ? 'HIGH' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
@@ -408,32 +412,32 @@
     let dominant = 'none';
 
     if (sym === 'BTC') {
-      const feeVel   = velPct(currRaw.feeFast,  prevRaw.feeFast);
-      const vsizeVel = velPct(currRaw.vsize,     prevRaw.vsize);
-      const txVel    = velPct(currRaw.txCount,   prevRaw.txCount);
-      score    = Math.max(-1, Math.min(1, feeVel * 1.4 + vsizeVel * 0.5 + txVel * 0.3));
+      const feeVel = velPct(currRaw.feeFast, prevRaw.feeFast);
+      const vsizeVel = velPct(currRaw.vsize, prevRaw.vsize);
+      const txVel = velPct(currRaw.txCount, prevRaw.txCount);
+      score = Math.max(-1, Math.min(1, feeVel * 1.4 + vsizeVel * 0.5 + txVel * 0.3));
       dominant = Math.abs(feeVel) >= 0.08 ? 'fee' : Math.abs(vsizeVel) >= 0.1 ? 'mempool' : 'tx';
     } else if (sym === 'ETH' || sym === 'BNB') {
       const gasVel = velPct(currRaw.gasAvg, prevRaw.gasAvg);
-      score    = Math.max(-1, Math.min(1, gasVel * 1.5));
+      score = Math.max(-1, Math.min(1, gasVel * 1.5));
       dominant = 'gas';
     } else if (sym === 'SOL') {
       const tpsVel = velPct(currRaw.avgTPS, prevRaw.avgTPS);
-      score    = Math.max(-1, Math.min(1, tpsVel * 1.2));
+      score = Math.max(-1, Math.min(1, tpsVel * 1.2));
       dominant = 'tps';
     } else if (sym === 'XRP') {
       const loadVel = velPct(currRaw.loadFactor, prevRaw.loadFactor);
-      const txVel   = velPct(currRaw.txnCount,   prevRaw.txnCount);
-      score    = Math.max(-1, Math.min(1, loadVel * 0.7 + txVel * 0.5));
+      const txVel = velPct(currRaw.txnCount, prevRaw.txnCount);
+      score = Math.max(-1, Math.min(1, loadVel * 0.7 + txVel * 0.5));
       dominant = 'load';
     } else if (sym === 'DOGE') {
-      const txVel  = velPct(currRaw.txCount, prevRaw.txCount);
+      const txVel = velPct(currRaw.txCount, prevRaw.txCount);
       const feeVel = velPct(currRaw.highFee, prevRaw.highFee);
-      score    = Math.max(-1, Math.min(1, txVel * 0.8 + feeVel * 0.5));
+      score = Math.max(-1, Math.min(1, txVel * 0.8 + feeVel * 0.5));
       dominant = 'tx';
     } else if (sym === 'HYPE') {
       const fundVel = velPct(Math.abs(currRaw.funding), Math.abs(prevRaw.funding || 0.0001));
-      score    = Math.sign(currRaw.funding) * Math.min(1, Math.abs(fundVel) * 0.8);
+      score = Math.sign(currRaw.funding) * Math.min(1, Math.abs(fundVel) * 0.8);
       dominant = 'funding';
     }
 
@@ -441,19 +445,21 @@
   }
 
   const ROUTES = [
-    { sym: 'BTC',  handlers: [btcMempool, btcBlockchain] },
-    { sym: 'ETH',  handlers: [ethBlockscout, ethEtherscan] },
-    { sym: 'SOL',  handlers: [
+    { sym: 'BTC', handlers: [btcMempool, btcBlockchain] },
+    { sym: 'ETH', handlers: [ethBlockscout, ethEtherscan] },
+    {
+      sym: 'SOL', handlers: [
         () => solRpc('https://api.mainnet-beta.solana.com'),
         () => solRpc('https://rpc.ankr.com/solana'),
       ]
     },
-    { sym: 'XRP',  handlers: [
+    {
+      sym: 'XRP', handlers: [
         () => xrpLedger('https://xrplcluster.com/'),
         () => xrpLedger('https://s2.ripple.com:51234/'),
       ]
     },
-    { sym: 'BNB',  handlers: [bnbBlockscout, bnbBscscan] },
+    { sym: 'BNB', handlers: [bnbBlockscout, bnbBscscan] },
     { sym: 'DOGE', handlers: [dogeBlockcypher, dogeBlockchair] },
     { sym: 'HYPE', handlers: [hypeHyperliquid] },
   ];
@@ -520,7 +526,7 @@
     });
     // Notify listeners
     const detail = { ...CACHE };
-    window.dispatchEvent(new CustomEvent('chain-router-update',    { detail }));
+    window.dispatchEvent(new CustomEvent('chain-router-update', { detail }));
     window.dispatchEvent(new CustomEvent('blockchain-scan-update', { detail })); // compat
     return { ...CACHE };
   }
@@ -529,8 +535,8 @@
 
   const ChainRouter = {
     POLL_MS,
-    get(sym)    { return CACHE[sym] || null; },
-    getAll()    { return { ...CACHE }; },
+    get(sym) { return CACHE[sym] || null; },
+    getAll() { return { ...CACHE }; },
     getErrors() { return { ...ERRORS }; },
     fmtCompact,
     fmtHashrate,
@@ -543,7 +549,7 @@
     stop() { clearInterval(_timer); _timer = null; },
   };
 
-  window.ChainRouter   = ChainRouter;
+  window.ChainRouter = ChainRouter;
   window.BlockchainScan = ChainRouter; // backward-compat alias
 
 })();

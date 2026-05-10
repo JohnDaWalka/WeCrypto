@@ -19,6 +19,19 @@
     return;
   }
 
+  async function discoverNetworkShareTargets() {
+    try {
+      if (!window.desktopApp?.getDrives) return [];
+      const drives = await window.desktopApp.getDrives();
+      return (drives || [])
+        .filter(d => d && d.type === 'network' && d.root)
+        .map(d => `${d.root}WECRYP\\settlement-logs`);
+    } catch (e) {
+      console.warn('[SettlementLogger] Network share discovery failed:', e.message);
+      return [];
+    }
+  }
+
   const SYNC_TARGETS = {
     network_drives: [
       'F:\\WECRYP\\settlement-logs',
@@ -63,9 +76,22 @@
    * Initialize all target directories
    */
   function initializeTargets() {
-    ipcRenderer.send('multi-drive:init-directories', {
-      targets: SYNC_TARGETS,
-      filename: LOG_FILENAME
+    discoverNetworkShareTargets().then(extraTargets => {
+      if (extraTargets.length) {
+        const merged = new Set([...(SYNC_TARGETS.network_drives || []), ...extraTargets]);
+        SYNC_TARGETS.network_drives = [...merged];
+        console.log('[SettlementLogger] Network shares discovered:', extraTargets.join(' | '));
+      }
+
+      ipcRenderer.send('multi-drive:init-directories', {
+        targets: SYNC_TARGETS,
+        filename: LOG_FILENAME
+      });
+    }).catch(() => {
+      ipcRenderer.send('multi-drive:init-directories', {
+        targets: SYNC_TARGETS,
+        filename: LOG_FILENAME
+      });
     });
 
     // Listen for directory init results

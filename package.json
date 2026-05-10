@@ -3,6 +3,7 @@
   "version": "2.15.5",
   "private": true,
   "description": "WalkerEnterprise CFM Kalshi 15m Deep Dive Optimization — Divergence detection + real-time momentum + crash protection",
+  "author": "WalkerEnterprise",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -16,7 +17,6 @@
     "appId": "com.walkerenterprise.wecfmorchestrator",
     "productName": "WE-CRYPTO-Kalshi-15m-v2.15.5",
     "electronVersion": "37.2.0",
-    "artifactName": "WE-CRYPTO-Kalshi-15m-v2.15.5-${platform}.exe",
     "files": [
       "public/**",
       "src/**",
@@ -51,7 +51,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "WE--CRYPTO--BETA3"
+      "shortcutName": "WE--CRYPTO--BETA3",
+      "artifactName": "WE-CRYPTO-Kalshi-15m-v2.15.5-installer-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "WE-CRYPTO-Kalshi-15m-v2.15.5-portable-${arch}.${ext}"
     }
   },
   "devDependencies": {
@@ -65,6 +69,7 @@
     "@pythnetwork/pyth-lazer-sdk": "^6.2.2",
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
+    "kalshi-typescript": "^3.15.0",
     "ws": "^8.18.3"
   }
 }

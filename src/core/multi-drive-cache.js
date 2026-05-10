@@ -35,6 +35,7 @@
         'D:\\Users\\admin\\WE-CRYPTO-CACHE',
         'C:\\Users\\user\\AppData\\Local\\WE-CRYPTO-CACHE',
       ];
+      this.networkDrivePaths = [];
 
       // Cloud folders discovered async during _initAsync
       this.onedriveFolders = [];
@@ -68,9 +69,29 @@
     }
 
     async _initAsync() {
+      await this._discoverNetworkDrives();
       await this._discoverCloudFolders();
       await this._ensureDirectories();
       await this._loadFromDrives();
+    }
+
+    async _discoverNetworkDrives() {
+      if (!this.isElectron || !window.desktopApp?.getDrives) return;
+      try {
+        const drives = await window.desktopApp.getDrives();
+        const roots = [];
+        for (const drive of drives || []) {
+          if (drive?.type === 'network' && drive?.root) {
+            roots.push(this._join(drive.root, 'WE-CRYPTO-CACHE'));
+          }
+        }
+        this.networkDrivePaths = roots;
+        if (roots.length) {
+          console.log('[MultiDriveCache] Network shares discovered:', roots.join(' | '));
+        }
+      } catch (e) {
+        console.warn('[MultiDriveCache] Network drive discovery error:', e.message);
+      }
     }
 
     async _discoverCloudFolders() {
@@ -106,7 +127,7 @@
 
     async _ensureDirectories() {
       if (!this.isElectron || !window.dataStore?.ensureDir) return;
-      const allPaths = [...this.drivePaths, ...this.onedriveFolders];
+      const allPaths = [...this.drivePaths, ...this.networkDrivePaths, ...this.onedriveFolders];
       if (this.googleDriveFolder) allPaths.push(this.googleDriveFolder);
       await Promise.allSettled(allPaths.map(p => window.dataStore.ensureDir(p)));
     }
@@ -286,6 +307,7 @@
       const cacheJson = JSON.stringify(this.data, null, 2);
       const allPaths = [
         ...this.drivePaths,
+        ...this.networkDrivePaths,
         ...this.onedriveFolders,
         ...(this.googleDriveFolder ? [this.googleDriveFolder] : []),
       ];
@@ -314,6 +336,7 @@
 
       const allPaths = [
         ...this.drivePaths,
+        ...this.networkDrivePaths,
         ...this.onedriveFolders,
         ...(this.googleDriveFolder ? [this.googleDriveFolder] : []),
       ];
@@ -395,7 +418,8 @@
         onedriveConfigured: this.onedriveFolders.length > 0,
         onedriveTargets: this.onedriveFolders.length,
         googleDriveConfigured: this.googleDriveFolder ? true : false,
-        totalTargets: this.drivePaths.length + this.onedriveFolders.length + (this.googleDriveFolder ? 1 : 0),
+        networkTargets: this.networkDrivePaths.length,
+        totalTargets: this.drivePaths.length + this.networkDrivePaths.length + this.onedriveFolders.length + (this.googleDriveFolder ? 1 : 0),
       };
     }
 

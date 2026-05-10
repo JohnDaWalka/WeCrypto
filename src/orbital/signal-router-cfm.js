@@ -34,12 +34,12 @@
   function recordCFMSnapshot(sym, cfm) {
     if (!_cfmHistory[sym]) _cfmHistory[sym] = [];
     _cfmHistory[sym].push({
-      momentum:    cfm.momentum    || 0,
-      trend:       cfm.trend       || 'flat',
-      spread:      cfm.spread      || 0,
+      momentum: cfm.momentum || 0,
+      trend: cfm.trend || 'flat',
+      spread: cfm.spread || 0,
       convergence: cfm.convergence || 0,
       sourceCount: cfm.sourceCount || 0,
-      ts:          Date.now(),
+      ts: Date.now(),
     });
     if (_cfmHistory[sym].length > CFM_HIST_MAX) _cfmHistory[sym].shift();
   }
@@ -53,9 +53,9 @@
     if (!cfm || !cfm.cfmRate || cfm.sourceCount < 2) return 0;
     if (cfm.sourceCount < 3) return 0.35; // weak — still usable as soft signal
 
-    const cvQuality     = clamp(1 - (cfm.convergence || 0) / 0.15, 0, 1); // 0%CV→1.0, ≥0.15%→0
+    const cvQuality = clamp(1 - (cfm.convergence || 0) / 0.15, 0, 1); // 0%CV→1.0, ≥0.15%→0
     const spreadPenalty = (cfm.spread || 0) > 0.12 ? 0.4 : 1.0;           // wide spread = fragmented
-    const sourceMult    = Math.min(1.0, 0.65 + cfm.sourceCount * 0.07);   // 3→0.86, 5→1.0
+    const sourceMult = Math.min(1.0, 0.65 + cfm.sourceCount * 0.07);   // 3→0.86, 5→1.0
     return clamp(cvQuality * spreadPenalty * sourceMult, 0, 1);
   }
 
@@ -80,17 +80,17 @@
     const resolvedLog = (window._15mResolutionLog || [])
       .filter(e => e.sym === sym && e.modelCorrect !== null);
 
-    const hasCandle   = candleLog.length   >= 2;
+    const hasCandle = candleLog.length >= 2;
     const hasResolved = resolvedLog.length >= 2;
     if (!hasCandle && !hasResolved) {
       return { multiplier: 1.0, accuracy: null, streak: 0, trend: 'cold', n: 0, source: 'none' };
     }
 
     // ---- Per-source accuracy ------------------------------------
-    const candleRecent   = candleLog.slice(-n);
+    const candleRecent = candleLog.slice(-n);
     const resolvedRecent = resolvedLog.slice(-Math.ceil(n * 0.75));
 
-    const candleAcc   = hasCandle
+    const candleAcc = hasCandle
       ? candleRecent.filter(e => e.correct).length / candleRecent.length : null;
     const resolvedAcc = hasResolved
       ? resolvedRecent.filter(e => e.modelCorrect).length / resolvedRecent.length : null;
@@ -100,7 +100,7 @@
     if (candleAcc !== null && resolvedAcc !== null) {
       const wC = 1.0, wR = 1.5;
       accuracy = (candleAcc * wC * candleRecent.length + resolvedAcc * wR * resolvedRecent.length)
-               / (wC * candleRecent.length + wR * resolvedRecent.length);
+        / (wC * candleRecent.length + wR * resolvedRecent.length);
       blendedN = candleRecent.length + resolvedRecent.length;
     } else {
       accuracy = candleAcc ?? resolvedAcc;
@@ -109,16 +109,16 @@
 
     // ---- Accuracy trend: last 6 vs prior 6 ----------------------
     const trendLog = (hasResolved && resolvedLog.length >= 6) ? resolvedLog : candleLog;
-    const last6    = trendLog.slice(-6);
-    const prior6   = trendLog.slice(-12, -6);
-    const l6ok     = e => hasResolved ? e.modelCorrect : e.correct;
-    const l6acc    = last6.length  ? last6.filter(l6ok).length  / last6.length  : 0.5;
-    const p6acc    = prior6.length ? prior6.filter(l6ok).length / prior6.length : 0.5;
+    const last6 = trendLog.slice(-6);
+    const prior6 = trendLog.slice(-12, -6);
+    const l6ok = e => hasResolved ? e.modelCorrect : e.correct;
+    const l6acc = last6.length ? last6.filter(l6ok).length / last6.length : 0.5;
+    const p6acc = prior6.length ? prior6.filter(l6ok).length / prior6.length : 0.5;
     const accDelta = l6acc - p6acc;
 
     // ---- Streak from best available log -------------------------
     const streakLog = hasResolved ? resolvedLog : candleLog;
-    const streakOk  = e => hasResolved ? e.modelCorrect : e.correct;
+    const streakOk = e => hasResolved ? e.modelCorrect : e.correct;
     let streak = 0;
     for (let i = streakLog.length - 1; i >= 0; i--) {
       const ok = streakOk(streakLog[i]);
@@ -127,21 +127,21 @@
       else break;
     }
 
-    const accMult   = clamp(0.80 + accuracy * 0.60, 0.82, 1.18);
-    const streakAdj = streak >=  3 ? 0.05 : streak >=  2 ? 0.02
-                    : streak <= -3 ? -0.07 : streak <= -2 ? -0.03 : 0;
-    const trendAdj  = accDelta > 0.15 ? 0.03 : accDelta < -0.15 ? -0.04 : 0;
+    const accMult = clamp(0.80 + accuracy * 0.60, 0.82, 1.18);
+    const streakAdj = streak >= 3 ? 0.05 : streak >= 2 ? 0.02
+      : streak <= -3 ? -0.07 : streak <= -2 ? -0.03 : 0;
+    const trendAdj = accDelta > 0.15 ? 0.03 : accDelta < -0.15 ? -0.04 : 0;
     const multiplier = clamp(accMult + streakAdj + trendAdj, 0.78, 1.22);
 
     return {
       multiplier,
-      accuracy:          +(accuracy * 100).toFixed(1),
-      candleAccuracy:    candleAcc  !== null ? +(candleAcc  * 100).toFixed(1) : null,
-      resolvedAccuracy:  resolvedAcc !== null ? +(resolvedAcc * 100).toFixed(1) : null,
-      resolvedN:         resolvedRecent.length,
+      accuracy: +(accuracy * 100).toFixed(1),
+      candleAccuracy: candleAcc !== null ? +(candleAcc * 100).toFixed(1) : null,
+      resolvedAccuracy: resolvedAcc !== null ? +(resolvedAcc * 100).toFixed(1) : null,
+      resolvedN: resolvedRecent.length,
       streak,
       trend: accDelta > 0.10 ? 'improving' : accDelta < -0.10 ? 'declining' : 'stable',
-      n:     blendedN,
+      n: blendedN,
       source: hasResolved && hasCandle ? 'blended' : hasResolved ? 'resolved' : 'candle',
     };
   }
@@ -154,29 +154,29 @@
     const cfm = window._cfm?.[sym];
     if (!cfm || !cfm.cfmRate || cfm.cfmRate === 0 || cfm.sourceCount < 2) return [];
 
-    const quality   = buildCFMQuality(cfm);
+    const quality = buildCFMQuality(cfm);
     if (quality < 0.15) return []; // data too fragmented to trust
 
-    const srcTrust  = Math.min(0.94, 0.70 + cfm.sourceCount * 0.04) * quality;
-    const packets   = [];
+    const srcTrust = Math.min(0.94, 0.70 + cfm.sourceCount * 0.04) * quality;
+    const packets = [];
 
     // ── Packet A: CFM 15m Trend ─────────────────────────────────
     if (cfm.trend !== 'flat') {
-      const dir      = cfm.trend === 'rising' ? 1 : -1;
-      const momAbs   = Math.abs(cfm.momentum || 0);
+      const dir = cfm.trend === 'rising' ? 1 : -1;
+      const momAbs = Math.abs(cfm.momentum || 0);
       const strength = clamp(momAbs / 0.45, 0.12, 0.92);
       packets.push({
-        family:    'cfm_trend',
-        category:  'benchmark',
-        role:      'driver',
-        label:     'CFM 15m trend',
-        detail:    `${cfm.trend} · ${cfm.sourceCount} sources · Δ${cfm.momentum?.toFixed(3) ?? '?'}%`,
+        family: 'cfm_trend',
+        category: 'benchmark',
+        role: 'driver',
+        label: 'CFM 15m trend',
+        detail: `${cfm.trend} · ${cfm.sourceCount} sources · Δ${cfm.momentum?.toFixed(3) ?? '?'}%`,
         direction: dir,
         strength,
         freshness: 0.95,
-        trust:     srcTrust,
+        trust: srcTrust,
         relevance: 0.90,
-        source:    'cfm',
+        source: 'cfm',
       });
     }
 
@@ -184,22 +184,22 @@
     if (cfm.sourceCount >= 3 && cfm.vwap15 && cfm.twap15) {
       const vwapDev = ((cfm.cfmRate - cfm.vwap15) / cfm.vwap15) * 100;
       const twapDev = ((cfm.cfmRate - cfm.twap15) / cfm.twap15) * 100;
-      const vDir    = Math.sign(vwapDev);
-      const tDir    = Math.sign(twapDev);
+      const vDir = Math.sign(vwapDev);
+      const tDir = Math.sign(twapDev);
       if (vDir === tDir && vDir !== 0 && Math.abs(vwapDev) > 0.03) {
         const strength = clamp((Math.abs(vwapDev) + Math.abs(twapDev)) / 2 / 0.35, 0.10, 0.88);
         packets.push({
-          family:    'cfm_convergence',
-          category:  'benchmark',
-          role:      'driver',
-          label:     'CFM VWAP/TWAP convergence',
-          detail:    `VWAP15 ${vwapDev > 0 ? '+' : ''}${vwapDev.toFixed(3)}% · TWAP15 ${twapDev > 0 ? '+' : ''}${twapDev.toFixed(3)}%`,
+          family: 'cfm_convergence',
+          category: 'benchmark',
+          role: 'driver',
+          label: 'CFM VWAP/TWAP convergence',
+          detail: `VWAP15 ${vwapDev > 0 ? '+' : ''}${vwapDev.toFixed(3)}% · TWAP15 ${twapDev > 0 ? '+' : ''}${twapDev.toFixed(3)}%`,
           direction: vDir,
           strength,
           freshness: 0.92,
-          trust:     srcTrust,
+          trust: srcTrust,
           relevance: 0.84,
-          source:    'cfm',
+          source: 'cfm',
         });
       }
     }
@@ -208,24 +208,24 @@
     if (cfm.partitions?.length >= 3) {
       const valid = cfm.partitions.filter(p => p.vwm !== null && p.vwm > 0);
       if (valid.length >= 3) {
-        const allUp   = valid.every((p, i) => i === 0 || p.vwm >= valid[i - 1].vwm);
+        const allUp = valid.every((p, i) => i === 0 || p.vwm >= valid[i - 1].vwm);
         const allDown = valid.every((p, i) => i === 0 || p.vwm <= valid[i - 1].vwm);
         if (allUp || allDown) {
-          const first    = valid[0].vwm;
-          const last     = valid[valid.length - 1].vwm;
+          const first = valid[0].vwm;
+          const last = valid[valid.length - 1].vwm;
           const driftPct = Math.abs((last - first) / first) * 100;
           packets.push({
-            family:    'cfm_partition_lock',
-            category:  'trend',
-            role:      'driver',
-            label:     'CFM partition lock',
-            detail:    `All ${valid.length}×5m buckets ${allUp ? '↑ rising' : '↓ falling'} · ${driftPct.toFixed(3)}% drift`,
+            family: 'cfm_partition_lock',
+            category: 'trend',
+            role: 'driver',
+            label: 'CFM partition lock',
+            detail: `All ${valid.length}×5m buckets ${allUp ? '↑ rising' : '↓ falling'} · ${driftPct.toFixed(3)}% drift`,
             direction: allUp ? 1 : -1,
-            strength:  clamp(driftPct / 0.28, 0.16, 0.95),
+            strength: clamp(driftPct / 0.28, 0.16, 0.95),
             freshness: 0.96,
-            trust:     Math.min(0.90, srcTrust + 0.06), // slight bonus for multi-bucket confirmation
+            trust: Math.min(0.90, srcTrust + 0.06), // slight bonus for multi-bucket confirmation
             relevance: 0.92,
-            source:    'cfm',
+            source: 'cfm',
           });
         }
       }
@@ -235,17 +235,17 @@
     const momAbs = Math.abs(cfm.momentum || 0);
     if (momAbs >= 0.08) {
       packets.push({
-        family:    'cfm_momentum_surge',
-        category:  'momentum',
-        role:      'driver',
-        label:     'CFM momentum surge',
-        detail:    `${cfm.momentum > 0 ? '+' : ''}${cfm.momentum?.toFixed(3) ?? '?'}% over 15m window`,
+        family: 'cfm_momentum_surge',
+        category: 'momentum',
+        role: 'driver',
+        label: 'CFM momentum surge',
+        detail: `${cfm.momentum > 0 ? '+' : ''}${cfm.momentum?.toFixed(3) ?? '?'}% over 15m window`,
         direction: Math.sign(cfm.momentum || 0),
-        strength:  clamp(momAbs / 0.32, 0.25, 0.96),
+        strength: clamp(momAbs / 0.32, 0.25, 0.96),
         freshness: 0.94,
-        trust:     Math.min(0.85, srcTrust + 0.03),
+        trust: Math.min(0.85, srcTrust + 0.03),
         relevance: 0.88,
-        source:    'cfm',
+        source: 'cfm',
       });
     }
 
@@ -256,23 +256,23 @@
     // Trust = 0.82 (Kalshi is the settlement oracle, its drift is actionable).
     const kVel = window.PredictionMarkets?.getVelocity?.(sym);
     if (kVel && kVel.trend !== 'flat' && Math.abs(kVel.velCentsPerMin) >= 1.0 && kVel.samples >= 3) {
-      const kDir      = kVel.trend === 'rising' ? 1 : -1;
+      const kDir = kVel.trend === 'rising' ? 1 : -1;
       const kStrength = clamp(Math.abs(kVel.velCentsPerMin) / 8.0, 0.15, 0.82);
       // Boost strength when acceleration confirms the drift direction
       const accelBoost = (kVel.acceleration > 0 && kDir === 1) || (kVel.acceleration < 0 && kDir === -1)
         ? Math.min(0.10, Math.abs(kVel.acceleration) / 5.0) : 0;
       packets.push({
-        family:    'kalshi_drift',
-        category:  'market',
-        role:      'driver',
-        label:     'Kalshi probability drift',
-        detail:    `${kVel.trend} ${kVel.velCentsPerMin > 0 ? '+' : ''}${kVel.velCentsPerMin.toFixed(1)}¢/min · accel ${kVel.acceleration > 0 ? '+' : ''}${kVel.acceleration.toFixed(1)}¢ · ${kVel.samples} pts · latest ${Math.round((kVel.latestProb ?? 0) * 100)}¢`,
+        family: 'kalshi_drift',
+        category: 'market',
+        role: 'driver',
+        label: 'Kalshi probability drift',
+        detail: `${kVel.trend} ${kVel.velCentsPerMin > 0 ? '+' : ''}${kVel.velCentsPerMin.toFixed(1)}¢/min · accel ${kVel.acceleration > 0 ? '+' : ''}${kVel.acceleration.toFixed(1)}¢ · ${kVel.samples} pts · latest ${Math.round((kVel.latestProb ?? 0) * 100)}¢`,
         direction: kDir,
-        strength:  clamp(kStrength + accelBoost, 0.15, 0.85),
+        strength: clamp(kStrength + accelBoost, 0.15, 0.85),
         freshness: 0.97,
-        trust:     0.82,
+        trust: 0.82,
         relevance: 0.91,
-        source:    'kalshi',
+        source: 'kalshi',
       });
     }
 
@@ -284,18 +284,18 @@
   // CFM direction matches the base candle-model score direction.
   // Used in predictions.js to adjust standAsideMultiplier.
   function getCFMAlignment(sym, baseScore) {
-    const cfm     = window._cfm?.[sym];
+    const cfm = window._cfm?.[sym];
     const quality = cfm ? buildCFMQuality(cfm) : 0;
     if (!cfm || quality < 0.30 || Math.abs(cfm.momentum || 0) < 0.04) return 'neutral';
 
     // Build a composite CFM directional signal
-    const momSig  = clamp((cfm.momentum || 0) / 0.25, -1, 1);
+    const momSig = clamp((cfm.momentum || 0) / 0.25, -1, 1);
     const trendSig = cfm.trend === 'rising' ? 1 : cfm.trend === 'falling' ? -1 : 0;
     // Partition slope
     const valid = (cfm.partitions || []).filter(p => p.vwm > 0);
     let partSig = 0;
     if (valid.length >= 3) {
-      const allUp   = valid.every((p, i) => i === 0 || p.vwm >= valid[i - 1].vwm);
+      const allUp = valid.every((p, i) => i === 0 || p.vwm >= valid[i - 1].vwm);
       const allDown = valid.every((p, i) => i === 0 || p.vwm <= valid[i - 1].vwm);
       partSig = allUp ? 1 : allDown ? -1 : 0;
     }
@@ -304,7 +304,7 @@
     if (Math.abs(cfmSignal) < 0.06 || baseScore === 0) return 'neutral';
 
     const timedDir = Math.sign(baseScore);
-    const cfmDir   = Math.sign(cfmSignal);
+    const cfmDir = Math.sign(cfmSignal);
     if (timedDir === cfmDir) return 'confirming';
     if (timedDir !== cfmDir) return 'conflicting';
     return 'neutral';
@@ -323,18 +323,18 @@
 
     if (routed.action !== 'stand-aside') return base;
 
-    const cfm     = window._cfm?.[sym];
+    const cfm = window._cfm?.[sym];
     const quality = cfm ? buildCFMQuality(cfm) : 0;
     if (!cfm || cfmPackets.length === 0 || quality < 0.25) return base;
 
-    const modelDir     = routed.bullish > routed.bearish ? 1 : routed.bearish > routed.bullish ? -1 : 0;
+    const modelDir = routed.bullish > routed.bearish ? 1 : routed.bearish > routed.bullish ? -1 : 0;
     if (modelDir === 0) return base;
 
-    const aligned    = cfmPackets.filter(p => p.direction === modelDir);
-    const opposed    = cfmPackets.filter(p => p.direction !== 0 && p.direction !== modelDir);
+    const aligned = cfmPackets.filter(p => p.direction === modelDir);
+    const opposed = cfmPackets.filter(p => p.direction !== 0 && p.direction !== modelDir);
     const alignedStr = aligned.reduce((s, p) => s + (p.strength || 0) * (p.relevance || 0.7) * (p.trust || 0.8), 0);
     const opposedStr = opposed.reduce((s, p) => s + (p.strength || 0) * (p.relevance || 0.7) * (p.trust || 0.8), 0);
-    const cfmNet     = alignedStr - opposedStr;
+    const cfmNet = alignedStr - opposedStr;
 
     // Strong multi-packet CFM confirmation → upgrade to watch + soften score multiplier
     if (aligned.length >= 2 && opposed.length === 0 && cfm.sourceCount >= 3 && cfmNet >= 0.30) {
@@ -348,7 +348,7 @@
     }
 
     // Partition lock or momentum surge resolves stand-aside
-    const hasLock  = cfmPackets.some(p => p.family === 'cfm_partition_lock' && p.direction === modelDir);
+    const hasLock = cfmPackets.some(p => p.family === 'cfm_partition_lock' && p.direction === modelDir);
     const hasSurge = cfmPackets.some(p => p.family === 'cfm_momentum_surge' && p.direction === modelDir && p.strength >= 0.50);
     if ((hasLock || hasSurge) && aligned.length >= 1 && opposed.length === 0) {
       return {
@@ -379,13 +379,22 @@
   // Never flips — only amplifies a confirmed call.
   function buildCFMAnchor(sym, normalizedScore, cfmPackets) {
     if (!cfmPackets.length || normalizedScore === 0) return 0;
-    const scoreDir  = Math.sign(normalizedScore);
-    const aligned   = cfmPackets.filter(p => p.direction === scoreDir);
-    const opposed   = cfmPackets.filter(p => p.direction !== 0 && p.direction !== scoreDir);
+    const scoreDir = Math.sign(normalizedScore);
+    const aligned = cfmPackets.filter(p => p.direction === scoreDir);
+    const opposed = cfmPackets.filter(p => p.direction !== 0 && p.direction !== scoreDir);
     if (aligned.length === 0) return 0;
     const alignedStr = aligned.reduce((s, p) => s + (p.strength || 0), 0) / aligned.length;
     const opposedStr = opposed.length ? opposed.reduce((s, p) => s + (p.strength || 0), 0) / opposed.length : 0;
     return scoreDir * clamp((alignedStr - opposedStr * 0.55) * 0.11, 0, 0.09);
+  }
+
+  function buildRegimeGate(regimeHint) {
+    const state = String(regimeHint?.state || '').toLowerCase();
+    if (!state) return { scoreMult: 1, confMult: 1, label: 'none' };
+    if (state === 'chop') return { scoreMult: 0.90, confMult: 0.86, label: 'chop-guard' };
+    if (state === 'transition') return { scoreMult: 0.95, confMult: 0.92, label: 'transition-guard' };
+    if (state === 'trend') return { scoreMult: 1.02, confMult: 1.02, label: 'trend-boost' };
+    return { scoreMult: 1, confMult: 1, label: 'neutral' };
   }
 
   // ── 6. EARLY EXIT DETECTOR (enhanced) ──────────────────────────
@@ -402,16 +411,16 @@
     // Allow single-source CFM (sourceCount >= 1) — some coins only have one exchange feed
     if (!cfm || !cfm.cfmRate || cfm.sourceCount < 1) return null;
 
-    const predDir   = stored.direction === 'UP' ? 1 : -1;
-    const momDir    = Math.sign(cfm.momentum || 0);
-    const trendDir  = cfm.trend === 'rising' ? 1 : cfm.trend === 'falling' ? -1 : 0;
+    const predDir = stored.direction === 'UP' ? 1 : -1;
+    const momDir = Math.sign(cfm.momentum || 0);
+    const trendDir = cfm.trend === 'rising' ? 1 : cfm.trend === 'falling' ? -1 : 0;
 
     // Adaptive momentum threshold: SOL/DOGE have smaller %-moves than BTC/ETH.
     // Use 0.03% for all coins (down from 0.06%) — still noise-resilient but catches
     // small-cap coins that move in the 0.03–0.07% range per candle.
     const MOM_THRESHOLD = 0.03;
     const momentumOpp = momDir !== 0 && momDir !== predDir && Math.abs(cfm.momentum || 0) >= MOM_THRESHOLD;
-    const trendOpp    = trendDir !== 0 && trendDir !== predDir;
+    const trendOpp = trendDir !== 0 && trendDir !== predDir;
 
     // History-based checks
     const hist = _cfmHistory[sym] || [];
@@ -419,38 +428,38 @@
     if (hist.length >= 2) {
       const prev = hist[hist.length - 2];
       const curr = hist[hist.length - 1];
-      spreadSpiked    = curr.spread > prev.spread * 1.6 && curr.spread > 0.09;
+      spreadSpiked = curr.spread > prev.spread * 1.6 && curr.spread > 0.09;
       convergenceLoss = curr.convergence > prev.convergence * 2.2 && curr.convergence > 0.12;
-      histTrendFlip   = prev.trend !== 'flat' && curr.trend !== 'flat' && curr.trend !== prev.trend;
+      histTrendFlip = prev.trend !== 'flat' && curr.trend !== 'flat' && curr.trend !== prev.trend;
     }
 
     // Severity: high = momentum+trend both reversed; medium = one; low = spread/cv only
     const highConfidence = momentumOpp && trendOpp;
-    const medConfidence  = (momentumOpp || (trendOpp && Math.abs(cfm.momentum || 0) >= MOM_THRESHOLD * 0.7)) && !highConfidence;
-    const lowSignal      = (spreadSpiked || convergenceLoss || histTrendFlip) && !highConfidence && !medConfidence;
+    const medConfidence = (momentumOpp || (trendOpp && Math.abs(cfm.momentum || 0) >= MOM_THRESHOLD * 0.7)) && !highConfidence;
+    const lowSignal = (spreadSpiked || convergenceLoss || histTrendFlip) && !highConfidence && !medConfidence;
 
     if (!highConfidence && !medConfidence && !lowSignal) return null;
 
-    const severity    = highConfidence ? 'high' : medConfidence ? 'medium' : 'low';
-    const exitDir     = momDir > 0 ? 'UP' : trendDir > 0 ? 'UP' : 'DOWN';
-    const type        = highConfidence    ? 'momentum_and_trend_flip'
-                      : trendOpp         ? 'trend_flip'
-                      : momentumOpp      ? 'momentum_reversal'
-                      : spreadSpiked     ? 'spread_spike'
-                      : convergenceLoss  ? 'convergence_loss'
-                      : 'trend_flip';
+    const severity = highConfidence ? 'high' : medConfidence ? 'medium' : 'low';
+    const exitDir = momDir > 0 ? 'UP' : trendDir > 0 ? 'UP' : 'DOWN';
+    const type = highConfidence ? 'momentum_and_trend_flip'
+      : trendOpp ? 'trend_flip'
+        : momentumOpp ? 'momentum_reversal'
+          : spreadSpiked ? 'spread_spike'
+            : convergenceLoss ? 'convergence_loss'
+              : 'trend_flip';
 
     return {
-      shouldExit:   severity !== 'low',
+      shouldExit: severity !== 'low',
       sym,
       type,
       severity,
-      reason:       `CFM ${type.replace(/_/g, ' ')}: mom ${(cfm.momentum||0).toFixed(3)}% · trend ${cfm.trend} · spread ${(cfm.spread||0).toFixed(3)}% · src ${cfm.sourceCount}`,
-      strength:     highConfidence ? clamp(Math.abs(cfm.momentum || 0) / 0.15, 0.4, 1.0) : 0.35,
-      prediction:   stored.direction,
+      reason: `CFM ${type.replace(/_/g, ' ')}: mom ${(cfm.momentum || 0).toFixed(3)}% · trend ${cfm.trend} · spread ${(cfm.spread || 0).toFixed(3)}% · src ${cfm.sourceCount}`,
+      strength: highConfidence ? clamp(Math.abs(cfm.momentum || 0) / 0.15, 0.4, 1.0) : 0.35,
+      prediction: stored.direction,
       cfmDirection: exitDir,
-      sourceCount:  cfm.sourceCount,
-      ts:           Date.now(),
+      sourceCount: cfm.sourceCount,
+      ts: Date.now(),
     };
   }
 
@@ -471,10 +480,10 @@
   function detectCoordinatedSell() {
     const sState = window.ShellRouter?.getShellState('s');
     const pState = window.ShellRouter?.getShellState('p');
-    const preds  = window._lastPrediction || {};
+    const preds = window._lastPrediction || {};
 
     // s-shell ionised downward = coordinated core sell (BTC/ETH/XRP/BNB)
-    const sCoreIonized  = sState?.ionized && sState.direction < 0;
+    const sCoreIonized = sState?.ionized && sState.direction < 0;
     // p-shell itself selling (alt-led move or delayed resonance after s-shell)
     const pShellSelling = (pState?.velocity ?? 0) < -0.025;
 
@@ -486,23 +495,23 @@
     const atRisk = pCoins.filter(sym => preds[sym]?.direction === 'UP');
     if (!atRisk.length) return null;
 
-    const sVel    = sState?.velocity ?? 0;
-    const pVel    = pState?.velocity ?? 0;
+    const sVel = sState?.velocity ?? 0;
+    const pVel = pState?.velocity ?? 0;
     const pattern = sCoreIonized && pShellSelling ? 'simultaneous'
-                  : sCoreIonized                  ? 'core_led'
-                  :                                 'alt_led';
+      : sCoreIonized ? 'core_led'
+        : 'alt_led';
     const strength = Math.min(
       0.50
-      + (sCoreIonized  ? Math.min(Math.abs(sVel) / 0.08, 0.30) : 0)
+      + (sCoreIonized ? Math.min(Math.abs(sVel) / 0.08, 0.30) : 0)
       + (pShellSelling ? Math.min(Math.abs(pVel) / 0.10, 0.25) : 0),
       1.0
     );
 
     return {
       atRisk,
-      dropping:  [...(sCoreIonized ? ['s-shell'] : []), ...(pShellSelling ? ['p-shell'] : [])],
+      dropping: [...(sCoreIonized ? ['s-shell'] : []), ...(pShellSelling ? ['p-shell'] : [])],
       strength,
-      reason:    `Shell wall (${pattern})  s=${sVel.toFixed(3)}%  p=${pVel.toFixed(3)}%`,
+      reason: `Shell wall (${pattern})  s=${sVel.toFixed(3)}%  p=${pVel.toFixed(3)}%`,
       pattern,
     };
   }
@@ -539,15 +548,17 @@
           recentExits.set(sym, Date.now());
           const stored = window._lastPrediction?.[sym];
           try {
-            dispatchEvent(new CustomEvent('cfm:earlyExit', { detail: {
-              sym,
-              reason:     coord.reason,
-              strength:   coord.strength,
-              prediction: stored?.direction || 'UP',
-              type:       'coordinated_sell',
-              severity:   'high',
-              shouldExit: true,
-            }}));
+            dispatchEvent(new CustomEvent('cfm:earlyExit', {
+              detail: {
+                sym,
+                reason: coord.reason,
+                strength: coord.strength,
+                prediction: stored?.direction || 'UP',
+                type: 'coordinated_sell',
+                severity: 'high',
+                shouldExit: true,
+              }
+            }));
           } catch { /* non-critical */ }
         });
         if (coord.atRisk.length) {
@@ -564,17 +575,17 @@
   window.CFMRouter = {
 
     // Main entry point: called from computePrediction() in predictions.js
-    enrich(sym, routerContext, routedPackets, routed, baseScore, baseConf) {
+    enrich(sym, routerContext, routedPackets, routed, baseScore, baseConf, regimeHint = null) {
       const cfm = window._cfm?.[sym];
       if (cfm?.cfmRate) recordCFMSnapshot(sym, cfm); // keep history fresh
 
-      const cfmPackets   = buildCFMPackets(sym);
-      const calibration  = buildOutcomeCalibration(sym);
-      const singularity  = resolveSingularity(sym, routed, cfmPackets);
-      const anchor       = buildCFMAnchor(sym, baseScore, cfmPackets);
-      const alignment    = getCFMAlignment(sym, baseScore);
+      const cfmPackets = buildCFMPackets(sym);
+      const calibration = buildOutcomeCalibration(sym);
+      const singularity = resolveSingularity(sym, routed, cfmPackets);
+      const anchor = buildCFMAnchor(sym, baseScore, cfmPackets);
+      const alignment = getCFMAlignment(sym, baseScore);
 
-      const resolvedAction     = singularity.action;
+      const resolvedAction = singularity.action;
       const resolvedMultiplier = singularity.confidenceMultiplier;
 
       // Anchor-adjusted base score
@@ -604,13 +615,16 @@
       const cfmConfBoost = alignment === 'confirming'
         ? Math.round(Math.abs(buildCFMQuality(cfm || {}) || 0) * 8)
         : alignment === 'conflicting' ? -12 : 0;
+      const regimeGate = buildRegimeGate(regimeHint);
+      finalScore = clamp(finalScore * regimeGate.scoreMult, -1, 1);
       const finalConf = Math.round(
         clamp(baseConf * resolvedMultiplier * calibration.multiplier + cfmConfBoost, 0, 95)
-      );
+        * regimeGate.confMult);
 
       return {
         cfmPackets,
         calibration,
+        regimeGate,
         singularity,
         alignment,
         anchor,
@@ -618,28 +632,28 @@
         finalScore,
         finalConf,
         resolvedAction,
-        cfmOverride:    singularity.cfmOverride,
+        cfmOverride: singularity.cfmOverride,
         overrideReason: singularity.overrideReason || null,
-        earlyExit:      detectEarlyExit(sym),
+        earlyExit: detectEarlyExit(sym),
         conflictSuppressed,
       };
     },
 
-    getCalibration:   sym => buildOutcomeCalibration(sym),
-    getCFMPackets:    sym => buildCFMPackets(sym),
-    getCFMAlignment:  (sym, score) => getCFMAlignment(sym, score),
-    detectEarlyExit:  sym => detectEarlyExit(sym),
+    getCalibration: sym => buildOutcomeCalibration(sym),
+    getCFMPackets: sym => buildCFMPackets(sym),
+    getCFMAlignment: (sym, score) => getCFMAlignment(sym, score),
+    detectEarlyExit: sym => detectEarlyExit(sym),
     startExitPolling,
 
     // Full diagnostic report for all coins
     report() {
       return (window.PREDICTION_COINS || []).map(c => ({
-        sym:          c.sym,
-        cfmQuality:   buildCFMQuality(window._cfm?.[c.sym]),
-        cfmPackets:   buildCFMPackets(c.sym),
-        calibration:  buildOutcomeCalibration(c.sym),
-        alignment:    getCFMAlignment(c.sym, window._predictions?.[c.sym]?.score || 0),
-        earlyExit:    detectEarlyExit(c.sym),
+        sym: c.sym,
+        cfmQuality: buildCFMQuality(window._cfm?.[c.sym]),
+        cfmPackets: buildCFMPackets(c.sym),
+        calibration: buildOutcomeCalibration(c.sym),
+        alignment: getCFMAlignment(c.sym, window._predictions?.[c.sym]?.score || 0),
+        earlyExit: detectEarlyExit(c.sym),
       }));
     },
   };

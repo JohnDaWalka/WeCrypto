@@ -28,19 +28,29 @@ const HOST = process.env.WECRYPTO_WEB_HOST || '0.0.0.0';
 let app = null;
 let server = null;
 let wss = null;
+let runtimeMode = 'stopped';
+let runtimeProtocol = 'http';
 
 /**
  * Start HTTPS web service
  */
 function startWebService() {
-  if (server) return;
+  if (server) {
+    return {
+      started: true,
+      mode: runtimeMode,
+      protocol: runtimeProtocol,
+      port: PORT,
+      host: HOST,
+    };
+  }
 
   app = express();
 
   // Middleware
   app.use(express.json());
   app.use(express.static(path.join(__dirname, '../public')));
-  
+
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -57,7 +67,7 @@ function startWebService() {
   app.get('/api/predictions', (req, res) => {
     // This will be populated by IPC from the Electron app
     const predictions = global.WECRYPTO_STATE?.predictions || {};
-    
+
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -71,7 +81,7 @@ function startWebService() {
    */
   app.get('/api/signals', (req, res) => {
     const signals = global.WECRYPTO_STATE?.signals || {};
-    
+
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -85,7 +95,7 @@ function startWebService() {
    */
   app.get('/api/settlements', (req, res) => {
     const settlements = global.WECRYPTO_STATE?.settlements || [];
-    
+
     res.json({
       success: true,
       record_count: settlements.length,
@@ -99,7 +109,7 @@ function startWebService() {
    */
   app.get('/api/stats', (req, res) => {
     const stats = global.WECRYPTO_STATE?.stats || {};
-    
+
     res.json({
       success: true,
       stats: stats
@@ -112,7 +122,7 @@ function startWebService() {
    */
   app.get('/api/kalshi-markets', (req, res) => {
     const markets = global.WECRYPTO_STATE?.kalshiMarkets || {};
-    
+
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -126,7 +136,7 @@ function startWebService() {
    */
   app.get('/api/network-status', (req, res) => {
     const networkStatus = global.WECRYPTO_STATE?.networkStatus || {};
-    
+
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -140,7 +150,7 @@ function startWebService() {
    */
   app.get('/api/status', (req, res) => {
     const uptime = process.uptime();
-    
+
     res.json({
       success: true,
       system: {
@@ -199,15 +209,21 @@ function startWebService() {
       };
       server = https.createServer(options, app);
       console.log('[WebService] Using HTTPS');
+      runtimeMode = 'https';
+      runtimeProtocol = 'https';
     } else {
       const http = require('http');
       server = http.createServer(app);
       console.log('[WebService] Using HTTP (fallback)');
+      runtimeMode = 'http-fallback';
+      runtimeProtocol = 'http';
     }
   } catch (e) {
     const http = require('http');
     server = http.createServer(app);
     console.log('[WebService] HTTPS setup failed, using HTTP:', e.message);
+    runtimeMode = 'http-fallback';
+    runtimeProtocol = 'http';
   }
 
   // WebSocket for live updates
@@ -215,7 +231,7 @@ function startWebService() {
 
   wss.on('connection', (ws) => {
     console.log('[WebService] WebSocket client connected');
-    
+
     // Send initial state
     ws.send(JSON.stringify({
       type: 'state',
@@ -237,6 +253,14 @@ function startWebService() {
     console.log(`[WebService] WECRYPTO web service running: ${protocol}://localhost:${PORT}`);
     console.log(`[WebService] Access via Edge: edge://open?url=https://localhost:${PORT}`);
   });
+
+  return {
+    started: true,
+    mode: runtimeMode,
+    protocol: runtimeProtocol,
+    port: PORT,
+    host: HOST,
+  };
 }
 
 /**
@@ -261,7 +285,7 @@ function updateState(stateUpdate) {
   }
   Object.assign(global.WECRYPTO_STATE, stateUpdate);
   global.WECRYPTO_STATE.lastUpdate = new Date().toISOString();
-  
+
   // Broadcast to all WebSocket clients
   broadcastUpdate('state', global.WECRYPTO_STATE);
 }
