@@ -16,6 +16,8 @@
   // ---- State ----
   let currentView = 'cfm';
   let _fetchAttempted = false;  // set after first fetchAll() completes (success or fail)
+  let _appBootTs = Date.now();
+  let _userInteractedWithNav = false;
   let coinFilter = 'all';
   let chartCoin = 'SOLUSD';
   let chartTf = '1h';
@@ -51,7 +53,13 @@
   let predictionRunTimeoutId = null;
   let _lastPredictionRunTs = 0;
   let _lastPredRenderTs = 0;
+  let _predictionEngineFailureCount = 0;
+  let _predictionEngineRetryAfterTs = 0;
+  let _predictionEngineRetryTimer = null;
+  let _predictionEngineLastError = '';
   let _asyncRefreshEngineBooted = false;
+  let _kalshiIpcWarnTs = 0;
+  let _kalshiIpcWasAvailable = null;
   let orbitalAnimationFrame = null;   // rAF handle for Market Universe orbital canvas
   let _rv = 0; // render version counter — increment on every render/refresh call so stale async renders can self-cancel
   let _observabilityCache = { sig: '', ts: 0, data: null };
@@ -64,8 +72,15 @@
   const KALSHI_ERR_STORE = 'beta1_kalshi_errors';
   const ORCH_LOG_STORE = 'beta1_orch_log';
   const KALSHI_TRAIL_STORE = 'beta1_kalshi_2m_trail';
+  const LOG_CAP = 250;
+  const LOG_BACKUP_COOLDOWN_MS = 15000;
+  const LOG_BACKUP_TARGETS = [
+    'Z:\\WECRYP\\logs',
+    'Z:\\My Drive\\WECRYP\\logs',
+  ];
   const TRADE_BELL_STORE = 'beta1_trade_setup_bell_v2';
   const LEGACY_TRADE_BELL_STORE = 'beta1_trade_setup_bell';
+  const HIGH_CONF_OVERLAY_STORE = 'beta1_high_conf_overlay_v1';
   const PREDICTION_RUN_TIMEOUT_MS = 25_000;
 
   function startPredictionRun() {
@@ -127,6 +142,7 @@
   window._orchLog = window._orchLog || [];
   // Trade setup bell preference + cooldown state
   let _tradeBellEnabled = true;
+  let _highConfidenceOverlayEnabled = true;
   let _tradeBellCtx = null;
   let _tradeBellLastGlobalTs = 0;
   let _tradeBellUnlockBound = false;
@@ -135,6 +151,102 @@
   let _contractBellLastTs = 0;
   const _contractBellTickerBySym = new Map();
   let _signalAudioLastPingTs = 0;
+
+  let _lastLogBackupTs = 0;
+  let _logBackupInFlight = false;
+
+  function capArray(arr, limit = LOG_CAP) {
+    if (!Array.isArray(arr)) return [];
+    return arr.slice(-limit);
+  }
+
+  function capTrailMap(mapObj, limit = LOG_CAP) {
+    const entries = Object.entries(mapObj || {});
+    if (entries.length <= limit) return mapObj || {};
+    return Object.fromEntries(entries.slice(-limit));
+  }
+
+  function capRuntimeLogs() {
+    window._predLog = capArray(window._predLog);
+    window._kalshiLog = capArray(window._kalshiLog);
+    window._kalshiErrors = capArray(window._kalshiErrors);
+    window._orchLog = capArray(window._orchLog);
+    window._kalshiPredictionTrail = capTrailMap(window._kalshiPredictionTrail);
+  }
+
+  function scheduleLogBackup(force = false) {
+    const now = Date.now();
+    if (!force && (now - _lastLogBackupTs) < LOG_BACKUP_COOLDOWN_MS) return;
+    if (_logBackupInFlight) return;
+    if (!window.dataStore?.ensureDir || !window.dataStore?.writeFile) return;
+
+    _lastLogBackupTs = now;
+    _logBackupInFlight = true;
+
+    setTimeout(async () => {
+      try {
+        capRuntimeLogs();
+        const snapshot = {
+          timestamp: new Date().toISOString(),
+          predLog: capArray(window._predLog),
+          kalshiLog: capArray(window._kalshiLog),
+          kalshiErrors: capArray(window._kalshiErrors),
+          orchLog: capArray(window._orchLog),
+          kalshiTrail: capTrailMap(window._kalshiPredictionTrail),
+        };
+        const payload = JSON.stringify(snapshot, null, 2);
+
+        await Promise.allSettled(LOG_BACKUP_TARGETS.map(async (dir) => {
+          await window.dataStore.ensureDir(dir);
+          await window.dataStore.writeFile(`${dir}\\wecrypto-log-backup.json`, payload);
+        }));
+      } catch (e) {
+        console.warn('[LogBackup] Z: backup failed:', e.message);
+      } finally {
+        _logBackupInFlight = false;
+      }
+    }, 0);
+  }
+
+  async function restoreLogsFromBackupIfNeeded() {
+    try {
+      const hasLocalLogs =
+        (Array.isArray(window._predLog) && window._predLog.length > 0) ||
+        (Array.isArray(window._kalshiLog) && window._kalshiLog.length > 0) ||
+        (Array.isArray(window._kalshiErrors) && window._kalshiErrors.length > 0) ||
+        (Array.isArray(window._orchLog) && window._orchLog.length > 0);
+
+      if (hasLocalLogs) return;
+      if (!window.dataStore?.readFile) return;
+
+      for (const dir of LOG_BACKUP_TARGETS) {
+        const fp = `${dir}\\wecrypto-log-backup.json`;
+        const res = await window.dataStore.readFile(fp);
+        if (!res?.ok || !res.content) continue;
+
+        const parsed = JSON.parse(res.content);
+        window._predLog = capArray(parsed.predLog);
+        window._kalshiLog = capArray(parsed.kalshiLog);
+        window._kalshiErrors = capArray(parsed.kalshiErrors);
+        window._orchLog = capArray(parsed.orchLog);
+        window._kalshiPredictionTrail = capTrailMap(parsed.kalshiTrail);
+        capRuntimeLogs();
+
+        try {
+          localStorage.setItem(PRED_LOG_STORE, JSON.stringify(window._predLog));
+          localStorage.setItem(KALSHI_LOG_STORE, JSON.stringify(window._kalshiLog));
+          localStorage.setItem(KALSHI_ERR_STORE, JSON.stringify(window._kalshiErrors));
+          localStorage.setItem(ORCH_LOG_STORE, JSON.stringify(window._orchLog));
+          localStorage.setItem(KALSHI_TRAIL_STORE, JSON.stringify(window._kalshiPredictionTrail));
+        } catch (_) { }
+
+        console.log(`[LogBackup] Restored logs from ${fp}`);
+        break;
+      }
+    } catch (e) {
+      console.warn('[LogBackup] Restore from backup failed:', e.message);
+    }
+  }
 
   // Restore persisted logs from localStorage on startup
   (function restorePersistedData() {
@@ -155,7 +267,19 @@
         _tradeBellEnabled = r === '1';
       }
     } catch (e) { }
+    try {
+      const r = localStorage.getItem(HIGH_CONF_OVERLAY_STORE);
+      if (r == null) {
+        _highConfidenceOverlayEnabled = true;
+        localStorage.setItem(HIGH_CONF_OVERLAY_STORE, '1');
+      } else {
+        _highConfidenceOverlayEnabled = r === '1';
+      }
+    } catch (e) { }
     try { localStorage.removeItem(LEGACY_TRADE_BELL_STORE); } catch (e) { }
+    capRuntimeLogs();
+    scheduleLogBackup(true);
+    setTimeout(() => { restoreLogsFromBackupIfNeeded(); }, 0);
   })();
 
   // ── Initialize 2-Hour Contract Cache + Multi-Drive Sync ──────────────────
@@ -218,14 +342,45 @@
     }
   })();
 
-  function savePredLog() { try { localStorage.setItem(PRED_LOG_STORE, JSON.stringify(window._predLog.slice(-200))); } catch (e) { } }
-  function saveKalshiLog() { try { localStorage.setItem(KALSHI_LOG_STORE, JSON.stringify(window._kalshiLog.slice(-500))); } catch (e) { } }
+  function savePredLog() {
+    try {
+      window._predLog = capArray(window._predLog);
+      localStorage.setItem(PRED_LOG_STORE, JSON.stringify(window._predLog));
+      scheduleLogBackup();
+    } catch (e) { }
+  }
+  function saveKalshiLog() {
+    try {
+      window._kalshiLog = capArray(window._kalshiLog);
+      localStorage.setItem(KALSHI_LOG_STORE, JSON.stringify(window._kalshiLog));
+      scheduleLogBackup();
+    } catch (e) { }
+  }
   function saveLastPred() { try { localStorage.setItem(LAST_PRED_STORE, JSON.stringify(window._lastPrediction)); } catch (e) { } }
   function saveLastKalshi() { try { localStorage.setItem(LAST_KALSHI_STORE, JSON.stringify(window._lastKalshiSnapshot)); } catch (e) { } }
-  function saveKalshiErrors() { try { localStorage.setItem(KALSHI_ERR_STORE, JSON.stringify(window._kalshiErrors.slice(-100))); } catch (e) { } }
-  function saveOrchLog() { try { localStorage.setItem(ORCH_LOG_STORE, JSON.stringify(window._orchLog.slice(-300))); } catch (e) { } }
-  function saveKalshiTrail() { try { localStorage.setItem(KALSHI_TRAIL_STORE, JSON.stringify(window._kalshiPredictionTrail)); } catch (e) { } }
+  function saveKalshiErrors() {
+    try {
+      window._kalshiErrors = capArray(window._kalshiErrors);
+      localStorage.setItem(KALSHI_ERR_STORE, JSON.stringify(window._kalshiErrors));
+      scheduleLogBackup();
+    } catch (e) { }
+  }
+  function saveOrchLog() {
+    try {
+      window._orchLog = capArray(window._orchLog);
+      localStorage.setItem(ORCH_LOG_STORE, JSON.stringify(window._orchLog));
+      scheduleLogBackup();
+    } catch (e) { }
+  }
+  function saveKalshiTrail() {
+    try {
+      window._kalshiPredictionTrail = capTrailMap(window._kalshiPredictionTrail);
+      localStorage.setItem(KALSHI_TRAIL_STORE, JSON.stringify(window._kalshiPredictionTrail));
+      scheduleLogBackup();
+    } catch (e) { }
+  }
   function saveTradeBellPref() { try { localStorage.setItem(TRADE_BELL_STORE, _tradeBellEnabled ? '1' : '0'); } catch (e) { } }
+  function saveHighConfidenceOverlayPref() { try { localStorage.setItem(HIGH_CONF_OVERLAY_STORE, _highConfidenceOverlayEnabled ? '1' : '0'); } catch (e) { } }
 
   window._journalPending = window._journalPending || {};
 
@@ -450,6 +605,13 @@
     return _tradeBellEnabled;
   }
 
+  function isHighConfidenceOverlayOn() { return !!_highConfidenceOverlayEnabled; }
+  function setHighConfidenceOverlayOn(next) {
+    _highConfidenceOverlayEnabled = !!next;
+    saveHighConfidenceOverlayPref();
+    return _highConfidenceOverlayEnabled;
+  }
+
   function trySystemBeep() {
     try {
       const shell = window?.require?.('electron')?.shell;
@@ -541,8 +703,13 @@
       if (!ctx) return;
       if (ctx.state === 'suspended') ctx.resume().catch(() => { });
       if (isTradeBellOn()) {
-        primeTradeBellSession();
-        playSignalHealthPing('unlock');
+        // Avoid blocking input handlers; prime + ping on next tick.
+        setTimeout(() => {
+          try {
+            primeTradeBellSession();
+            playSignalHealthPing('unlock');
+          } catch (_) { }
+        }, 0);
       }
       if (ctx.state === 'running') {
         window.removeEventListener('pointerdown', unlock, true);
@@ -740,7 +907,7 @@
   function logContractError(type, sym, data) {
     const entry = { type, sym, ts: Date.now(), tsIso: new Date().toISOString(), ...data };
     window._kalshiErrors.push(entry);
-    if (window._kalshiErrors.length > 100) window._kalshiErrors.shift();
+    if (window._kalshiErrors.length > LOG_CAP) window._kalshiErrors.shift();
     saveKalshiErrors();
     console.error(`[KalshiError] ${type} | ${sym}`, entry);
 
@@ -894,6 +1061,20 @@
     return null;
   }
 
+  function _normStrikeDir(v) {
+    const s = String(v || '').toLowerCase();
+    if (s === 'below' || s === 'under') return 'below';
+    if (s === 'above' || s === 'over' || s === 'at_least' || s === 'greater_or_equal') return 'above';
+    return 'above';
+  }
+
+  function _actualFromYNWithStrike(outcomeYN, strikeDir) {
+    if (outcomeYN !== 'YES' && outcomeYN !== 'NO') return null;
+    const yesDir = _normStrikeDir(strikeDir) === 'below' ? 'DOWN' : 'UP';
+    const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+    return outcomeYN === 'YES' ? yesDir : noDir;
+  }
+
   function _normalizeConfidence(v) {
     const n = _toNum(v);
     if (n == null) return null;
@@ -963,8 +1144,9 @@
     const ts = _toMs(row.ts ?? row.timestamp ?? row.entry_ts ?? row.open_ts ?? row.created_at);
     const settledTs = _toMs(row.settledts ?? row.settled_ts ?? row.resolved_at ?? row.close_ts);
     const modelDir = _normDir(row.modeldir ?? row.model_dir ?? row.direction ?? row.prediction);
-    const actualOutcome = _normDir(row.actualoutcome ?? row.actual_outcome ?? row.actual ?? row.outcome);
+    const actualOutcome = _normDir(row.actualoutcome ?? row.actual_outcome ?? row.actual);
     const outcomeYN = _normOutcomeYN(row.outcome ?? row.result ?? row.settle_result);
+    const strikeDir = _normStrikeDir(row.strikedir ?? row.strike_dir ?? row.strike ?? row.striketype ?? row.strike_type);
 
     return {
       source: 'csv',
@@ -973,7 +1155,7 @@
       ts,
       settledTs,
       modelDir,
-      actualOutcome: actualOutcome || (outcomeYN === 'YES' ? 'UP' : outcomeYN === 'NO' ? 'DOWN' : null),
+      actualOutcome: actualOutcome || _actualFromYNWithStrike(outcomeYN, strikeDir),
       outcomeYN,
       modelCorrect: row.modelcorrect != null
         ? (String(row.modelcorrect).toLowerCase() === 'true' ? true
@@ -1002,7 +1184,8 @@
     if (!sym) return null;
     const modelDir = _normDir(e.modelDir ?? e.direction ?? e.predDir);
     const outcomeYN = _normOutcomeYN(e.outcome ?? e.kalshiResult ?? e._kalshiResult);
-    const actualOutcome = _normDir(e.actualOutcome) || (outcomeYN === 'YES' ? 'UP' : outcomeYN === 'NO' ? 'DOWN' : null);
+    const strikeDir = _normStrikeDir(e._strikeDir ?? e.strikeDir ?? e.apiStrikeDir ?? e.strikeType);
+    const actualOutcome = _normDir(e.actualOutcome) || _actualFromYNWithStrike(outcomeYN, strikeDir);
     const entryProb = _normalizeConfidence(e.entryProb ?? e.confidence ?? e.modelConf);
     const entryConf = _normalizeConfidence(e.modelConf ?? e.confidence ?? e.entryProb);
     return {
@@ -1043,8 +1226,9 @@
     const sym = String(e.sym || e.coin || '').toUpperCase();
     if (!sym) return null;
     const modelDir = _normDir(e.modelDir ?? e.direction ?? e.predDir);
-    const actualOutcome = _normDir(e.actualOutcome ?? e.outcome);
+    const actualOutcome = _normDir(e.actualOutcome);
     const outcomeYN = _normOutcomeYN(e.kalshiResult ?? e.outcome ?? e.actualOutcome);
+    const strikeDir = _normStrikeDir(e._strikeDir ?? e.strikeDir ?? e.apiStrikeDir ?? e.strikeType);
     return {
       source: '15m-resolution',
       sym,
@@ -1052,7 +1236,7 @@
       ts: _toMs(e.ts),
       settledTs: _toMs(e.settledTs ?? e.resolved_at),
       modelDir,
-      actualOutcome: actualOutcome || (outcomeYN === 'YES' ? 'UP' : outcomeYN === 'NO' ? 'DOWN' : null),
+      actualOutcome: actualOutcome || _actualFromYNWithStrike(outcomeYN, strikeDir),
       outcomeYN,
       modelCorrect: e.modelCorrect === true ? true : e.modelCorrect === false ? false : null,
       marketCorrect: e.marketCorrect === true ? true : e.marketCorrect === false ? false : null,
@@ -1525,6 +1709,7 @@
   // ---- Sidebar nav ----
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      _userInteractedWithNav = true;
       currentView = btn.dataset.view;
       activateNav(currentView);
       persistUIState();
@@ -1820,11 +2005,24 @@
   // ---- Kalshi Prediction Markets — Real-time sentiment data ----
   async function fetchKalshiData() {
     try {
-      // Guard: only if window.Kalshi is available
-      if (!window.Kalshi) {
-        console.warn('[Kalshi] window.Kalshi API not available yet');
+      // Guard: only run when renderer bridge + Electron IPC are available.
+      const hasKalshiBridge = !!window.Kalshi;
+      const hasElectronIpc = typeof window.electron?.invoke === 'function';
+      if (!hasKalshiBridge || !hasElectronIpc) {
+        const now = Date.now();
+        if (_kalshiIpcWasAvailable !== false || (now - _kalshiIpcWarnTs) > 60000) {
+          console.warn('[Kalshi] IPC unavailable; skipping Kalshi fetch until Electron bridge is ready');
+          _kalshiIpcWarnTs = now;
+        }
+        _kalshiIpcWasAvailable = false;
+        window._kalshiSnapshot = null;
         return;
       }
+
+      if (_kalshiIpcWasAvailable === false) {
+        console.log('[Kalshi] IPC restored; Kalshi polling resumed');
+      }
+      _kalshiIpcWasAvailable = true;
 
       // Get markets (limit to top 100 by volume)
       const marketsRes = await window.Kalshi.getMarkets(100);
@@ -1858,7 +2056,12 @@
 
       console.log(`[Kalshi] Loaded ${marketsRes.count} markets, balance: $${balance}`);
     } catch (error) {
-      console.warn('[Kalshi] Fetch error:', error.message);
+      const msg = String(error?.message || error || 'unknown error');
+      const now = Date.now();
+      if (!msg.includes('Electron IPC not available') || (now - _kalshiIpcWarnTs) > 60000) {
+        console.warn('[Kalshi] Fetch error:', msg);
+        if (msg.includes('Electron IPC not available')) _kalshiIpcWarnTs = now;
+      }
       window._kalshiSnapshot = null;
     }
   }
@@ -1906,9 +2109,26 @@
 
     const syms = Object.values(symMap);
     const url = `${BIN_BASE}/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(syms))}`;
-    const res = await fetchWithTimeout(url, 5000);
-    if (!res.ok) throw new Error(`Binance tickers HTTP ${res.status}`);
-    const rows = await res.json();
+    let res = await fetchWithTimeout(url, 5000);
+    let rows = [];
+    if (res.ok) {
+      rows = await res.json();
+    } else if (res.status === 400) {
+      // Binance US rejects full batch when any symbol is unsupported.
+      const singleRows = [];
+      for (const symbol of syms) {
+        try {
+          const r = await fetchWithTimeout(`${BIN_BASE}/ticker/24hr?symbol=${encodeURIComponent(symbol)}`, 3000);
+          if (!r.ok) continue;
+          const one = await r.json();
+          if (one && one.symbol) singleRows.push(one);
+        } catch (_) { }
+      }
+      rows = singleRows;
+    } else {
+      throw new Error(`Binance tickers HTTP ${res.status}`);
+    }
+
     const inv = Object.fromEntries(Object.entries(symMap).map(([k, v]) => [v, k]));
     const result = rows
       .filter(r => inv[r.symbol])
@@ -1943,10 +2163,21 @@
     if (wsRows.length >= 4) return wsRows;
 
     const pairs = 'XBTUSD,ETHUSD,SOLUSD,XRPUSD,DOGEUSD,LTCUSD,XLMUSD,LINKUSD,XTZUSD,ADAUSD,ATOMUSD,DOTUSD,NEARUSD,AVAXUSD,UNIUSD,AAVEUSD';
-    const res = await fetchWithTimeout(
-      `https://api.kraken.com/0/public/Ticker?pair=${pairs}`,
-      5000
-    );
+    const url = `https://api.kraken.com/0/public/Ticker?pair=${pairs}`;
+
+    // Use resilient fetch with timeout and retry logic
+    let res;
+    if (window.resilientFetch) {
+      try {
+        res = await window.resilientFetch(url);
+      } catch (err) {
+        console.warn('[Kraken] resilientFetch failed, falling back to direct fetch:', err.message);
+        res = await fetchWithTimeout(url, 5000);
+      }
+    } else {
+      res = await fetchWithTimeout(url, 5000);
+    }
+
     if (!res.ok) throw new Error(`Kraken tickers HTTP ${res.status}`);
     const json = await res.json();
     if (json.error?.length) throw new Error(`Kraken: ${json.error[0]}`);
@@ -1987,8 +2218,14 @@
 
     const entries = Object.entries(COINBASE_PRODUCTS);
     const settled = await Promise.allSettled(
-      entries.map(([product, instrument]) =>
-        fetchWithTimeout(`${CB_BASE}/products/${product}/stats`, 5000)
+      entries.map(([product, instrument]) => {
+        const url = `${CB_BASE}/products/${product}/stats`;
+        // Use resilientFetch if available (adds retry + fallback), otherwise fetchWithTimeout
+        const promise = window.resilientFetch
+          ? window.resilientFetch(url)
+          : fetchWithTimeout(url, 5000);
+
+        return promise
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`CB ${r.status}`)))
           .then(data => {
             const last = parseFloat(data.last);
@@ -2010,8 +2247,8 @@
               source: 'coinbase',
             };
           })
-          .catch(() => null)
-      )
+          .catch(() => null);
+      })
     );
     const result = settled.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
     if (!result.length) throw new Error('Coinbase returned no usable tickers');
@@ -2492,7 +2729,10 @@
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 8000);
     try {
-      const res = await fetch(`https://eth.blockscout.com/api/v2/addresses/${address}/token-balances`, { signal: ctrl.signal });
+      // Try resilientFetch first (adds automatic retry + fallback to Etherscan)
+      const res = window.resilientFetch
+        ? await window.resilientFetch(`https://eth.blockscout.com/api/v2/addresses/${address}/token-balances`)
+        : await fetch(`https://eth.blockscout.com/api/v2/addresses/${address}/token-balances`, { signal: ctrl.signal });
       if (res.ok) { window._walletDataSource = 'blockscout'; return res.json(); }
     } catch (e) { if (e.name === 'AbortError') console.warn('[WE] Wallet fetch timed out'); }
     finally { clearTimeout(tid); }
@@ -2511,9 +2751,11 @@
       const result = await window.WalletCache.getTxs(address);
       return result.data;
     }
-    // Fallback
+    // Fallback: Use resilientFetch for automatic retry + fallback to Etherscan
     try {
-      const res = await fetch(`https://eth.blockscout.com/api/v2/addresses/${address}/transactions?limit=10`);
+      const res = window.resilientFetch
+        ? await window.resilientFetch(`https://eth.blockscout.com/api/v2/addresses/${address}/transactions?limit=10`)
+        : await fetch(`https://eth.blockscout.com/api/v2/addresses/${address}/transactions?limit=10`);
       if (res.ok) return res.json();
     } catch (_) { }
     return { items: [] };
@@ -2801,7 +3043,7 @@
 
       updateHeaderSummary();
       setFeedStatus('live', dataSource);
-      if (lastUpdate) lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
+      updateLastUpdateLabel();
       refreshActiveView(manual);
 
     } catch (err) {
@@ -2861,6 +3103,27 @@
       void fetchAll();
     }, interval);
     console.log(`[WE] Refresh timer set to ${interval}ms`);
+  }
+
+  // Live clock + last update age label (updates every second)
+  let lastUpdateTicker = null;
+  function updateLastUpdateLabel() {
+    if (!lastUpdate) return;
+    const utc4Now = new Date(Date.now() - (4 * 60 * 60 * 1000));
+    const utc4Clock = utc4Now.toISOString().slice(11, 19);
+    const lastTs = Number(window._lastTickerFetchTs || 0);
+    if (lastTs > 0) {
+      const ageSec = Math.max(0, Math.floor((Date.now() - lastTs) / 1000));
+      lastUpdate.textContent = `UTC-4 ${utc4Clock} · Updated ${ageSec}s ago`;
+    } else {
+      lastUpdate.textContent = `UTC-4 ${utc4Clock} · Waiting for first tick`;
+    }
+  }
+
+  function startLastUpdateTicker() {
+    if (lastUpdateTicker) clearInterval(lastUpdateTicker);
+    updateLastUpdateLabel();
+    lastUpdateTicker = setInterval(updateLastUpdateLabel, 1000);
   }
 
   // Countdown ticker — updates status badge every second to show seconds until next refresh
@@ -2985,7 +3248,13 @@
             );
 
             if (!isDuplicate) {
-              const _actualOutcome = String(contract.result).toUpperCase() === 'YES' ? 'UP' : 'DOWN';
+              const _resultIsYes = String(contract.result).toUpperCase() === 'YES';
+              const _historicalStrikeDir = String(contract.strikeType ?? contract.raw?.strike_type ?? 'above').toLowerCase() === 'below'
+                ? 'below'
+                : 'above';
+              const _actualOutcome = _resultIsYes
+                ? (_historicalStrikeDir === 'below' ? 'DOWN' : 'UP')
+                : (_historicalStrikeDir === 'below' ? 'UP' : 'DOWN');
               const _predictionDir = contract.modelCorrect === true
                 ? _actualOutcome
                 : contract.modelCorrect === false
@@ -3013,9 +3282,9 @@
             }
           });
 
-          // Keep _kalshiLog limited to 500 entries
-          if (window._kalshiLog.length > 500) {
-            window._kalshiLog = window._kalshiLog.slice(-500);
+          // Keep _kalshiLog limited to LOG_CAP entries
+          if (window._kalshiLog.length > LOG_CAP) {
+            window._kalshiLog = window._kalshiLog.slice(-LOG_CAP);
           }
           saveKalshiLog();
           if (currentView === 'log' || currentView === 'debuglog') render();
@@ -3546,7 +3815,7 @@
       signal: stored.signal
     };
     window._predLog.push(entry);
-    if (window._predLog.length > 200) window._predLog.shift();
+    if (window._predLog.length > LOG_CAP) window._predLog.shift();
     savePredLog();
 
     // ── Kalshi outcome tracking ───────────────────────────────────────────
@@ -3620,7 +3889,9 @@
           ticker: kSnap.ticker ?? null,
           strikeDir,
           outcome: yesResolved ? 'YES' : 'NO',
-          actualOutcome: yesResolved ? 'UP' : 'DOWN',
+          actualOutcome: yesResolved
+            ? (strikeDir === 'below' ? 'DOWN' : 'UP')
+            : (strikeDir === 'below' ? 'UP' : 'DOWN'),
           proxyOutcome: yesResolved ? 'YES' : 'NO',
           proxyConfidence,
           kYesPct: kSnap.kYesPct,
@@ -3658,14 +3929,14 @@
           predictionTrail2m: (window._kalshiPredictionTrail?.[kSnap.ticker]?.points || []).map(p => ({ ...p })),
         };
         window._kalshiLog.push(kEntry);
-        if (window._kalshiLog.length > 500) window._kalshiLog.shift();
+        if (window._kalshiLog.length > LOG_CAP) window._kalshiLog.shift();
         saveKalshiLog();
 
         // ── Record settlement in scorecard aggregator ─────────────────────
-        console.log(`[Settlement] Recording: ${sym} → ${yesResolved ? 'UP' : 'DOWN'} (aggregator=${!!window._aggregator})`);
+        console.log(`[Settlement] Recording: ${sym} → ${kEntry.actualOutcome} (aggregator=${!!window._aggregator})`);
         if (window._aggregator) {
           try {
-            const outcome = yesResolved ? 'UP' : 'DOWN';
+            const outcome = kEntry.actualOutcome;
             window._aggregator.recordSettlement(sym, 'kalshi', outcome, Date.now(), {
               strikeType: strikeDir,
               modelCorrect: kEntry.modelCorrect,
@@ -3683,7 +3954,7 @@
         // ── Record settlement in 2-hour contract cache (NEW) ──────────────
         if (window._contractCache) {
           try {
-            const outcome = yesResolved ? 'UP' : 'DOWN';
+            const outcome = kEntry.actualOutcome;
             window._contractCache.recordSettlement(
               sym,
               outcome,
@@ -3820,7 +4091,7 @@
       entry._canonical = canonical === true;
       entry._resolverSchemaVersion = schemaVersion || 'resolver.v1';
       entry.settledTs = entry.settledTs || Date.now();
-      entry.actualOutcome = authOutcomeYN === 'YES' ? 'UP' : 'DOWN';
+      entry.actualOutcome = outcome;
 
       _journalSettlement(sym, entry.actualOutcome, cbSettlePrice ?? entry.closePrice ?? null, {
         source: 'market15m:resolved',
@@ -4221,6 +4492,12 @@
     return addr ? addr.slice(0, 6) + '...' + addr.slice(-4) : '—';
   }
 
+  function formatUtc4Time(input) {
+    const ms = typeof input === 'number' ? input : new Date(input).getTime();
+    if (!Number.isFinite(ms)) return '—';
+    return new Date(ms - (4 * 60 * 60 * 1000)).toISOString().slice(11, 19);
+  }
+
   function updateHeaderSummary() {
     updateMarketSummary();
   }
@@ -4291,12 +4568,14 @@
     }
     function _countdown(iso) {
       if (!iso) return '—';
-      const ms = new Date(iso).getTime() - Date.now();
+      const closeMs = new Date(iso).getTime();
+      const ms = closeMs - Date.now();
+      const closeUtc4 = formatUtc4Time(closeMs);
       if (ms <= 0) return 'Settling…';
       const s = Math.floor(ms / 1000);
       const m = Math.floor(s / 60);
       const ss = s % 60;
-      return `${m}m ${ss < 10 ? '0' : ''}${ss}s`;
+      return `${m}m ${ss < 10 ? '0' : ''}${ss}s · UTC-4 ${closeUtc4}`;
     }
     function _side(prob, large) {
       if (prob == null) return '<span style="color:var(--color-text-faint)">—</span>';
@@ -4586,47 +4865,78 @@
   // Shows Kalshi 15M settlement history, per-coin accuracy, missed
   // opportunities, edge buffer zone analysis, and live velocity table.
   function renderDebugLog() {
-    const log = window.MarketResolver?.getLog?.() || [];
-    const missedOps = window.MarketResolver?.getMissedOpps?.() || [];
-    const zones = window.MarketResolver?.getBufferZones?.() || [];
+    const DEBUG_CAP = {
+      resolver: 800,
+      resolution: 800,
+      kalshi: 800,
+      historical: 1200,
+      missedOps: 300,
+      zones: 120,
+      pending: 120,
+    };
+    const _cap = (arr, n) => (Array.isArray(arr) ? arr.slice(-n) : []);
+
+    const resolverLog = _cap(window.MarketResolver?.getLog?.(), DEBUG_CAP.resolver);
+    const resolutionLog = _cap(window._15mResolutionLog, DEBUG_CAP.resolution);
+    const settledKalshiLog = _cap((window._kalshiLog || []).filter(
+      e => e?._settled || e?.modelCorrect !== null || e?.actualOutcome || e?.outcome
+    ), DEBUG_CAP.kalshi);
+    const missedOps = _cap(window.MarketResolver?.getMissedOpps?.(), DEBUG_CAP.missedOps);
+    const zones = _cap(window.MarketResolver?.getBufferZones?.(), DEBUG_CAP.zones);
     const vels = window.PredictionMarkets?.getAllVelocities?.() || {};
-    const pending = window.MarketResolver?.getPending?.() || [];
+    const pending = _cap(window.MarketResolver?.getPending?.(), DEBUG_CAP.pending);
 
-    // ── CRITICAL: Merge historical contracts into settlement data ──
-    const historical = window.getHistoricalContracts?.() || [];
-    const mergedLog = [...log];
+    // Historical backfill can be very heavy on some machines/drives.
+    // Keep it opt-in for debug stability.
+    const includeHistorical = window._debugIncludeHistorical === true;
+    const historical = includeHistorical
+      ? _cap(window.getHistoricalContracts?.(), DEBUG_CAP.historical)
+      : [];
+    const mergedLog = [
+      ...resolverLog,
+      ...resolutionLog,
+      ...settledKalshiLog,
+      ...historical.map(h => ({
+        sym: h.symbol,
+        ticker: h.ticker || `KX${h.symbol}15M`,
+        settledTs: h.ts || h.settledTs,
+        actualOutcome: h.actualOutcome || _actualFromYNWithStrike(
+          _normOutcomeYN(h.result || h.outcome),
+          h.strikeDir ?? h.strikeType ?? h.raw?.strike_type
+        ),
+        modelCorrect: h.modelCorrect ?? null,
+        modelDir: h.modelDir || h.direction || null,
+        source: 'historical-backtest',
+      })),
+    ];
 
-    // Add historical contracts that aren't already in real-time log
-    const existingKeys = new Set();
-    log.forEach(e => existingKeys.add(`${e.settledTs || e.ts}-${e.sym}`));
-
-    historical.forEach(h => {
-      const key = `${h.ts || h.settledTs}-${h.symbol}`;
-      if (!existingKeys.has(key)) {
-        mergedLog.push({
-          sym: h.symbol,
-          ticker: h.ticker || `KX${h.symbol}15M`,
-          settledTs: h.ts || h.settledTs,
-          actualOutcome: h.result || h.outcome,
-          modelCorrect: h.modelCorrect !== null ? h.modelCorrect : null,
-          source: 'historical-backtest',
-        });
-      }
-    });
-
-    // Sort by time
-    const allData = mergedLog.sort((a, b) => (b.settledTs || 0) - (a.settledTs || 0));
+    const seen = new Set();
+    const allData = mergedLog
+      .filter(Boolean)
+      .map(e => ({
+        ...e,
+        sym: (e.sym || e.symbol || e.coin || '').toUpperCase(),
+        settledTs: e.settledTs || e.timestamp || e.ts || null,
+      }))
+      .filter(e => !!e.sym && !!e.settledTs)
+      .filter(e => {
+        const key = `${e.sym}-${e.settledTs}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => (b.settledTs || 0) - (a.settledTs || 0));
 
     const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
 
     // ── Per-coin accuracy table ─────────────────────────────────────
+    const cachedAccuracyStats = window.getAccuracyStats?.();
     const accRows = COINS.map(sym => {
       const dataSource = window._accuracySource || 'auto';
 
       // Force historical-only mode if user selected it
       if (dataSource === 'historical') {
-        const stats = window.getAccuracyStats?.();
-        const symStats = stats?.bySymbol?.[sym];
+        const symStats = cachedAccuracyStats?.bySymbol?.[sym];
 
         if (symStats && symStats.total > 0) {
           const acc = symStats.winRate / 100;
@@ -4649,8 +4959,7 @@
       const a = window.MarketResolver?.getResolutionAccuracy?.(sym, 30);
 
       if (!a) {
-        const stats = window.getAccuracyStats?.();
-        const symStats = stats?.bySymbol?.[sym];
+        const symStats = cachedAccuracyStats?.bySymbol?.[sym];
 
         if (symStats && symStats.total > 0) {
           const acc = symStats.winRate / 100;
@@ -4717,7 +5026,7 @@
     }).join('');
 
     // ── Recent settlements ──────────────────────────────────────────
-    const recent = [...log].reverse().slice(0, 40);
+    const recent = allData.slice(0, 40);
     const settlementRows = recent.length ? recent.map(e => {
       const ts = new Date(e.settledTs || e.closeTimeMs).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       const badge = e.modelCorrect === true ? '<span style="color:var(--color-green);font-weight:800">✅ CORRECT</span>'
@@ -4793,8 +5102,9 @@
       <div style="padding:16px 20px;max-width:960px;">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
           <span style="font-size:16px;font-weight:800;letter-spacing:0.06em;">⚗ SETTLEMENT DEBUG LOG</span>
-          <span style="font-size:11px;color:var(--color-text-faint);background:var(--color-surface-2);padding:3px 8px;border-radius:4px">${log.length} settled · ${pending.length} pending · ${missedOps.length} missed opps</span>
+          <span style="font-size:11px;color:var(--color-text-faint);background:var(--color-surface-2);padding:3px 8px;border-radius:4px">${allData.length} settled · ${pending.length} pending · ${missedOps.length} missed opps</span>
           <button onclick="window.MarketResolver?.start?.(); window.refreshDebugLog?.()" style="margin-left:auto;padding:5px 12px;background:var(--color-accent);color:#fff;border:none;border-radius:5px;font-size:11px;cursor:pointer">⟳ Refresh</button>
+          <button onclick="window._debugIncludeHistorical = !window._debugIncludeHistorical; window.refreshDebugLog?.()" style="padding:5px 10px;background:var(--color-surface-2);color:var(--color-text);border:1px solid var(--color-border);border-radius:5px;font-size:11px;cursor:pointer" title="Historical data can be heavy and freeze slower systems.">${includeHistorical ? 'Historic: ON' : 'Historic: OFF'}</button>
         </div>
 
         ${card('📡 Live Kalshi Probability Velocity', tbl(
@@ -4827,7 +5137,7 @@
       pendingRows
     ))}
 
-        ${card(`📋 Settlement History (last 40 of ${log.length})`, tbl(
+        ${card(`📋 Settlement History (last 40 of ${allData.length})`, tbl(
       ['Time', 'Coin', 'Actual', 'Model', 'Pred Dir', 'Edge', 'Action', 'Kalshi%'],
       settlementRows
     ))}
@@ -8529,8 +8839,9 @@
 
           // Build debug context: split last contracts by UP/DOWN
           const allContracts = [...entries, ...resE, ...historical].sort((a, b) => (b.ts || b.settledTs || 0) - (a.ts || a.settledTs || 0));
-          const ups = allContracts.filter(e => (e.modelDir === 'UP' || e.direction === 'UP' || e.outcome === 'YES' || e._kalshiResult === 'YES')).slice(0, 3);
-          const downs = allContracts.filter(e => (e.modelDir === 'DOWN' || e.direction === 'DOWN' || e.outcome === 'NO' || e._kalshiResult === 'NO')).slice(0, 3);
+          const resolvedDir = (e) => e.actualOutcome || e.modelDir || e.direction || null;
+          const ups = allContracts.filter(e => resolvedDir(e) === 'UP').slice(0, 3);
+          const downs = allContracts.filter(e => resolvedDir(e) === 'DOWN').slice(0, 3);
 
           const detailsId = `scorecard-${coin.sym}-${idx}`;
           const debugHtml = `
@@ -8542,7 +8853,7 @@
                   ${ups.map(u => {
             const correct = u.modelCorrect === true ? '✓' : u.modelCorrect === false ? '✗' : '?';
             const dir = u.modelDir || u.direction || '?';
-            const actual = u._kalshiResult || u.kalshiResult || u.actualOutcome || u.outcome || '?';
+            const actual = u.actualOutcome || u._kalshiResult || u.kalshiResult || u.outcome || '?';
             const ts = new Date(u.ts || u.settledTs || 0).toISOString().slice(11, 19);
             return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(76,175,80,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
           }).join('')}
@@ -8553,7 +8864,7 @@
                   ${downs.map(d => {
             const correct = d.modelCorrect === true ? '✓' : d.modelCorrect === false ? '✗' : '?';
             const dir = d.modelDir || d.direction || '?';
-            const actual = d._kalshiResult || d.kalshiResult || d.actualOutcome || d.outcome || '?';
+            const actual = d.actualOutcome || d._kalshiResult || d.kalshiResult || d.outcome || '?';
             const ts = new Date(d.ts || d.settledTs || 0).toISOString().slice(11, 19);
             return `<div style="font-size:9px;color:#aaa;margin:2px 0;padding:2px 4px;background:rgba(244,67,54,0.1);border-radius:2px">${correct} pred=${dir} result=${actual} <span style="color:#666">${ts}</span></div>`;
           }).join('')}
@@ -8813,18 +9124,67 @@
 
   async function renderPredictions() {
     const _myRV = _rv; // capture version — bail after any await if stale
+    const nowTs = Date.now();
+
+    const engine = window.PredictionEngine;
+    const engineReady = !!engine?.getAll && !!engine?.getSession;
+    if (!engineReady) {
+      content.innerHTML = `<div class="card"><div class="card-body" style="padding:14px;color:var(--color-text-muted)">Prediction engine unavailable. Waiting for module load...</div></div>`;
+      return;
+    }
 
     // Fire-and-forget: start prediction engine in background if not yet loaded
-    if (!predsLoaded && !predictionRunInFlight) {
+    if (!predsLoaded && !predictionRunInFlight && nowTs >= _predictionEngineRetryAfterTs) {
       const predictionRun = startPredictionRun();
       predictionRun
-        .then(() => { _lastPredictionRunTs = Date.now(); predsLoaded = true; snapshotPredictions(); if (currentView === 'predictions') render(); })
-        .catch(e => { console.error('[Predictions] engine error:', e); if (currentView === 'predictions') render(); });
+        .then(() => {
+          _lastPredictionRunTs = Date.now();
+          _predictionEngineFailureCount = 0;
+          _predictionEngineRetryAfterTs = 0;
+          _predictionEngineLastError = '';
+          if (_predictionEngineRetryTimer) {
+            clearTimeout(_predictionEngineRetryTimer);
+            _predictionEngineRetryTimer = null;
+          }
+          predsLoaded = true;
+          snapshotPredictions();
+          if (currentView === 'predictions') render();
+        })
+        .catch(e => {
+          _predictionEngineFailureCount += 1;
+          const delayMs = Math.min(60_000, 1000 * Math.pow(2, Math.max(0, _predictionEngineFailureCount - 1)));
+          _predictionEngineRetryAfterTs = Date.now() + delayMs;
+          _predictionEngineLastError = String(e?.message || e || 'unknown error');
+          console.error(`[Predictions] engine error (retry in ${Math.round(delayMs / 1000)}s):`, e);
+
+          if (_predictionEngineRetryTimer) clearTimeout(_predictionEngineRetryTimer);
+          _predictionEngineRetryTimer = setTimeout(() => {
+            _predictionEngineRetryTimer = null;
+            if (currentView === 'predictions') render();
+          }, delayMs + 50);
+
+          if (currentView === 'predictions') {
+            content.innerHTML = `<div class="card"><div class="card-body" style="padding:14px;color:var(--color-text-muted)">Prediction engine temporarily unavailable. Retrying in ${Math.max(1, Math.ceil(delayMs / 1000))}s.<br><small style="opacity:.75">${escapeHtml(_predictionEngineLastError)}</small></div></div>`;
+          }
+        });
+    } else if (!predsLoaded && nowTs < _predictionEngineRetryAfterTs && currentView === 'predictions') {
+      const secLeft = Math.max(1, Math.ceil((_predictionEngineRetryAfterTs - nowTs) / 1000));
+      content.innerHTML = `<div class="card"><div class="card-body" style="padding:14px;color:var(--color-text-muted)">Prediction engine retry backoff active (${secLeft}s).<br><small style="opacity:.75">${escapeHtml(_predictionEngineLastError || 'waiting for recovery')}</small></div></div>`;
+      return;
     }
 
     if (_rv !== _myRV) return; // guard: stale render version
-    const preds = PredictionEngine.getAll();
-    const session = PredictionEngine.getSession();
+    let preds = {};
+    let session = null;
+    try {
+      preds = engine.getAll() || {};
+      session = engine.getSession?.() || null;
+    } catch (err) {
+      const msg = String(err?.message || err || 'unknown render error');
+      console.error('[Predictions] getAll/getSession failed:', err);
+      content.innerHTML = `<div class="card"><div class="card-body" style="padding:14px;color:var(--color-text-muted)">Prediction render failed: ${escapeHtml(msg)}</div></div>`;
+      return;
+    }
     const predArr = Object.values(preds).filter(p => p.sym);
     const bullCount = predArr.filter(p => p.signal === 'strong_bull' || p.signal === 'bullish').length;
     const bearCount = predArr.filter(p => p.signal === 'strong_bear' || p.signal === 'bearish').length;
@@ -8985,7 +9345,10 @@
 
       <!-- Prediction Cards Grid -->
       <div class="section-header"><span class="section-title">1-15 Minute UP / DOWN Calls</span>
-        <button class="btn-sm" id="rerunPreds" style="font-size:10px;padding:4px 10px">Refresh Analysis</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn-sm" id="toggleHighConfidenceOverlay" style="font-size:10px;padding:4px 10px">HC Overlay: ${isHighConfidenceOverlayOn() ? 'ON' : 'OFF'}</button>
+          <button class="btn-sm" id="rerunPreds" style="font-size:10px;padding:4px 10px">Refresh Analysis</button>
+        </div>
       </div>
       <div class="pred-grid">
         ${predArr.map(p => {
@@ -9022,6 +9385,15 @@
         content.innerHTML = `<div class="loading-screen"><div class="loader-ring"></div><p>Scoring UP/DOWN markets — routing inner shells first, then loading deeper confirmations...</p></div>`;
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         await renderPredictions();
+      });
+    }
+
+    const hcToggleBtn = document.getElementById('toggleHighConfidenceOverlay');
+    if (hcToggleBtn) {
+      hcToggleBtn.addEventListener('click', () => {
+        const next = !isHighConfidenceOverlayOn();
+        setHighConfidenceOverlayOn(next);
+        renderPredictions();
       });
     }
 
@@ -9097,6 +9469,47 @@
       verdictSource = 'model-uncertain';
     }
 
+    // Safety gate: avoid late/borderline calls that commonly flip wrong near settlement.
+    const tickerAgeMs = Math.max(0, Date.now() - Number(window._lastTickerFetchTs || 0));
+    const isTickerStale = tickerAgeMs > 8_000;
+    const msToClose = _k15mV?.closeTime
+      ? (new Date(_k15mV.closeTime).getTime() - Date.now())
+      : null;
+    const inSafetyWindow = Number.isFinite(msToClose)
+      && msToClose >= 0
+      && msToClose <= 5 * 60_000;
+    const isBorderlineStrike = Number.isFinite(_kAlignEarly?.gapPct)
+      ? Math.abs(_kAlignEarly.gapPct) < 0.08
+      : false;
+    const isWeakConviction = Math.abs(Number(p.score || 0)) < 0.18;
+    if (verdictDir !== 'wait' && inSafetyWindow && (isTickerStale || isBorderlineStrike || isWeakConviction)) {
+      verdictDir = 'wait';
+      verdictSource = isTickerStale
+        ? 'safety-stale-data'
+        : isBorderlineStrike
+          ? 'safety-borderline-strike'
+          : 'safety-weak-conviction';
+    }
+
+    // Targeted guard (ultra-late only): keep aggressive mispricing capture intact,
+    // but block semi-confidence crowd-conflict flips in the last seconds.
+    const confNorm = _normalizeConfidence(p.confidence) ?? 0;
+    const isSemiConfidence = confNorm >= 0.40 && confNorm < 0.70;
+    const isCrowdConflict =
+      kalshiDir !== null && modelDir !== 'wait' && modelDir !== kalshiDir;
+    const isUltraLateWindow =
+      Number.isFinite(msToClose) && msToClose >= 0 && msToClose <= 45_000;
+
+    if (
+      verdictDir !== 'wait' &&
+      isSemiConfidence &&
+      isCrowdConflict &&
+      isUltraLateWindow
+    ) {
+      verdictDir = 'wait';
+      verdictSource = 'safety-semi-confidence-ultra-late';
+    }
+
     // Fade flag: raw price direction conflicts with Kalshi crowd (informational only — betAction does NOT use this)
     const _fadeActive = kalshiDir !== null && modelDir !== 'wait' && modelDir !== kalshiDir;
     const _fadeSolid = _fadeActive && Math.abs(p.score) >= 0.20;
@@ -9141,6 +9554,60 @@
     const weakBadge = _isLightModel
       ? `<span class="pred-weak-warn" title="Low-conviction signal — backtest accuracy below 50%">⚡ WEAK</span>`
       : '';
+    const safetyBadge = verdictSource.startsWith('safety-')
+      ? `<span class="pred-weak-warn" title="Protected by safety gate (${verdictSource.replace('safety-', '')})">🛡 WAIT GUARD</span>`
+      : '';
+    const hcConfThreshold = 0.62;
+    const hcEdgeThreshold = 0.20;
+    const hcPass =
+      verdictDir !== 'wait' &&
+      !verdictSource.startsWith('safety-') &&
+      confNorm >= hcConfThreshold &&
+      compositeEdge >= hcEdgeThreshold;
+    const hcBadge = isHighConfidenceOverlayOn()
+      ? `<span class="pred-source-badge ${hcPass ? 'kalshi-align' : 'kalshi-fade'}" title="Advisory overlay only; does not alter model verdict routing">${hcPass ? '✅ HC PASS' : '⏸ HC HOLD'}</span>`
+      : '';
+    const hcRationale = (() => {
+      if (!isHighConfidenceOverlayOn()) return '';
+      if (hcPass) {
+        return `High-confidence overlay: PASS (conf ${Math.round(confNorm * 100)}%, edge ${compositeEdge.toFixed(2)}).`;
+      }
+      if (verdictDir === 'wait') {
+        return `High-confidence overlay: HOLD until model exits WAIT and clears confidence/edge thresholds.`;
+      }
+      if (verdictSource.startsWith('safety-')) {
+        return `High-confidence overlay: HOLD due to active safety guard.`;
+      }
+      if (confNorm < hcConfThreshold) {
+        return `High-confidence overlay: HOLD (confidence ${Math.round(confNorm * 100)}% < ${Math.round(hcConfThreshold * 100)}% threshold).`;
+      }
+      return `High-confidence overlay: HOLD (edge ${compositeEdge.toFixed(2)} < ${hcEdgeThreshold.toFixed(2)} threshold).`;
+    })();
+    const waitRationale = (() => {
+      if (verdictDir !== 'wait') return '';
+
+      const modelYesPct = Number(_kAlignEarly?.modelYesPct);
+      if (verdictSource === 'model-cdf-neutral' && Number.isFinite(modelYesPct)) {
+        return `Model thinking: CDF neutral at ${modelYesPct.toFixed(1)}% YES (needs >=58% for YES direction or <=42% for NO direction).`;
+      }
+      if (verdictSource === 'model-uncertain') {
+        return `Model thinking: low conviction score ${scoreStr} (needs >+0.12 for UP or <-0.12 for DOWN).`;
+      }
+      if (verdictSource === 'safety-stale-data') {
+        return `Model thinking: signal blocked by stale ticker data (${Math.round(tickerAgeMs / 1000)}s old) inside the 5-minute pre-close guard.`;
+      }
+      if (verdictSource === 'safety-borderline-strike') {
+        const gap = Number(_kAlignEarly?.gapPct);
+        return `Model thinking: strike gap too narrow (${Number.isFinite(gap) ? gap.toFixed(3) : 'n/a'}%) inside the 5-minute pre-close guard.`;
+      }
+      if (verdictSource === 'safety-weak-conviction') {
+        return `Model thinking: weak score ${scoreStr} in the 5-minute pre-close guard (requires stronger than ±0.18).`;
+      }
+      if (verdictSource === 'safety-semi-confidence-ultra-late') {
+        return `Model thinking: semi-confidence (${Math.round(confNorm * 100)}%) with crowd conflict in the last 45 seconds, so entry is blocked.`;
+      }
+      return `Model thinking: waiting for stronger directional confirmation.`;
+    })();
     const llmRegime = p.llm?.regime || p.diagnostics?.llmRegime || null;
     const llmConfidence = Number(p.llm?.confidence || p.diagnostics?.llmConfidence || 0);
     const llmNotes = String(p.llm?.notes || p.diagnostics?.llmNotes || '').trim();
@@ -9219,8 +9686,15 @@
     // Show both sides: Kalshi YES/NO prices + model P(≥ ref) / P(< ref).
     const _k15mCoin = window.PredictionMarkets?.getCoin(p.sym);
     const _k15m = _k15mCoin?.kalshi15m ?? null;
-    const _kProb = ind.mktSentiment?.kalshi ?? _k15m?.probability ?? null;
+    const _kProb = ind.mktSentiment?.kalshi ?? _k15m?.probability ?? _k15mCoin?.combinedProb ?? null;
     const _kAlign = p.projections?.p15?.kalshiAlign ?? null;
+
+    // Debug: log data availability on first few renders
+    const _debugKalshi = window._debugKalshiCount = (window._debugKalshiCount || 0) + 1;
+    if (_debugKalshi <= 3) {
+      console.log(`[kalshi15mRow] ${p.sym}: _k15mCoin=${!!_k15mCoin}, _k15m=${!!_k15m}, _kProb=${_kProb}, combinedProb=${_k15mCoin?.combinedProb}, mktSentiment.kalshi=${ind.mktSentiment?.kalshi}`);
+    }
+
     const kalshi15mRow = (() => {
       if (_kProb === null) return '';
 
@@ -9295,9 +9769,10 @@
       let countdown = '';
       if (_k15m?.closeTime) {
         const msl = new Date(_k15m.closeTime).getTime() - Date.now();
+        const closeUtc4 = formatUtc4Time(_k15m.closeTime);
         if (msl > 0) {
           const ts = Math.floor(msl / 1000);
-          countdown = ` <span class="k15-expiry" data-close-ms="${new Date(_k15m.closeTime).getTime()}">⏱ ${Math.floor(ts / 60)}m${String(ts % 60).padStart(2, '0')}s</span>`;
+          countdown = ` <span class="k15-expiry" data-close-ms="${new Date(_k15m.closeTime).getTime()}">⏱ ${Math.floor(ts / 60)}m${String(ts % 60).padStart(2, '0')}s · UTC-4 ${closeUtc4}</span>`;
         } else {
           countdown = ` <span class="k15-expiry k15-settling">⏱ SETTLING</span>`;
         }
@@ -9345,8 +9820,10 @@
             <span>·</span>
             <span>${p.confidence}% conf</span>
             ${_edgePpCard != null && _edgePpCard >= 10 ? `<span style="color:${_edgePpCard >= 20 ? 'var(--color-green)' : '#ffd700'};font-weight:800;font-size:9px;padding:1px 5px;border-radius:3px;background:${_edgePpCard >= 20 ? 'rgba(38,212,126,0.12)' : 'rgba(255,215,0,0.12)'}">${_edgePpCard}pp ${_fadeActive ? 'FADE' : 'EDGE'}</span>` : ''}
-            ${londonBadge}${calibBadge}${weakBadge}
+            ${londonBadge}${calibBadge}${weakBadge}${safetyBadge}${hcBadge}
           </div>
+          ${waitRationale ? `<div class="pred-verdict-rationale">${waitRationale}</div>` : ''}
+          ${hcRationale ? `<div class="pred-verdict-rationale">${hcRationale}</div>` : ''}
           ${ratPrimary ? `<div class="pred-verdict-rationale">${ratPrimary}</div>` : ''}
           ${llmNotes ? `<div class="pred-verdict-rationale" style="opacity:.82">🧠 ${escapeHtml(llmNotes.slice(0, 180))}</div>` : ''}
           <div class="pred-verdict-bar-wrap">
@@ -9919,6 +10396,8 @@
         <div class="depth-raw-panel">
           <div class="depth-panel-title">Raw Wall Data — Standing Walls (live)</div>
           <div id="depth-raw-walls" class="depth-raw-walls">Loading…</div>
+          <div class="depth-panel-title" style="margin-top:6px;">Depth Balance Analyzer</div>
+          <div id="depth-balance-analyzer" class="depth-raw-walls">Loading…</div>
         </div>
       </div>`;
 
@@ -9936,6 +10415,7 @@
     // Draw liquidity map and initial raw wall data
     requestAnimationFrame(() => drawLiqMap(selSym));
     setTimeout(() => updateDepthRawWalls(selSym), 500);
+    setTimeout(() => updateDepthAnalyzer(selSym), 500);
   }
 
   let _depthLiveCleanup = null;
@@ -10029,6 +10509,8 @@
       ${spreadHTML}
       <div class="ob-section-label bid">BID / SUPPORT</div>
       ${bidHTML || '<div class="ob-empty">Connecting…</div>'}`;
+
+    updateDepthAnalyzer(sym);
   }
 
   function updateDepthAlerts(sym) {
@@ -10083,6 +10565,88 @@
           <div style="font-size:0.68em;color:var(--color-red);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;margin-bottom:6px;">ASK WALLS — Resistance</div>
           ${makeRows(askWalls, 'ask')}
         </div>
+      </div>`;
+
+    updateDepthAnalyzer(sym);
+  }
+
+  function updateDepthAnalyzer(sym) {
+    const container = document.getElementById('depth-balance-analyzer');
+    if (!container) return;
+
+    const metrics = window.OB?.getBalanceMetrics?.(sym) || window.OB?.balanceMetrics?.[sym] || null;
+    if (!metrics) {
+      container.innerHTML = '<span style="color:var(--color-text-faint);font-size:0.8em;">Waiting for balance metrics…</span>';
+      return;
+    }
+
+    const fmtMoney = (v) => {
+      if (!Number.isFinite(v)) return '—';
+      if (v >= 1_000_000_000) return (v / 1_000_000_000).toFixed(2) + 'B';
+      if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + 'M';
+      if (v >= 1_000) return (v / 1_000).toFixed(1) + 'K';
+      return v.toFixed(0);
+    };
+
+    const fmtMid = (v) => {
+      if (!Number.isFinite(v)) return '—';
+      if (v >= 1000) return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      if (v >= 1) return v.toFixed(4);
+      return v.toFixed(6);
+    };
+
+    const imb = metrics.imbalance?.value || 0;
+    const band = metrics.imbalance?.band || 'balanced';
+    const wall = metrics.walls || {};
+    const dom = wall.dominantWallSide || 'none';
+    const ageSec = Math.max(0, Math.round((Date.now() - (metrics.ts || 0)) / 1000));
+    const totalNotional = (metrics.bidNotional || 0) + (metrics.askNotional || 0);
+    const confidence = totalNotional >= 50_000_000 ? 'high'
+      : totalNotional >= 10_000_000 ? 'medium'
+        : 'low';
+
+    const bandLabel = ({
+      balanced: 'balanced',
+      lean_bid: 'lean bid',
+      strong_bid: 'strong bid',
+      extreme_bid: 'extreme bid',
+      lean_ask: 'lean ask',
+      strong_ask: 'strong ask',
+      extreme_ask: 'extreme ask',
+    })[band] || band;
+
+    let read = 'Balanced book, no clear side dominance.';
+    if (band.includes('bid') && dom === 'bid') read = 'Bid pressure and support walls align (bullish microstructure).';
+    else if (band.includes('ask') && dom === 'ask') read = 'Ask pressure and resistance walls align (bearish microstructure).';
+    else if (band.includes('bid')) read = 'Bid pressure present, but wall structure is mixed.';
+    else if (band.includes('ask')) read = 'Ask pressure present, but wall structure is mixed.';
+    if (confidence === 'low') read += ' Low depth notional, treat signal as tentative.';
+    if (ageSec > 6) read += ' Data slightly stale; awaiting fresh ladder updates.';
+
+    const sig = [
+      sym,
+      fmtMid(metrics.mid),
+      (metrics.spreadPct || 0).toFixed(4),
+      fmtMoney(metrics.bidNotional),
+      fmtMoney(metrics.askNotional),
+      imb.toFixed(3),
+      band,
+      (wall.bidWallConcentration || 0).toFixed(2),
+      (wall.askWallConcentration || 0).toFixed(2),
+      dom,
+      confidence,
+      ageSec,
+    ].join('|');
+    if (container.dataset.sig === sig) return;
+    container.dataset.sig = sig;
+
+    container.innerHTML = `
+      <div style="padding:8px 14px;font-family:var(--font-mono);font-size:0.78em;line-height:1.5;color:var(--color-text-muted);">
+        <div>BALANCE ${sym}  mid ${fmtMid(metrics.mid)}  spr ${(metrics.spreadPct || 0).toFixed(4)}%  age ${ageSec}s</div>
+        <div>NOTIONAL  bid ${fmtMoney(metrics.bidNotional)}  ask ${fmtMoney(metrics.askNotional)}  skew ${imb >= 0 ? '+' : ''}${imb.toFixed(3)}</div>
+        <div>BAND  ${bandLabel}  conf ${confidence}</div>
+        <div>WALL CONC  bid ${(wall.bidWallConcentration || 0).toFixed(2)}  ask ${(wall.askWallConcentration || 0).toFixed(2)}  dom ${dom}</div>
+        <div>READ  ${read}</div>
       </div>`;
   }
 
@@ -10691,7 +11255,15 @@
     if (orbitalAnimationFrame) { cancelAnimationFrame(orbitalAnimationFrame); orbitalAnimationFrame = null; }
     syncPredictionRefresh();
 
-    if (!_fetchAttempted && Object.keys(tickers).length === 0 && currentView !== 'depth') {
+    const bootGateViews = new Set(['cfm', 'predictions', 'universe', 'markets', 'markets5m']);
+    const bootGateActive =
+      !_fetchAttempted &&
+      !_userInteractedWithNav &&
+      Object.keys(tickers).length === 0 &&
+      bootGateViews.has(currentView) &&
+      (Date.now() - _appBootTs) < 6000;
+
+    if (bootGateActive) {
       updateHeaderSummary();
       content.innerHTML = `<div class="loading-screen">
         <div class="loader-ring"></div>
@@ -10736,6 +11308,12 @@
     const kalshiLog = (window._kalshiLog || []).filter(e => e._settled).slice().reverse();
     const cacheSettlements = (window.MultiDriveCache?.data?.settlements || []).slice().reverse();
 
+    const contractId = (e) => {
+      const sym = (e.sym || e.symbol || e.coin || 'UNK').toUpperCase();
+      const ts = e.settledTs || e.timestamp || e.resolved_at || e.ts || 0;
+      return `${sym}-${ts}`;
+    };
+
     // Load localStorage cache
     let lsLog = [];
     try { lsLog = JSON.parse(localStorage.getItem('wc_contract_log') || '[]'); } catch (_) { }
@@ -10746,23 +11324,25 @@
 
     // Add runtime log first (most recent)
     runtimeLog.forEach(e => {
-      const id = `${e.sym}-${e.settledTs || e.ts}`;
+      const id = contractId(e);
       if (!seenIds.has(id)) {
-        allContracts.push({ ...e, _source: 'runtime' });
+        allContracts.push({ ...e, sym: (e.sym || e.symbol || e.coin || 'UNK').toUpperCase(), _source: 'runtime' });
         seenIds.add(id);
       }
     });
 
     // Add Kalshi log (Kalshi API data)
     kalshiLog.forEach(e => {
-      const id = `${e.sym}-${e.settledTs || e.ts}`;
+      const id = contractId(e);
       if (!seenIds.has(id)) {
+        const strikeDir = _normStrikeDir(e._strikeDir ?? e.strikeDir ?? e.apiStrikeDir ?? e.strikeType);
         allContracts.push({
-          sym: e.sym,
+          sym: (e.sym || e.symbol || e.coin || 'UNK').toUpperCase(),
           settledTs: e.settledTs || e.ts,
           ts: e.ts,
           modelDir: e.modelDir || e.direction,
-          actualOutcome: e._kalshiResult || e.kalshiResult,
+          actualOutcome: e.actualOutcome || _actualFromYNWithStrike(_normOutcomeYN(e.outcome), strikeDir),
+          kalshiResult: e._kalshiResult || e.kalshiResult || null,
           modelCorrect: e.modelCorrect,
           orchestratorAction: e.orchestratorAction,
           _source: 'kalshi'
@@ -10773,10 +11353,10 @@
 
     // Add cache settlements
     cacheSettlements.forEach(e => {
-      const id = `${e.coin}-${e.timestamp}`;
+      const id = contractId(e);
       if (!seenIds.has(id)) {
         allContracts.push({
-          sym: e.coin,
+          sym: (e.sym || e.symbol || e.coin || 'UNK').toUpperCase(),
           settledTs: e.timestamp,
           ts: e.timestamp,
           actualOutcome: e.outcome?.toUpperCase(),
@@ -10789,9 +11369,9 @@
 
     // Add localStorage cache
     lsLog.forEach(e => {
-      const id = `${e.sym}-${e.settledTs || e.ts}`;
+      const id = contractId(e);
       if (!seenIds.has(id)) {
-        allContracts.push({ ...e, _source: 'localStorage' });
+        allContracts.push({ ...e, sym: (e.sym || e.symbol || e.coin || 'UNK').toUpperCase(), _source: 'localStorage' });
         seenIds.add(id);
       }
     });
@@ -11169,6 +11749,7 @@
   const _bootGuard = setTimeout(() => {
     if (Object.keys(tickers).length === 0) {
       console.warn('[boot] fetchAll timed out after 8s — forcing render with empty tickers');
+      _fetchAttempted = true;
       setFeedStatus('error');
       render();
     }
@@ -11208,6 +11789,7 @@
       clearTimeout(_bootGuard);
       resetTimer();
       startCountdownTicker();
+      startLastUpdateTicker();
       startAsyncRefreshEngine();
       // Stagger heavy background modules so they don't contend with first render
       startPythLazerStream();   // wire Lazer WS live ticker overlay
