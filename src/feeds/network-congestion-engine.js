@@ -52,12 +52,46 @@
     }
   };
 
+  function _readEnvLike(name) {
+    try {
+      if (typeof window !== 'undefined' && window.__env && window.__env[name]) return window.__env[name];
+    } catch (_) { }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const keyMap = {
+          ETHERSCAN_API_KEY: 'etherscanApiKey',
+          HELIUS_API_KEY: 'heliusApiKey',
+        };
+        const localKey = keyMap[name];
+        if (localKey) {
+          const v = localStorage.getItem(localKey);
+          if (v) return v;
+        }
+      }
+    } catch (_) { }
+    try {
+      if (typeof process !== 'undefined' && process && process.env && process.env[name]) return process.env[name];
+    } catch (_) { }
+    return '';
+  }
+
+  function _etherscanV2Url(module, action) {
+    const qs = new URLSearchParams({
+      chainid: '1',
+      module: String(module || ''),
+      action: String(action || ''),
+    });
+    const apiKey = _readEnvLike('ETHERSCAN_API_KEY');
+    if (apiKey) qs.set('apikey', apiKey);
+    return `https://api.etherscan.io/v2/api?${qs.toString()}`;
+  }
+
   // ── Fetch ETH gas with fallback sources ──
   async function fetchETHGas() {
     try {
-      // Primary: Etherscan proxy gasPrice (no API key)
+      // Primary: Etherscan V2 proxy gasPrice
       const etherscanProxy = await Promise.race([
-        fetch('https://api.etherscan.io/api?module=proxy&action=eth_gasPrice', { signal: AbortSignal.timeout(8000) })
+        fetch(_etherscanV2Url('proxy', 'eth_gasPrice'), { signal: AbortSignal.timeout(8000) })
           .then(r => r.ok ? r.json() : null),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
       ]).catch(() => null);
@@ -73,9 +107,9 @@
         };
       }
 
-      // Fallback: Etherscan GasTracker
+      // Fallback: Etherscan V2 GasTracker
       const etherscan = await Promise.race([
-        fetch('https://api.etherscan.io/api?module=gastracker&action=gasoracle',
+        fetch(_etherscanV2Url('gastracker', 'gasoracle'),
           { signal: AbortSignal.timeout(8000) })
           .then(r => r.json()),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
@@ -137,7 +171,7 @@
         // Try: mempool.space/api/v1/fees/recommended (with resilientFetch fallback)
         try {
           const feeRes = window.resilientFetch
-            ? await window.resilientFetch('https://mempool.space/api/fees/recommended')
+            ? await window.resilientFetch('https://mempool.space/api/v1/fees/recommended')
             : await fetch('https://mempool.space/api/v1/fees/recommended',
               { signal: AbortSignal.timeout(5000) });
           if (feeRes?.ok) fees = await feeRes.json();
@@ -173,9 +207,12 @@
   async function fetchSOLMetrics() {
     const SOL_RPCS = [
       'https://api.mainnet-beta.solana.com',
-      'https://rpc.ankr.com/solana',
       'https://solana-api.projectserum.com',
     ];
+    const heliusKey = _readEnvLike('HELIUS_API_KEY');
+    if (heliusKey) {
+      SOL_RPCS.splice(1, 0, `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}`);
+    }
 
     for (const rpc of SOL_RPCS) {
       try {

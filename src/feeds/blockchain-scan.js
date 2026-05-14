@@ -45,6 +45,48 @@
     return 'NEUTRAL';
   }
 
+  function _readEnvLike(name) {
+    try {
+      if (typeof window !== 'undefined' && window.__env && window.__env[name]) return window.__env[name];
+    } catch (_) { }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const keyMap = {
+          ETHERSCAN_API_KEY: 'etherscanApiKey',
+          HELIUS_API_KEY: 'heliusApiKey',
+        };
+        const localKey = keyMap[name];
+        if (localKey) {
+          const v = localStorage.getItem(localKey);
+          if (v) return v;
+        }
+      }
+    } catch (_) { }
+    try {
+      if (typeof process !== 'undefined' && process && process.env && process.env[name]) return process.env[name];
+    } catch (_) { }
+    return '';
+  }
+
+  function _etherscanV2Url(module, action) {
+    const qs = new URLSearchParams({
+      chainid: '1',
+      module: String(module || ''),
+      action: String(action || ''),
+    });
+    const apiKey = _readEnvLike('ETHERSCAN_API_KEY');
+    if (apiKey) qs.set('apikey', apiKey);
+    return `https://api.etherscan.io/v2/api?${qs.toString()}`;
+  }
+
+  function _solRpcNodes() {
+    const nodes = ['https://api.mainnet-beta.solana.com'];
+    const heliusKey = _readEnvLike('HELIUS_API_KEY');
+    if (heliusKey) nodes.push(`https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}`);
+    nodes.push('https://solana-api.projectserum.com');
+    return nodes;
+  }
+
   async function safeJson(url, opts) {
     // Route POST requests through Tauri bouncer (bypasses WebView2 CORS)
     const isPost = opts && opts.method && opts.method.toUpperCase() === 'POST';
@@ -104,7 +146,7 @@
           'https://mempool.space/api/mempool',
         ]),
         safeJsonAny([
-          'https://mempool.space/api/fees/recommended',
+          'https://mempool.space/api/v1/fees/recommended',
         ]),
         safeJsonAny([
           'https://mempool.space/api/blocks/tip/height',
@@ -140,8 +182,8 @@
   async function fetchETH() {
     try {
       const [blockR, gasR] = await Promise.allSettled([
-        safeJson('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber'),
-        safeJson('https://api.etherscan.io/api?module=gastracker&action=gasoracle'),
+        safeJson(_etherscanV2Url('proxy', 'eth_blockNumber')),
+        safeJson(_etherscanV2Url('gastracker', 'gasoracle')),
       ]);
       const block = blockR.status === 'fulfilled' ? parseInt(blockR.value?.result, 16) || 0 : 0;
       const gas = gasR.status === 'fulfilled' ? gasR.value?.result || {} : {};
@@ -172,11 +214,7 @@
   }
 
   // ── SOL — Solana mainnet JSON-RPC (multiple fallbacks) ─────────────────
-  const SOL_RPC_NODES = [
-    'https://api.mainnet-beta.solana.com',      // Public, no auth
-    'https://rpc.ankr.com/solana',               // Ankr (may require auth)
-    'https://solana-api.projectserum.com',       // Project Serum (public)
-  ];
+  const SOL_RPC_NODES = _solRpcNodes();
 
   async function fetchSOL() {
     for (const SOL_RPC of SOL_RPC_NODES) {

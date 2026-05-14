@@ -69,6 +69,18 @@ contextBridge.exposeInMainWorld('wecryp', {
   tideForecast: async (payload) => {
     return await ipcRenderer.invoke('google:tideForecast', payload);
   },
+  firebaseStatus: async () => {
+    return await ipcRenderer.invoke('firebase:status');
+  },
+  firebaseStartupCheck: async (options) => {
+    return await ipcRenderer.invoke('firebase:startupCheck', options || {});
+  },
+  appendInference: async (record) => {
+    return await ipcRenderer.invoke('firebase:appendInference', record || {});
+  },
+  getInferences: async (options) => {
+    return await ipcRenderer.invoke('firebase:getInferences', options || {});
+  },
 });
 
 contextBridge.exposeInMainWorld('dataStore', {

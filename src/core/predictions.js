@@ -4709,6 +4709,37 @@
     };
   }
 
+  function compactSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    return {
+      schemaVersion: snapshot.schemaVersion || null,
+      coin: snapshot.coin || snapshot.symbol || null,
+      horizonMinutes: Number(snapshot.horizonMinutes || snapshot.horizon || 0) || null,
+      asOfTs: snapshot.asOfTs || null,
+      currentPrice: toFiniteNumber(snapshot.currentPrice ?? snapshot.price, null),
+      windows: snapshot.windows && typeof snapshot.windows === 'object'
+        ? {
+          m1Count: Number(snapshot.windows.m1Count || 0) || 0,
+          m5Count: Number(snapshot.windows.m5Count || 0) || 0,
+          m15Count: Number(snapshot.windows.m15Count || 0) || 0,
+        }
+        : null,
+      market: snapshot.market && typeof snapshot.market === 'object'
+        ? {
+          modelDirection: snapshot.market.modelDirection || null,
+          confidencePct: toFiniteNumber(snapshot.market.confidencePct, null),
+          kalshiProb: toFiniteNumber(snapshot.market.kalshiProb, null),
+          combinedProb: toFiniteNumber(snapshot.market.combinedProb, null),
+        }
+        : null,
+    };
+  }
+
+  function appendCloudInferenceRecord(record) {
+    if (!window?.electron?.invoke) return;
+    window.electron.invoke('firebase:appendInference', record).catch(() => { });
+  }
+
   async function runInferenceOverlay(predictionsMap) {
     if (!window?.electron?.invoke) return [];
     if (inferenceRunPromise) return inferenceRunPromise;
@@ -4788,6 +4819,37 @@
               : [],
             llmNotes,
           };
+
+          if (window.DataLogger?.logLogicDebug) {
+            try {
+              window.DataLogger.logLogicDebug('llm', 'inference_overlay', {
+                sym: coin.sym,
+                regime: pred.llm.regime,
+                confidence: llmConfidencePct,
+                degraded: llmDegraded,
+                provider: pred.llm.provider,
+              });
+            } catch (_) { }
+          }
+
+          appendCloudInferenceRecord({
+            kind: 'llm_inference',
+            schemaVersion: 'wecrypto.inference.v1',
+            sym: coin.sym,
+            provider: pred.llm.provider || 'llm',
+            snapshot: compactSnapshot(snapshot),
+            output: {
+              regime: pred.llm.regime,
+              confidence: llmConfidencePct,
+              warnings: pred.llm.warnings.slice(0, 3),
+              notes: llmNotes.slice(0, 220),
+              degraded: llmDegraded,
+            },
+            diagnostics: {
+              cooldownRemainingMs: llmCooldownRemainingMs,
+              source: 'runInferenceOverlay',
+            },
+          });
 
           if (window.MultiDriveCache?.recordInference) {
             try {
@@ -4925,6 +4987,45 @@
             tideQueued: currentPred.tide.queued,
             tideError: currentPred.tide.error,
           };
+
+          if (window.DataLogger?.logLogicDebug) {
+            try {
+              window.DataLogger.logLogicDebug('tide', 'tide_forecast', {
+                sym: coin.sym,
+                direction: currentPred.tide.direction,
+                confidence: currentPred.tide.confidence,
+                mode: currentPred.tide.mode,
+                queued: currentPred.tide.queued,
+                error: currentPred.tide.error || null,
+              });
+            } catch (_) { }
+          }
+
+          appendCloudInferenceRecord({
+            kind: 'tide_forecast',
+            schemaVersion: snapshot.schemaVersion || 'wecrypto.tide.v1',
+            sym: coin.sym,
+            provider: 'vertex-tide',
+            snapshot: compactSnapshot(snapshot),
+            forecast: {
+              direction: currentPred.tide.direction,
+              confidence: currentPred.tide.confidence,
+              forecastPrice: currentPred.tide.forecastPrice,
+              quantiles: currentPred.tide.quantiles || null,
+              mode: currentPred.tide.mode,
+              queued: currentPred.tide.queued,
+              error: currentPred.tide.error || null,
+            },
+            diagnostics: {
+              source: 'runTideOverlay',
+            },
+            rawResponse: {
+              success: !!response?.success,
+              queued: !!response?.queued,
+              mode: response?.mode || null,
+              error: response?.error || null,
+            },
+          });
 
           return { coin: coin.sym, ok: true, mode: currentPred.tide.mode, queued: currentPred.tide.queued };
         } catch (error) {

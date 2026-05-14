@@ -14,6 +14,40 @@
   const RETRY_DELAY_MS = 500;
   const TIMEOUT_MS = 5000;  // 5s default timeout
 
+  function resolveRuntimeKey(name) {
+    try {
+      if (typeof window !== 'undefined' && window.__env && window.__env[name]) return window.__env[name];
+    } catch (_) { }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const keyMap = {
+          ETHERSCAN_API_KEY: 'etherscanApiKey',
+          HELIUS_API_KEY: 'heliusApiKey',
+        };
+        const localKey = keyMap[name];
+        if (localKey) {
+          const v = localStorage.getItem(localKey);
+          if (v) return v;
+        }
+      }
+    } catch (_) { }
+    try {
+      if (globalThis?.process?.env?.[name]) return globalThis.process.env[name];
+    } catch (_) { }
+    return '';
+  }
+
+  function etherscanV2Url(module, action) {
+    const qs = new URLSearchParams({
+      chainid: '1',
+      module: String(module || ''),
+      action: String(action || ''),
+    });
+    const apiKey = resolveRuntimeKey('ETHERSCAN_API_KEY');
+    if (apiKey) qs.set('apikey', apiKey);
+    return `https://api.etherscan.io/v2/api?${qs.toString()}`;
+  }
+
   // Fallback URLs for APIs that fail frequently
   const FALLBACK_URLS = {
     // Kraken → fallback to Binance for ticker data
@@ -41,10 +75,10 @@
     // Blockscout gas → fallback to etherscan
     'eth.blockscout.com/api/v2/gas-price-oracle': [
       url => url,
-      () => 'https://api.etherscan.io/api?module=proxy&action=eth_gasPrice',
+      () => etherscanV2Url('proxy', 'eth_gasPrice'),
     ],
     // Mempool → fallback to blockchain.info
-    'mempool.space/api/fees/recommended': [
+    'mempool.space/api/v1/fees/recommended': [
       url => url,
       () => 'https://api.blockchain.info/mempool/fees',
     ],
@@ -52,8 +86,10 @@
     'rpc.ankr.com': [
       url => url,
       () => {
-        const heliusKey = globalThis?.process?.env?.HELIUS_API_KEY || 'free';
-        return `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+        const heliusKey = resolveRuntimeKey('HELIUS_API_KEY');
+        return heliusKey
+          ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}`
+          : 'https://api.mainnet-beta.solana.com';
       },
     ],
   };

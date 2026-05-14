@@ -1,7 +1,7 @@
 // ================================================================
 // chain-router.js — Block Explorer Signal Router  v1.0
 // Multi-source real-time chain data: primary + fallback per coin
-// All endpoints: free, no API key required
+// Uses authenticated providers when keys are present, public endpoints otherwise.
 // ================================================================
 // Exports:  window.ChainRouter   (primary API)
 //           window.BlockchainScan (alias for backward compat)
@@ -94,6 +94,54 @@
     return 'NEUTRAL';
   }
 
+  function _readEnvLike(name) {
+    try {
+      if (typeof window !== 'undefined' && window.__env && window.__env[name]) return window.__env[name];
+    } catch (_) { }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const keyMap = {
+          ETHERSCAN_API_KEY: 'etherscanApiKey',
+          HELIUS_API_KEY: 'heliusApiKey',
+        };
+        const localKey = keyMap[name];
+        if (localKey) {
+          const v = localStorage.getItem(localKey);
+          if (v) return v;
+        }
+      }
+    } catch (_) { }
+    try {
+      if (typeof process !== 'undefined' && process && process.env && process.env[name]) return process.env[name];
+    } catch (_) { }
+    return '';
+  }
+
+  function _etherscanV2Url(module, action) {
+    const qs = new URLSearchParams({
+      chainid: '1',
+      module: String(module || ''),
+      action: String(action || ''),
+    });
+    const apiKey = _readEnvLike('ETHERSCAN_API_KEY');
+    if (apiKey) qs.set('apikey', apiKey);
+    return `https://api.etherscan.io/v2/api?${qs.toString()}`;
+  }
+
+  function _heliusRpcUrl() {
+    const key = _readEnvLike('HELIUS_API_KEY');
+    if (!key) return null;
+    return `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(key)}`;
+  }
+
+  function _solRpcCandidates() {
+    const urls = ['https://api.mainnet-beta.solana.com'];
+    const helius = _heliusRpcUrl();
+    if (helius) urls.push(helius);
+    urls.push('https://solana-api.projectserum.com');
+    return urls;
+  }
+
   // ── BTC: mempool.space (primary, v1 endpoints deprecated) ───
 
   async function btcMempool() {
@@ -102,7 +150,7 @@
         'https://mempool.space/api/mempool',
       ]),
       getJsonAny([
-        'https://mempool.space/api/fees/recommended',
+        'https://mempool.space/api/v1/fees/recommended',
       ]),
       getJsonAny([
         'https://mempool.space/api/blocks/tip/height',
@@ -144,20 +192,16 @@
   async function ethBlockscout() {
     const [sR, pR] = await Promise.allSettled([
       getJson('https://eth.blockscout.com/api/v2/stats'),
-      getJson('https://api.etherscan.io/api?module=proxy&action=eth_gasPrice'),
+      getJson(_etherscanV2Url('gastracker', 'gasoracle')),
     ]);
     const s = sR.status === 'fulfilled' && sR.value && typeof sR.value === 'object' ? sR.value : {};
     const p = pR.status === 'fulfilled' && pR.value && typeof pR.value === 'object' ? pR.value : {};
 
     const txsTodayRaw = s.transactions_today ?? s.transactionsToday ?? s.txs_today ?? 0;
     const txsToday = parseInt(txsTodayRaw, 10) || 0;
-    const gasFromProxy = (() => {
-      const wei = p?.result ? parseInt(p.result, 16) || 0 : 0;
-      return wei > 0 ? (wei / 1e9) : 0;
-    })();
-    const gasAvgRaw = gasFromProxy || 0;
-    const gasFastRaw = gasFromProxy || gasAvgRaw || 0;
-    const gasSlowRaw = gasFromProxy || gasAvgRaw || 0;
+    const gasAvgRaw = parseFloat(p?.result?.ProposeGasPrice || p?.result?.suggestBaseFee || 0) || 0;
+    const gasFastRaw = parseFloat(p?.result?.FastGasPrice || gasAvgRaw || 0) || 0;
+    const gasSlowRaw = parseFloat(p?.result?.SafeGasPrice || gasAvgRaw || 0) || 0;
 
     const gasAvg = parseFloat(gasAvgRaw) || 0;
     const gasFast = parseFloat(gasFastRaw) || 0;
@@ -188,8 +232,8 @@
 
   async function ethEtherscan() {
     const [bR, gR] = await Promise.allSettled([
-      getJson('https://api.etherscan.io/api?module=proxy&action=eth_blockNumber'),
-      getJson('https://api.etherscan.io/api?module=proxy&action=eth_gasPrice'),
+      getJson(_etherscanV2Url('proxy', 'eth_blockNumber')),
+      getJson(_etherscanV2Url('gastracker', 'gasoracle')),
     ]);
     const bRes = bR.status === 'fulfilled' ? bR.value : null;
     const gRes = gR.status === 'fulfilled' ? gR.value : null;
@@ -198,8 +242,7 @@
     if (!bRes || !gRes) throw new Error('Etherscan proxy empty');
 
     const block = bRes?.result ? parseInt(bRes.result, 16) || 0 : 0;
-    const gasWei = gRes?.result ? parseInt(gRes.result, 16) || 0 : 0;
-    const gasGwei = gasWei / 1e9;
+    const gasGwei = parseFloat(gRes?.result?.ProposeGasPrice || gRes?.result?.SafeGasPrice || 0) || 0;
     if (!block && !gasGwei) throw new Error('Etherscan proxy empty');
     const score = gasGwei > 60 ? 0.50 : gasGwei > 25 ? 0.20 : gasGwei < 5 ? -0.15 : 0;
     return {
@@ -559,9 +602,7 @@
     { sym: 'ETH', handlers: [ethEtherscan, ethBlockscout] },
     {
       sym: 'SOL', handlers: [
-        () => solRpc('https://api.mainnet-beta.solana.com'),
-        () => solRpc('https://rpc.ankr.com/solana'),
-        () => solRpc(`https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY || 'free'}`),
+        ..._solRpcCandidates().map((url) => () => solRpc(url)),
       ]
     },
     {

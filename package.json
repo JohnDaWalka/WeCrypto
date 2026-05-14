@@ -79,6 +79,7 @@
     "@pythnetwork/pyth-lazer-sdk": "^6.2.2",
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
+    "firebase": "^12.13.0",
     "firebase-admin": "^12.7.0",
     "kalshi-typescript": "^3.15.0",
     "selfsigned": "^5.5.0",
