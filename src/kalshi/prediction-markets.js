@@ -22,40 +22,46 @@
   'use strict';
 
   const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
-  const POLY_GAMMA  = 'https://gamma-api.polymarket.com';
-  const POLY_CLOB   = 'https://clob.polymarket.com';
+  const POLY_GAMMA = 'https://gamma-api.polymarket.com';
+  const POLY_CLOB = 'https://clob.polymarket.com';
   // 15-second refresh — keeps Yes/No vote initialization tightly synced to
   // active 15M contracts, especially during boundary rollovers.
   const POLL_MS = 15_000;
+  const KALSHI_MARKET_LIMIT = 25;
+  const BUCKET_MS_15M = 15 * 60_000;
+  const BUCKET_MS_5M = 5 * 60_000;
+  const MIN_TRADABLE_MS_15M = 45_000;
+  const MIN_TRADABLE_MS_5M = 20_000;
+  const MIN_TRADABLE_MS_15M_PROXY = 30_000;
 
   // Direct 15-minute UP/DOWN series: YES = price higher in 15 min
   const KALSHI_15M_SERIES = {
-    BTC:  'KXBTC15M',
-    ETH:  'KXETH15M',
-    SOL:  'KXSOL15M',
-    XRP:  'KXXRP15M',
+    BTC: 'KXBTC15M',
+    ETH: 'KXETH15M',
+    SOL: 'KXSOL15M',
+    XRP: 'KXXRP15M',
     DOGE: 'KXDOGE15M',
-    BNB:  'KXBNB15M',
+    BNB: 'KXBNB15M',
     HYPE: 'KXHYPE15M',
   };
 
   // Direct 5-minute UP/DOWN series — BNB/HYPE gracefully null if not live on Kalshi
   const KALSHI_5M_SERIES = {
-    BTC:  'KXBTC5M',
-    ETH:  'KXETH5M',
-    SOL:  'KXSOL5M',
-    XRP:  'KXXRP5M',
+    BTC: 'KXBTC5M',
+    ETH: 'KXETH5M',
+    SOL: 'KXSOL5M',
+    XRP: 'KXXRP5M',
     DOGE: 'KXDOGE5M',
   };
 
   // Polymarket keyword fallback for coins not covered by series
   const COIN_KEYWORDS = {
-    BTC:  ['bitcoin', 'btc'],
-    ETH:  ['ethereum', 'eth'],
-    SOL:  ['solana', 'sol'],
-    XRP:  ['xrp', 'ripple'],
+    BTC: ['bitcoin', 'btc'],
+    ETH: ['ethereum', 'eth'],
+    SOL: ['solana', 'sol'],
+    XRP: ['xrp', 'ripple'],
     DOGE: ['dogecoin', 'doge'],
-    BNB:  ['binance', 'bnb'],
+    BNB: ['binance', 'bnb'],
     HYPE: ['hyperliquid', 'hype'],
   };
 
@@ -64,10 +70,11 @@
   // Max end_date offset for "short-term" Polymarket proxy (60 minutes)
   const POLY_SHORT_WINDOW_MS = 60 * 60_000;
 
-  let cache      = {};
-  let lastFetch  = 0;
-  let inFlight   = null;
-  let timer      = null;
+  let cache = {};
+  let lastFetch = 0;
+  let inFlight = null;
+  let timer = null;
+  let _quarterDebugTicksRemaining = 80; // ~20 minutes at 15s poll
   // Rate-limit state: if non-zero, skip fetching until this timestamp
   let _rateLimitUntil = 0;
   let _consecutive429 = 0;
@@ -84,7 +91,14 @@
       try {
         const txt = await window.suppFetch(url, opts);
         return typeof txt === 'string' ? JSON.parse(txt) : txt;
-      } catch {}
+      } catch { }
+    }
+    // Try IPC fetch (main process, no CORS) when running in Electron
+    if (window.electron?.ipcFetch) {
+      try {
+        const r = await window.electron.ipcFetch(url, opts);
+        if (r.ok) return typeof r.text === 'string' ? JSON.parse(r.text) : r.text;
+      } catch { }
     }
     const res = await fetch(url, { headers: { Accept: 'application/json' }, ...opts });
     if (!res.ok) throw new Error(res.status);
@@ -145,74 +159,97 @@
     }
   }
 
-  // ---- Generic Kalshi series fetch ------------------------------------
-  // Used for both 15M and 5M series — pass a windowMin for the fallback search.
+  function toMs(ts) {
+    const n = new Date(ts).getTime();
+    return Number.isFinite(n) ? n : null;
+  }
 
-  async function fetchKalshiSeriesForSym(series) {
-    // Fetch up to 5 open markets, pick the one closing soonest (nearest-expiry signal)
-    let d = await kalshiFetch(`${KALSHI_BASE}/markets?series_ticker=${series}&status=open&limit=5`);
-    if (!d) {
-      console.warn(`[PredictionMarkets] No data returned from Kalshi for series ${series}`);
-      return null;
-    }
-    const now = Date.now();
-    let m = (d?.markets || [])
-      .filter(mk => { const t = new Date(mk.close_time).getTime(); return Number.isFinite(t) && t > now + 30_000; })
-      .sort((a, b) => new Date(a.close_time) - new Date(b.close_time))[0] || null;
-    if (!m) {
-      console.warn(`[PredictionMarkets] No open markets found for series ${series}. Markets available: ${d?.markets?.length || 0}`);
-      return null;
-    }
+  function ceilToBucket(ms, bucketMs) {
+    return Math.ceil(ms / bucketMs) * bucketMs;
+  }
 
-    const yesAsk = parseFloat(m.yes_ask_dollars  || 0);
-    const yesBid = parseFloat(m.yes_bid_dollars  || 0);
-    const noAsk  = parseFloat(m.no_ask_dollars   || 0);
-    const noBid  = parseFloat(m.no_bid_dollars   || 0);
-    const last   = parseFloat(m.last_price_dollars || 0);
+  function isQuarterHourClose(ms) {
+    const d = new Date(ms);
+    const m = d.getUTCMinutes();
+    return m === 0 || m === 15 || m === 30 || m === 45;
+  }
+
+  function selectKalshiContract(markets, options = {}) {
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const bucketMs = Number.isFinite(options.bucketMs) ? options.bucketMs : BUCKET_MS_15M;
+    const minTradableMs = Number.isFinite(options.minTradableMs) ? options.minTradableMs : 30_000;
+    const strictQuarterHour = !!options.strictQuarterHour;
+    const targetCloseMs = ceilToBucket(nowMs + minTradableMs, bucketMs);
+
+    const eligible = (Array.isArray(markets) ? markets : [])
+      .map(mk => ({ mk, closeMs: toMs(mk?.close_time) }))
+      .filter(x => x.closeMs != null && x.closeMs > nowMs + minTradableMs);
+
+    if (!eligible.length) return null;
+
+    const strictPool = strictQuarterHour
+      ? eligible.filter(x => isQuarterHourClose(x.closeMs))
+      : eligible;
+
+    const pool = strictPool.length ? strictPool : eligible;
+
+    pool.sort((a, b) => {
+      const da = Math.abs(a.closeMs - targetCloseMs);
+      const db = Math.abs(b.closeMs - targetCloseMs);
+      if (da !== db) return da - db;
+
+      const liqA = parseFloat(a.mk?.liquidity_dollars || 0) || 0;
+      const liqB = parseFloat(b.mk?.liquidity_dollars || 0) || 0;
+      if (liqA !== liqB) return liqB - liqA;
+
+      const volA = parseFloat(a.mk?.volume_fp || 0) || 0;
+      const volB = parseFloat(b.mk?.volume_fp || 0) || 0;
+      if (volA !== volB) return volB - volA;
+
+      return a.closeMs - b.closeMs;
+    });
+
+    return pool[0].mk;
+  }
+
+  function buildKalshiContractData(m, extra = {}) {
+    const yesAsk = parseFloat(m.yes_ask_dollars || 0);
+    const yesBid = parseFloat(m.yes_bid_dollars || 0);
+    const noAsk = parseFloat(m.no_ask_dollars || 0);
+    const noBid = parseFloat(m.no_bid_dollars || 0);
+    const last = parseFloat(m.last_price_dollars || 0);
 
     let probability = null;
-    if (yesAsk > 0 && yesBid > 0)      probability = (yesAsk + yesBid) / 2;
-    else if (yesAsk > 0)               probability = yesAsk;
-    else if (yesBid > 0)               probability = yesBid;
-    else if (noAsk > 0 && noBid > 0)   probability = 1 - (noAsk + noBid) / 2;
-    else if (last > 0)                 probability = last;
-    if (probability !== null)
+    if (yesAsk > 0 && yesBid > 0) probability = (yesAsk + yesBid) / 2;
+    else if (yesAsk > 0) probability = yesAsk;
+    else if (yesBid > 0) probability = yesBid;
+    else if (noAsk > 0 && noBid > 0) probability = 1 - (noAsk + noBid) / 2;
+    else if (last > 0) probability = last;
+    if (probability !== null) {
       probability = Math.min(0.99, Math.max(0.01, probability));
+    }
 
-    // ── Reference price: structured API fields only, no text parsing ────────
-    // Kalshi API note: as of 2026-04, `floor_price` became an empty string and
-    // the strike value moved to `floor_strike` (a raw number). We read both.
-    // cap_price / cap_strike — upper bound for range contracts.
-    // strike_type variants: 'above' | 'below' | 'at_least' | 'greater_or_equal' | 'exactly' | null
-    //   'above' / 'at_least' / 'greater_or_equal' → YES = close >= strike → YES = UP
-    //   'below'                                    → YES = close <  strike → YES = DOWN
     const floorStrike = m.floor_strike != null ? parseFloat(m.floor_strike) : null;
     const floorPriceRaw = m.floor_price != null ? parseFloat(m.floor_price) : null;
     const floorPrice = (Number.isFinite(floorStrike) && floorStrike > 0) ? floorStrike
-                     : (Number.isFinite(floorPriceRaw) && floorPriceRaw > 0) ? floorPriceRaw : null;
-    const capStrike  = m.cap_strike != null ? parseFloat(m.cap_strike) : null;
+      : (Number.isFinite(floorPriceRaw) && floorPriceRaw > 0) ? floorPriceRaw : null;
+    const capStrike = m.cap_strike != null ? parseFloat(m.cap_strike) : null;
     const capPriceRaw = m.cap_price != null ? parseFloat(m.cap_price) : null;
-    const capPrice   = (Number.isFinite(capStrike) && capStrike > 0) ? capStrike
-                     : (Number.isFinite(capPriceRaw) && capPriceRaw > 0) ? capPriceRaw : null;
-    const rawStrike  = m.strike_type ? String(m.strike_type).toLowerCase() : null;
-    const subtitle   = (m.yes_sub_title || m.subtitle || '');
+    const capPrice = (Number.isFinite(capStrike) && capStrike > 0) ? capStrike
+      : (Number.isFinite(capPriceRaw) && capPriceRaw > 0) ? capPriceRaw : null;
+    const rawStrike = m.strike_type ? String(m.strike_type).toLowerCase() : null;
+    const subtitle = (m.yes_sub_title || m.subtitle || '');
 
-    // Derive YES-side direction from the API field.
-    // Normalize all known Kalshi strike_type variants to 'above' | 'below'.
-    // Fall back to subtitle keyword scan only when strike_type is absent.
     let strikeDir = null;
     if (rawStrike) {
       if (rawStrike === 'below' || rawStrike === 'under') strikeDir = 'below';
       else if (rawStrike === 'above' || rawStrike === 'over' || rawStrike === 'at_least' || rawStrike === 'greater_or_equal') strikeDir = 'above';
     }
     if (!strikeDir) {
-      // subtitle fallback — last resort, never primary
       const sub = subtitle.toLowerCase();
       strikeDir = (sub.includes('below') || sub.includes('under')) ? 'below' : 'above';
     }
 
-    // Resolved reference price: prefer floor_strike/floor_price (direct numeric API fields).
-    // Only fall back to subtitle number extraction if both are absent/zero.
     let targetPriceNum = (Number.isFinite(floorPrice) && floorPrice > 0) ? floorPrice : null;
     if (targetPriceNum == null) {
       const numMatch = subtitle.replace(/[$,]/g, '').match(/\d+\.?\d*/);
@@ -222,34 +259,97 @@
 
     return {
       probability, yesAsk, yesBid, last,
-      status:      m.status,
-      closeTime:   m.close_time,
-      openTime:    m.open_time,
-      ticker:      m.ticker,
-      title:       m.title,
+      status: m.status,
+      closeTime: m.close_time,
+      openTime: m.open_time,
+      ticker: m.ticker,
+      title: m.title,
       subtitle,
-      strikeDir,        // 'above' | 'below' — which side of floor_price resolves YES
-      strikeType: rawStrike,   // raw strike_type from Kalshi API
-      floorPrice,       // direct numeric reference price from API
-      capPrice,         // upper bound for range contracts (null for above/below)
-      targetPrice, targetPriceNum,  // resolved ref price for downstream use
-      volume:       parseFloat(m.volume_fp        || 0),
-      liquidity:    parseFloat(m.liquidity_dollars || 0),
-      openInterest: parseFloat(m.open_interest_fp  || 0),
+      strikeDir,
+      strikeType: rawStrike,
+      floorPrice,
+      capPrice,
+      targetPrice,
+      targetPriceNum,
+      volume: parseFloat(m.volume_fp || 0),
+      liquidity: parseFloat(m.liquidity_dollars || 0),
+      openInterest: parseFloat(m.open_interest_fp || 0),
+      ...extra,
     };
+  }
+
+  // ---- Generic Kalshi series fetch ------------------------------------
+  // Used for both 15M and 5M series — pass a windowMin for the fallback search.
+
+  async function fetchKalshiSeriesForSym(series, opts = {}) {
+    const suppressWarnings = !!opts.suppressWarnings;
+    const bucketMs = Number.isFinite(opts.bucketMs)
+      ? opts.bucketMs
+      : (String(series).endsWith('15M') ? BUCKET_MS_15M : BUCKET_MS_5M);
+    const minTradableMs = Number.isFinite(opts.minTradableMs)
+      ? opts.minTradableMs
+      : (bucketMs === BUCKET_MS_15M ? MIN_TRADABLE_MS_15M : MIN_TRADABLE_MS_5M);
+    const strictQuarterHour = !!opts.strictQuarterHour;
+
+    let d = await kalshiFetch(`${KALSHI_BASE}/markets?series_ticker=${series}&status=open&limit=${KALSHI_MARKET_LIMIT}`);
+    if (!d) {
+      if (!suppressWarnings) {
+        console.warn(`[PredictionMarkets] No data returned from Kalshi for series ${series}`);
+      }
+      return null;
+    }
+
+    const m = selectKalshiContract(d?.markets || [], {
+      nowMs: Date.now(),
+      bucketMs,
+      minTradableMs,
+      strictQuarterHour,
+    });
+    if (!m) {
+      if (!suppressWarnings) {
+        console.warn(`[PredictionMarkets] No open markets found for series ${series}. Markets available: ${d?.markets?.length || 0}`);
+      }
+      return null;
+    }
+
+    return buildKalshiContractData(m);
   }
 
   // ---- Kalshi 15M (sequential with 200ms stagger to avoid burst rate limits) ---
 
   async function fetchKalshi15M() {
     const result = {};
-    const coins  = Object.keys(KALSHI_15M_SERIES);
+    const coins = Object.keys(KALSHI_15M_SERIES);
     for (let i = 0; i < coins.length; i++) {
-      const sym    = coins[i];
+      const sym = coins[i];
       const series = KALSHI_15M_SERIES[sym];
       if (i > 0) await new Promise(r => setTimeout(r, 50)); // stagger — was 200ms
-      result[sym] = await fetchKalshiSeriesForSym(series);
+      result[sym] = await fetchKalshiSeriesForSym(series, {
+        bucketMs: BUCKET_MS_15M,
+        minTradableMs: MIN_TRADABLE_MS_15M,
+        strictQuarterHour: true,
+      });
     }
+
+    if (_quarterDebugTicksRemaining > 0) {
+      const nowMs = Date.now();
+      const debugRow = coins.map(sym => {
+        const c = result[sym];
+        const closeMs = c?.closeTime ? new Date(c.closeTime).getTime() : null;
+        if (!Number.isFinite(closeMs)) return `${sym}:none`;
+        const minute = new Date(closeMs).getUTCMinutes();
+        const second = new Date(closeMs).getUTCSeconds();
+        const isCanon = minute === 0 || minute === 15 || minute === 30 || minute === 45;
+        const ttc = Math.max(0, Math.floor((closeMs - nowMs) / 1000));
+        return `${sym}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')} canon=${isCanon ? 'Y' : 'N'} ttc=${ttc}s ${c?.ticker || 'no-ticker'}`;
+      }).join(' | ');
+      console.log(`[PredictionMarkets][Q15-VERIFY] ${debugRow}`);
+      _quarterDebugTicksRemaining--;
+      if (_quarterDebugTicksRemaining === 0) {
+        console.log('[PredictionMarkets][Q15-VERIFY] Session debug logging complete; auto-disabled');
+      }
+    }
+
     return result;
   }
 
@@ -259,68 +359,32 @@
   async function fetchKalshi5M() {
     // Cover all 7 coins — use 5M series if available, else nearest-expiry 15M as proxy
     const result = {};
-    const coins  = Object.keys(KALSHI_15M_SERIES); // BTC ETH SOL XRP DOGE BNB HYPE
+    const coins = Object.keys(KALSHI_15M_SERIES); // BTC ETH SOL XRP DOGE BNB HYPE
     for (let i = 0; i < coins.length; i++) {
-      const sym       = coins[i];
-      const series5m  = KALSHI_5M_SERIES[sym] || null;
+      const sym = coins[i];
+      const series5m = KALSHI_5M_SERIES[sym] || null;
       if (i > 0) await new Promise(r => setTimeout(r, 50)); // stagger — was 200ms
 
       // 1. Try dedicated 5M series (e.g. KXBTC5M) — may not exist on Kalshi
-      let data = series5m ? await fetchKalshiSeriesForSym(series5m) : null;
+      let data = series5m ? await fetchKalshiSeriesForSym(series5m, {
+        suppressWarnings: true,
+        bucketMs: BUCKET_MS_5M,
+        minTradableMs: MIN_TRADABLE_MS_5M,
+        strictQuarterHour: false,
+      }) : null;
 
-      // 2. Fallback: use nearest-expiry 15M market as 5M proxy
+      // 2. Fallback: use strict 15M quarter-hour contract as 5M proxy
       if (!data) {
         const baseSeries = KALSHI_15M_SERIES[sym];
-        const d = await kalshiFetch(`${KALSHI_BASE}/markets?series_ticker=${baseSeries}&status=open&limit=5`);
-        const now = Date.now();
-        const m = (d?.markets || [])
-          .filter(mk => { const t = new Date(mk.close_time).getTime(); return Number.isFinite(t) && t > now + 30_000; })
-          .sort((a, b) => new Date(a.close_time) - new Date(b.close_time))[0] || null;
+        const d = await kalshiFetch(`${KALSHI_BASE}/markets?series_ticker=${baseSeries}&status=open&limit=${KALSHI_MARKET_LIMIT}`);
+        const m = selectKalshiContract(d?.markets || [], {
+          nowMs: Date.now(),
+          bucketMs: BUCKET_MS_15M,
+          minTradableMs: MIN_TRADABLE_MS_15M_PROXY,
+          strictQuarterHour: true,
+        });
         if (m) {
-          const yesAsk = parseFloat(m.yes_ask_dollars  || 0);
-          const yesBid = parseFloat(m.yes_bid_dollars  || 0);
-          const noAsk  = parseFloat(m.no_ask_dollars   || 0);
-          const noBid  = parseFloat(m.no_bid_dollars   || 0);
-          const last   = parseFloat(m.last_price_dollars || 0);
-          let probability = null;
-          if (yesAsk > 0 && yesBid > 0)      probability = (yesAsk + yesBid) / 2;
-          else if (yesAsk > 0)               probability = yesAsk;
-          else if (yesBid > 0)               probability = yesBid;
-          else if (noAsk > 0 && noBid > 0)   probability = 1 - (noAsk + noBid) / 2;
-          else if (last > 0)                 probability = last;
-          if (probability !== null)
-            probability = Math.min(0.99, Math.max(0.01, probability));
-          const subtitle   = (m.yes_sub_title || m.subtitle || '');
-          const rawStrike  = m.strike_type ? String(m.strike_type).toLowerCase() : null;
-          const strikeDir  = rawStrike
-            ? (rawStrike === 'below' || rawStrike === 'under' ? 'below' : 'above')
-            : subtitle.toLowerCase().includes('below') ? 'below' : 'above';
-          const floorStrike5m = m.floor_strike != null ? parseFloat(m.floor_strike) : null;
-          const floorPrice5m  = m.floor_price  != null ? parseFloat(m.floor_price)  : null;
-          const floorPrice = (Number.isFinite(floorStrike5m) && floorStrike5m > 0) ? floorStrike5m
-                           : (Number.isFinite(floorPrice5m)  && floorPrice5m  > 0) ? floorPrice5m : null;
-          const capStrike5m = m.cap_strike != null ? parseFloat(m.cap_strike) : null;
-          const capPrice5m  = m.cap_price  != null ? parseFloat(m.cap_price)  : null;
-          const capPrice    = (Number.isFinite(capStrike5m) && capStrike5m > 0) ? capStrike5m
-                           : (Number.isFinite(capPrice5m)   && capPrice5m  > 0) ? capPrice5m : null;
-          let targetPriceNum = (Number.isFinite(floorPrice) && floorPrice > 0) ? floorPrice : null;
-          if (targetPriceNum == null) {
-            const nm = subtitle.replace(/[$,]/g, '').match(/\d+\.?\d*/);
-            if (nm) targetPriceNum = parseFloat(nm[0]);
-          }
-          data = {
-            probability, yesAsk, yesBid, last,
-            status: m.status, closeTime: m.close_time, openTime: m.open_time,
-            ticker: m.ticker, title: m.title, subtitle,
-            strikeDir, strikeType: rawStrike,
-            floorPrice, capPrice,
-            targetPrice:    targetPriceNum != null ? `$${targetPriceNum.toLocaleString()}` : null,
-            targetPriceNum,
-            volume:       parseFloat(m.volume_fp        || 0),
-            liquidity:    parseFloat(m.liquidity_dollars || 0),
-            openInterest: parseFloat(m.open_interest_fp  || 0),
-            _proxy15m: true,
-          };
+          data = buildKalshiContractData(m, { _proxy15m: true });
         }
       }
       result[sym] = data;
@@ -346,7 +410,7 @@
         all.push(...batch);
       }
       if (all.length) return all;
-    } catch {}
+    } catch { }
 
     // ---- Tier 2: CLOB API fallback ----
     try {
@@ -384,7 +448,7 @@
       if (yes === null) return;
       const vol = parseFloat(m.volume24hr || m.volume || 0) || 1;
       weighted += yes * vol;
-      totalVol  += vol;
+      totalVol += vol;
     });
     if (totalVol === 0) return null;
 
@@ -397,15 +461,15 @@
 
     return {
       probability: Math.min(1, Math.max(0, weighted / totalVol)),
-      volume:      totalVol,
-      title:       topMarkets[0]?.question,
-      count:       hits.length,
-      markets:     topMarkets,
+      volume: totalVol,
+      title: topMarkets[0]?.question,
+      count: hits.length,
+      markets: topMarkets,
     };
   }
 
   function polymarket5mSentiment(markets, sym) {
-    const kw  = COIN_KEYWORDS[sym] || [sym.toLowerCase()];
+    const kw = COIN_KEYWORDS[sym] || [sym.toLowerCase()];
     const now = Date.now();
 
     // First try: markets genuinely closing within 6 hours or tagged 5M
@@ -438,7 +502,7 @@
       if (yes === null) return;
       const vol = parseFloat(m.volume24hr || m.volume || 0) || 1;
       weighted += yes * vol;
-      totalVol  += vol;
+      totalVol += vol;
     });
     if (totalVol === 0) return null;
 
@@ -450,10 +514,10 @@
 
     return {
       probability: Math.min(1, Math.max(0, weighted / totalVol)),
-      volume:      totalVol,
-      title:       topMarkets[0]?.question,
-      count:       hits.length,
-      markets:     topMarkets,
+      volume: totalVol,
+      title: topMarkets[0]?.question,
+      count: hits.length,
+      markets: topMarkets,
       _noShortTerm,
     };
   }
@@ -464,13 +528,13 @@
 
   function detectSnipes(c) {
     const snipes = [];
-    const now    = Date.now();
+    const now = Date.now();
     for (const [sym, data] of Object.entries(c)) {
       for (const [label, market] of [['Kalshi 15M', data?.kalshi15m], ['Kalshi 5M', data?.kalshi5m]]) {
         if (!market?.closeTime || market.probability == null) continue;
         const ms = new Date(market.closeTime).getTime() - now;
         if (ms <= 0 || ms > SNIPE_WINDOW_MS) continue;
-        const p   = market.probability;
+        const p = market.probability;
         const dir = p >= SNIPE_THRESHOLD ? 'UP' : p <= (1 - SNIPE_THRESHOLD) ? 'DOWN' : null;
         if (!dir) continue;
         snipes.push({ sym, dir, prob: p, ms, label: market._proxy15m ? 'Kalshi Nearest' : label, ticker: market.ticker, targetPrice: market.targetPrice });
@@ -500,15 +564,15 @@
     if (!hist || hist.length < 3) {
       return { velocity: 0, velCentsPerMin: 0, acceleration: 0, trend: 'flat', samples: hist?.length || 0, latestProb };
     }
-    const n  = hist.length;
+    const n = hist.length;
     // Linear regression: x = seconds elapsed since first sample, y = prob
     const t0 = hist[0].ts;
     const xs = hist.map(h => (h.ts - t0) / 1000);
     const ys = hist.map(h => h.prob);
     const xMean = xs.reduce((a, b) => a + b) / n;
     const yMean = ys.reduce((a, b) => a + b) / n;
-    const num   = xs.reduce((s, x, i) => s + (x - xMean) * (ys[i] - yMean), 0);
-    const den   = xs.reduce((s, x) => s + (x - xMean) ** 2, 0);
+    const num = xs.reduce((s, x, i) => s + (x - xMean) * (ys[i] - yMean), 0);
+    const den = xs.reduce((s, x) => s + (x - xMean) ** 2, 0);
     const slope = den > 0 ? num / den : 0; // prob per second
     const velCentsPerMin = slope * 60 * 100; // → ¢/min
 
@@ -516,19 +580,19 @@
     const compHalfVel = (half) => {
       if (half.length < 2) return 0;
       const dProb = half[half.length - 1].prob - half[0].prob;
-      const dSec  = (half[half.length - 1].ts  - half[0].ts) / 1000;
+      const dSec = (half[half.length - 1].ts - half[0].ts) / 1000;
       return dSec > 0 ? dProb / dSec * 60 * 100 : 0;
     };
-    const mid          = Math.floor(n / 2);
+    const mid = Math.floor(n / 2);
     const acceleration = compHalfVel(hist.slice(mid)) - compHalfVel(hist.slice(0, mid));
 
     const trend = velCentsPerMin >= 1.5 ? 'rising' : velCentsPerMin <= -1.5 ? 'falling' : 'flat';
     return {
-      velocity:       slope,
+      velocity: slope,
       velCentsPerMin: +velCentsPerMin.toFixed(2),
-      acceleration:   +acceleration.toFixed(2),
+      acceleration: +acceleration.toFixed(2),
       trend,
-      samples:        n,
+      samples: n,
       latestProb,
     };
   }
@@ -537,8 +601,8 @@
   // Polymarket: poll every cycle — it's now the primary source
   // Kalshi 5M:  every 2nd cycle (~60s)
   let _polyCycleCount = 0;
-  let _polyCache      = null;
-  let _k5mCache       = {};
+  let _polyCache = null;
+  let _k5mCache = {};
 
   async function _doFetch() {
     _polyCycleCount++;
@@ -556,6 +620,36 @@
       if (Object.keys(k5m).length > 0) _k5mCache = k5m;
     }
 
+    // --- Network Health Reporting ---
+    if (window.NetworkHealth) {
+      // Kalshi
+      const kalshiStatus = {
+        status: kalshi15m && Object.values(kalshi15m).some(x => x) ? 'healthy' : 'down',
+        lastFetch: Date.now(),
+        fallback: false,
+        reason: kalshi15m && Object.values(kalshi15m).some(x => x) ? '' : 'No Kalshi 15M data',
+      };
+      window.NetworkHealth.update('Kalshi', kalshiStatus);
+
+      // Polymarket
+      const polyStatus = {
+        status: polyMarkets && polyMarkets.length > 0 ? 'healthy' : 'down',
+        lastFetch: Date.now(),
+        fallback: false,
+        reason: polyMarkets && polyMarkets.length > 0 ? '' : 'No Polymarket data',
+      };
+      window.NetworkHealth.update('Polymarket', polyStatus);
+
+      // ProxyOrchestrator (if present)
+      let proxyStatus = { status: 'unknown', lastFetch: Date.now(), fallback: false, reason: '' };
+      if (typeof window._proxyOrchestrator !== 'undefined') {
+        proxyStatus.status = 'healthy';
+      } else {
+        proxyStatus.status = 'down';
+        proxyStatus.reason = 'Not initialized';
+      }
+      window.NetworkHealth.update('ProxyOrchestrator', proxyStatus);
+    }
     // Debug: log what we got from Kalshi 15M
     const k15Coins = Object.entries(kalshi15m).filter(([sym, data]) => data !== null).map(([sym]) => sym);
     const k15Empty = Object.entries(kalshi15m).filter(([sym, data]) => data === null).map(([sym]) => sym);
@@ -567,14 +661,14 @@
 
     const next = {};
     for (const sym of Object.keys(COIN_KEYWORDS)) {
-      const k15  = kalshi15m[sym] ?? null;
-      const k5   = _k5mCache[sym] ?? null;
-      const p    = _polyCache ? polymarketSentiment(_polyCache, sym)    : null;
-      const p5m  = _polyCache ? polymarket5mSentiment(_polyCache, sym)  : null;
+      const k15 = kalshi15m[sym] ?? null;
+      const k5 = _k5mCache[sym] ?? null;
+      const p = _polyCache ? polymarketSentiment(_polyCache, sym) : null;
+      const p5m = _polyCache ? polymarket5mSentiment(_polyCache, sym) : null;
 
       const sources = [];
-      if (k15?.probability != null) sources.push({ name: 'Kalshi15M',  prob: k15.probability, vol: k15.volume || 1 });
-      if (p)                        sources.push({ name: 'Polymarket', prob: p.probability,   vol: p.volume   || 1 });
+      if (k15?.probability != null) sources.push({ name: 'Kalshi15M', prob: k15.probability, vol: k15.volume || 1 });
+      if (p) sources.push({ name: 'Polymarket', prob: p.probability, vol: p.volume || 1 });
 
       let combinedProb = null;
       if (sources.length) {
@@ -586,27 +680,27 @@
       }
 
       next[sym] = {
-        kalshi:       k15?.probability != null ? parseFloat(k15.probability.toFixed(4)) : null,
-        poly:         p   ? parseFloat(p.probability.toFixed(4))  : null,
+        kalshi: k15?.probability != null ? parseFloat(k15.probability.toFixed(4)) : null,
+        poly: p ? parseFloat(p.probability.toFixed(4)) : null,
         combinedProb: combinedProb !== null ? parseFloat(combinedProb.toFixed(4)) : null,
         sources,
-        kalshi15m:    k15,
-        kalshi5m:     k5,
-        poly5m:       p5m,
-        polyMarkets:  p?.markets   ?? [],   // top-5 individual Poly markets for this coin
-        poly5mMkts:   p5m?.markets ?? [],   // top-5 short-term Poly markets
-        kalshiTitle:  k15?.title   ?? null,
-        polyTitle:    p?.title     ?? null,
-        polyCount:    p?.count     ?? 0,
-        poly5mTitle:  p5m?.title   ?? null,
-        poly5mCount:  p5m?.count   ?? 0,
+        kalshi15m: k15,
+        kalshi5m: k5,
+        poly5m: p5m,
+        polyMarkets: p?.markets ?? [],   // top-5 individual Poly markets for this coin
+        poly5mMkts: p5m?.markets ?? [],   // top-5 short-term Poly markets
+        kalshiTitle: k15?.title ?? null,
+        polyTitle: p?.title ?? null,
+        polyCount: p?.count ?? 0,
+        poly5mTitle: p5m?.title ?? null,
+        poly5mCount: p5m?.count ?? 0,
         probVelocity: getProbVelocity(sym),  // Kalshi YES-price drift (¢/min)
       };
       // Update velocity history AFTER building next[sym] so this cycle feeds next read
       if (k15?.probability != null) trackProbability(sym, k15.probability);
     }
 
-    cache     = next;
+    cache = next;
     lastFetch = Date.now();
     window.dispatchEvent(new CustomEvent('predictionmarketsready', { detail: next }));
   }
@@ -640,22 +734,22 @@
         if (nearClose) fetchAll();
       }, 10_000);
     },
-    getAll()     { return cache; },
+    getAll() { return cache; },
     getCoin(sym) { return cache[sym] ?? null; },
-    getSnipes()  { return detectSnipes(cache); },
+    getSnipes() { return detectSnipes(cache); },
     // Funding-rate bias for a coin: { avg, bias, strength, sources } or null.
     // Populated by cfm-engine.js _computeFundingBias() after each poll cycle.
     getFundingBias(sym) { return window._cfm?.[sym]?.fundingBias || null; },
     // Fear & Greed Index: { value, label, ts } or null.
     // Fetched by cfm-engine.js fetchFNG() every 5 minutes.
-    getFNG()            { return window._cfm?._fng            || null; },
-    getVelocity(sym)  { return getProbVelocity(sym); },
+    getFNG() { return window._cfm?._fng || null; },
+    getVelocity(sym) { return getProbVelocity(sym); },
     getAllVelocities() { return Object.fromEntries(Object.keys(COIN_KEYWORDS).map(s => [s, getProbVelocity(s)])); },
-    getStatus()  {
+    getStatus() {
       return {
         lastFetch,
-        age:       lastFetch ? Date.now() - lastFetch : null,
-        hasData:   Object.keys(cache).length > 0,
+        age: lastFetch ? Date.now() - lastFetch : null,
+        hasData: Object.keys(cache).length > 0,
         coinCount: Object.values(cache).filter(c => c.combinedProb !== null).length,
       };
     },

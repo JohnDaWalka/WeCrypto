@@ -63,10 +63,14 @@
   <!-- WECRYPTO Startup Loader (fast initialization) -->
   <script src="../src/kalshi/wecrypto-startup-loader.js"></script>
 
+
   <!-- API Resilience Utilities (must load before app.js) -->
   <script src="../src/feeds/api-rate-limiter.js"></script>
   <script src="../src/feeds/api-circuit-breaker.js"></script>
   <script src="../src/feeds/exchange-fallback-handler.js"></script>
+
+  <!-- Wiring Agent: centralizes event wiring for health, escalation, circuit breaker -->
+  <script src="../src/core/wiring-agent.js"></script>
 
   <!-- EMERGENCY TOOLS & TOR ROUTING (load before app.js) -->
   <script src="../src/core/emergency-tools-dashboard.js"></script>
@@ -277,6 +281,8 @@
   <script src="../src/infra/proxy-fetch.js"></script>
   <script src="../src/infra/throttled-fetch.js"></script>
   <script src="../src/infra/resilient-fetch.js"></script>
+  <script src="../src/infra/proxy-orchestrator.js"></script>
+  <script src="../src/infra/signal-scheduler-agent.js"></script>
   <script src="../src/core/data.js"></script>
   <script src="../src/core/data-logger.js"></script>
   <script src="../src/feeds/social-sentiment.js"></script>
@@ -305,6 +311,10 @@
   <script src="../src/feeds/panel-data-monitor.js" defer></script>
   <script src="../src/feeds/holder-metrics.js" defer></script>
   <script src="../src/feeds/cex-flow.js" defer></script>
+  <script src="../src/feeds/ethereum-ws-connectors.js" defer></script>
+  <script src="../src/feeds/mempool-telemetry-normalizer.js" defer></script>
+  <script src="../src/feeds/dataset-replay-capture.js" defer></script>
+  <script src="../src/feeds/feed-quality-monitor.js" defer></script>
   <!-- Adaptive Walk-Forward Tuning Modules (Phase 6) -->
   <script src="../src/core/adaptive-tuner.js" defer></script>
   <script src="../src/kalshi/historical-settlement-fetcher.js" defer></script>
@@ -328,6 +338,10 @@
   <script src="../src/quant/kalshi-fill-simulator.js" defer></script>
   <script src="../src/feeds/coinmarketcap-pro-feed.js" defer></script>
   <script src="../src/core/pyth-timeout-monitor.js" defer></script>
+
+  <!-- Network Health Core + Dashboard (MUST load before app.js) -->
+  <script src="../src/core/network-health.js"></script>
+  <script src="../src/ui/network-health-dashboard.js"></script>
   <script src="../src/core/app.js" defer></script>
   <script>
     if ('serviceWorker' in navigator) {

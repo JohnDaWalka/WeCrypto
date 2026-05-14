@@ -1,3 +1,34 @@
+// Binance gRPC (optional): do not block orchestrator startup when gRPC globals
+// are unavailable in the renderer/browser runtime.
+if (
+  typeof window !== 'undefined' &&
+  typeof grpc !== 'undefined' &&
+  typeof protoLoader !== 'undefined'
+) {
+  try {
+    const binancePackageDef = protoLoader.loadSync('protos/binance.proto', {
+      keepCase: true,
+      longs: String,
+      enums: String,
+      defaults: true,
+      oneofs: true
+    });
+    const binanceProto = grpc.loadPackageDefinition(binancePackageDef).binance.marketdata;
+    const binanceClient = new binanceProto.MarketData('binance.grpc.public:443', grpc.credentials.createSsl());
+    window.grpcBinanceHandler = async function grpcBinanceHandler(context, endpoint) {
+      // context: { url, options }
+      // Example: expects context.options to have { symbol, interval, startTime, endTime, limit }
+      return new Promise((resolve, reject) => {
+        binanceClient.GetKlines(context.options, (err, response) => {
+          if (err) return reject(err);
+          resolve(response);
+        });
+      });
+    };
+  } catch (err) {
+    console.warn('[ProxyOrchestrator] gRPC bootstrap unavailable:', err && err.message ? err.message : err);
+  }
+}
 /**
  * ================================================================
  * PROXY ORCHESTRATOR — Rate-limit resilience for trading APIs
@@ -89,7 +120,7 @@
      */
     canRequest() {
       const now = Date.now();
-      
+
       // Circuit breaker check
       if (this.circuitOpen) {
         if (now >= this.circuitOpenUntil) {
@@ -137,7 +168,7 @@
       const now = Date.now();
       this.failures++;
       this.failureHistory.push(now);
-      
+
       // Prune old failures outside window
       this.failureHistory = this.failureHistory.filter(t => now - t < this.FAILURE_WINDOW_MS);
 
@@ -253,20 +284,25 @@
   /**
    * FallbackRouter: Primary → Fallback chain with circuit breaker per source
    */
+
   class FallbackRouter {
     constructor() {
-      this.sources = {};           // endpoint → { handler, healthy, lastCheck }
+      this.sources = {};           // endpoint → { handler, type, healthy, lastCheck }
       this.healthCheckInterval = 30000;
       this.healthCheckTimer = null;
     }
 
     /**
      * Register a fetch handler for a source
+     * @param {string} endpoint
+     * @param {function} handler
+     * @param {string} type - 'http' or 'grpc'
      */
-    registerSource(endpoint, handler) {
+    registerSource(endpoint, handler, type = 'http') {
       this.sources[endpoint] = {
         endpoint,
         handler,
+        type,
         healthy: true,
         lastCheck: Date.now(),
         successCount: 0,
@@ -276,6 +312,7 @@
 
     /**
      * Try a chain of endpoints until one succeeds
+     * Supports both HTTP and gRPC handlers
      */
     async tryChain(chain, executor, context = {}) {
       for (const endpoint of chain) {
@@ -284,15 +321,20 @@
           console.warn(`[ProxyOrchestrator] Unknown endpoint: ${endpoint}`);
           continue;
         }
-
         if (!source.healthy) {
           console.log(`[ProxyOrchestrator] Skipping unhealthy source: ${endpoint}`);
           continue;
         }
-
         try {
-          console.log(`[ProxyOrchestrator] Trying ${endpoint}...`);
-          const result = await executor(endpoint);
+          console.log(`[ProxyOrchestrator] Trying ${endpoint} (${source.type})...`);
+          let result;
+          if (source.type === 'grpc') {
+            // gRPC handler: pass context and endpoint
+            result = await source.handler(context, endpoint);
+          } else {
+            // HTTP handler: use executor
+            result = await executor(endpoint);
+          }
           source.successCount++;
           source.healthy = true;
           return { endpoint, result, fallback: endpoint !== chain[0] };
@@ -302,7 +344,6 @@
           // Continue to next in chain
         }
       }
-
       // All endpoints exhausted
       throw new Error(`All endpoints exhausted: ${chain.join(' → ')}`);
     }
@@ -312,7 +353,7 @@
      */
     startHealthChecks() {
       if (this.healthCheckTimer) return;
-      
+
       this.healthCheckTimer = setInterval(() => {
         const now = Date.now();
         Object.values(this.sources).forEach(source => {
@@ -520,6 +561,7 @@
   /**
    * ProxyOrchestrator: Main interface coordinating all layers
    */
+
   class ProxyOrchestrator {
     constructor(config = {}) {
       this.config = config;
@@ -527,11 +569,24 @@
       this.batcher = new RequestBatcher(500);
       this.fallback = new FallbackRouter();
       this.cache = new CacheOrchestrator();
-      
+
       // Initialize rate limiters for known endpoints
       Object.keys(RATE_LIMITS).forEach(endpoint => {
         this.rateLimiters[endpoint] = new RateLimiter(endpoint);
       });
+
+      // Register HTTP endpoints (default)
+      Object.keys(RATE_LIMITS).forEach(endpoint => {
+        this.fallback.registerSource(endpoint, null, 'http');
+      });
+
+      // Register gRPC endpoints
+      if (typeof window.grpcKalshiHandler === 'function') {
+        this.fallback.registerSource('grpc-kalshi', window.grpcKalshiHandler, 'grpc');
+      }
+      if (typeof window.grpcBinanceHandler === 'function') {
+        this.fallback.registerSource('grpc-binance', window.grpcBinanceHandler, 'grpc');
+      }
 
       // Start health checks
       this.fallback.startHealthChecks();
@@ -539,7 +594,7 @@
       // Start metrics collection
       this.startMetricsCollection();
 
-      console.log('[ProxyOrchestrator] Initialized');
+      console.log('[ProxyOrchestrator] Initialized (gRPC support enabled)');
     }
 
     /**
@@ -585,12 +640,22 @@
       try {
         if (chain.length === 1) {
           // Direct fetch without fallback chain
-          result = await this._executeFetch(url, endpoint, limiter, retries);
+          if (this.fallback.sources[endpoint] && this.fallback.sources[endpoint].type === 'grpc') {
+            // gRPC endpoint
+            result = await this.fallback.sources[endpoint].handler({ url, options }, endpoint);
+          } else {
+            // HTTP endpoint
+            result = await this._executeFetch(url, endpoint, limiter, retries);
+          }
         } else {
-          // Use fallback chain
+          // Use fallback chain (mixed HTTP/gRPC)
           result = await this.fallback.tryChain(chain, async (ep) => {
-            return await this._executeFetch(url, ep, this.rateLimiters[ep], retries);
-          });
+            if (this.fallback.sources[ep] && this.fallback.sources[ep].type === 'grpc') {
+              return await this.fallback.sources[ep].handler({ url, options }, ep);
+            } else {
+              return await this._executeFetch(url, ep, this.rateLimiters[ep], retries);
+            }
+          }, { url, options });
           result = result.result;
         }
 
@@ -599,7 +664,7 @@
 
         const latency = Date.now() - startTime;
         this._recordLatency(latency);
-        
+
         console.log(`[ProxyOrchestrator] Success (${endpoint}): ${url} (${latency}ms)`);
         metrics.requests[endpoint] = (metrics.requests[endpoint] || 0) + 1;
 
@@ -767,6 +832,30 @@
   }
 
   // ── EXPORT ──────────────────────────────────────────────────────
+  // ── Robust ProxyOrchestrator Initialization with Retry ──
+  (function initializeProxyOrchestratorWithRetry() {
+    const MAX_RETRIES = 5;
+    let attempt = 0;
+    let backoff = 2000;
+
+    async function tryInit() {
+      try {
+        window._proxyOrchestrator = new ProxyOrchestrator(window._proxyOrchestratorConfig || {});
+        console.log('[ProxyOrchestrator] Initialization successful');
+      } catch (err) {
+        attempt++;
+        if (attempt > MAX_RETRIES) {
+          console.error('[ProxyOrchestrator] Failed to initialize after', MAX_RETRIES, 'attempts:', err.message);
+          return;
+        }
+        console.warn(`[ProxyOrchestrator] Initialization failed (attempt ${attempt}): ${err.message}. Retrying in ${backoff}ms...`);
+        setTimeout(tryInit, backoff);
+        backoff = Math.min(backoff * 2, 30000); // Exponential backoff, max 30s
+      }
+    }
+    tryInit();
+  })();
+
   window.ProxyOrchestrator = ProxyOrchestrator;
   window.RateLimiter = RateLimiter;
   window.RequestBatcher = RequestBatcher;

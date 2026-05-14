@@ -476,6 +476,142 @@
     margin-bottom: 1.5rem;
   }
 
+
+  .audit-link-reset {
+    text-decoration: none;
+  }
+
+  .audit-coin-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .audit-coin-link-icon {
+    opacity: 0.5;
+  }
+
+  .live-status-banner {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .live-status-banner--ok {
+    background: #1a3a2d;
+    border-bottom: 1px solid #4d8b7d;
+    color: #66ffcc;
+  }
+
+  .live-status-banner--loading {
+    background: #2d3a2d;
+    border-bottom: 1px solid #6b8b6b;
+    color: #99ff99;
+  }
+
+  .live-status-banner--error {
+    background: #3d2424;
+    border-bottom: 1px solid #8b4d4d;
+    color: #ff9999;
+  }
+
+  .ai-bigdata-panel {
+    margin: 20px;
+    border: 1px solid rgba(138, 248, 255, 0.2);
+  }
+
+  .ai-bigdata-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .ai-bigdata-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ai-bigdata-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .ai-bigdata-btn {
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid transparent;
+    color: #eff7ff;
+    cursor: pointer;
+  }
+
+  .ai-bigdata-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .ai-bigdata-btn--run {
+    background: #12424f;
+    color: #d8fbff;
+    border-color: rgba(138, 248, 255, 0.35);
+  }
+
+  .ai-bigdata-btn--backup {
+    background: #2d3a2d;
+    color: #d9ffcf;
+    border-color: rgba(183, 242, 109, 0.35);
+  }
+
+  .ai-bigdata-prompt-label {
+    display: inline-block;
+    margin-top: 8px;
+  }
+
+  .ai-bigdata-textarea {
+    width: 100%;
+    margin-top: 8px;
+    margin-bottom: 10px;
+    background: rgba(6, 14, 28, 0.85);
+    color: #eff7ff;
+    border: 1px solid rgba(138, 248, 255, 0.2);
+    border-radius: 8px;
+    padding: 10px;
+  }
+
+  .ai-bigdata-log-list {
+    margin-top: 8px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .ai-bigdata-log-item {
+    background: rgba(9, 18, 32, 0.8);
+    border: 1px solid rgba(138, 248, 255, 0.12);
+    border-radius: 10px;
+    padding: 10px;
+  }
+
+  .ai-bigdata-log-meta {
+    margin-bottom: 4px;
+  }
+
+  .ai-bigdata-log-prompt {
+    margin-bottom: 4px;
+    color: #d9ebff;
+  }
+
+  .ai-bigdata-log-result {
+    white-space: pre-wrap;
+  }
   .audit-split-section {
     grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
     align-items: start;

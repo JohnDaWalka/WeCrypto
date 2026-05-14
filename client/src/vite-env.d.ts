@@ -3,9 +3,27 @@ interface ImportMetaEnv {
   readonly VITE_APP_ID?: string;
   readonly VITE_FRONTEND_FORGE_API_KEY?: string;
   readonly VITE_FRONTEND_FORGE_API_URL?: string;
+  readonly VITE_FIREBASE_PROJECT_ID?: string;
+  readonly VITE_FIREBASE_API_KEY?: string;
   readonly [key: string]: string | undefined;
 }
 
 interface ImportMeta {
   readonly env: ImportMetaEnv;
+}
+
+interface Window {
+  electron?: {
+    invoke?: (channel: string, ...args: any[]) => Promise<any>;
+  };
+  wecryp?: {
+    onTelemetry?: (callback: (data: unknown) => void) => void;
+    runInference?: (prompt: string, context: Record<string, unknown>) => Promise<any>;
+    syncDrive?: (payload: Record<string, unknown>) => Promise<any>;
+    recoverDrive?: (options?: Record<string, unknown>) => Promise<any>;
+    cloudStatus?: () => Promise<any>;
+    cloudSqlStatus?: (options?: Record<string, unknown>) => Promise<any>;
+    testCloudSql?: () => Promise<any>;
+    tideForecast?: (payload: Record<string, unknown>) => Promise<any>;
+  };
 }

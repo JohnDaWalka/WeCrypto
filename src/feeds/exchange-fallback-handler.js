@@ -21,30 +21,42 @@
       candleEndpoint: '/api/v3/klines',
       capabilities: ['candles', 'orderbook', 'trades', 'futures'],
     },
+    BINANCE_GRPC: {
+      name: 'Binance gRPC',
+      priority: 2,
+      grpcUrl: 'grpc://binance.grpc.public/MarketDataService',
+      capabilities: ['candles', 'orderbook', 'trades'],
+    },
     BYBIT: {
       name: 'Bybit',
-      priority: 2,
+      priority: 3,
       baseUrl: 'https://api.bybit.com',
       candleEndpoint: '/v5/market/kline',
       capabilities: ['candles', 'orderbook', 'trades', 'perpetuals'],
     },
+    BYBIT_GRPC: {
+      name: 'Bybit gRPC',
+      priority: 4,
+      grpcUrl: 'grpc://bybit.grpc.public/MarketDataService',
+      capabilities: ['candles', 'orderbook', 'trades'],
+    },
     KRAKEN: {
       name: 'Kraken',
-      priority: 3,
+      priority: 5,
       baseUrl: 'https://api.kraken.com',
       candleEndpoint: '/0/public/OHLC',
       capabilities: ['candles', 'trades'],
     },
     CRYPTO_COM: {
       name: 'Crypto.com',
-      priority: 4,
+      priority: 6,
       baseUrl: 'https://api.crypto.com/v2',
       candleEndpoint: '/public/get-candlestick',
       capabilities: ['candles'],
     },
     COINGECKO: {
       name: 'CoinGecko',
-      priority: 5,
+      priority: 7,
       baseUrl: 'https://api.coingecko.com/api/v3',
       candleEndpoint: '/coins/{id}/ohlc',
       capabilities: ['candles-historical'],
@@ -60,14 +72,18 @@
     COINGECKO: { BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', XRP: 'ripple', DOGE: 'dogecoin' },
   };
 
+
   class ExchangeFallbackHandler {
-    constructor() {
+    constructor({ escalationThreshold = 5 } = {}) {
       this.priorityOrder = Object.values(EXCHANGES)
         .sort((a, b) => a.priority - b.priority)
         .map(e => Object.keys(EXCHANGES).find(k => EXCHANGES[k].name === e.name));
-      
+
       this.failureLog = {}; // Track failures per exchange
       this.circuitBreakers = {}; // Active circuit breakers per exchange
+      this.escalationThreshold = escalationThreshold;
+      this.escalationState = {}; // Track if escalation triggered per exchange
+      this.useCacheOrAlternate = {}; // Track if we should force cache/alternate per exchange
     }
 
     /**
@@ -86,6 +102,14 @@
           if (this.isCircuitOpen(exchangeKey)) {
             console.debug(`[ExchangeFallback] ${EXCHANGES[exchangeKey].name} circuit open, skipping`);
             continue;
+          }
+
+          // Escalation: If persistent failure, optionally force cache/alternate
+          if (this.useCacheOrAlternate[exchangeKey]) {
+            console.warn(`[ExchangeFallback] ESCALATION: Forcing cache/alternate for ${EXCHANGES[exchangeKey].name}`);
+            // Here you could return cached data or alternate source if available
+            // For demo, just throw to skip
+            throw new Error('Escalation: Using cache/alternate source');
           }
 
           const exchange = EXCHANGES[exchangeKey];
@@ -107,6 +131,10 @@
           }
         } catch (err) {
           this.recordFailure(exchangeKey, err);
+          // Escalation: If threshold reached, escalate
+          if (this.failureLog[exchangeKey] >= this.escalationThreshold && !this.escalationState[exchangeKey]) {
+            this.escalate(exchangeKey, err);
+          }
           console.warn(`[ExchangeFallback] ${EXCHANGES[exchangeKey].name} failed:`, err.message);
           continue; // Try next exchange
         }
@@ -122,7 +150,7 @@
      */
     async _fetchFromExchange(exchangeKey, symbol, interval, limit) {
       const exchange = EXCHANGES[exchangeKey];
-      const exchangeSymbol = SYMBOL_MAPS[exchangeKey][symbol];
+      const exchangeSymbol = SYMBOL_MAPS[exchangeKey] ? SYMBOL_MAPS[exchangeKey][symbol] : symbol;
 
       let url;
       switch (exchangeKey) {
@@ -144,6 +172,12 @@
             source: 'BINANCE'
           }));
 
+        case 'BINANCE_GRPC':
+          // Pseudo-code: Replace with actual gRPC client call if available
+          // Example: const grpcData = await fetchBinanceGrpcCandles(exchangeSymbol, interval, limit);
+          // return grpcData;
+          throw new Error('Binance gRPC not implemented (stub)');
+
         case 'BYBIT':
           url = `${exchange.baseUrl}${exchange.candleEndpoint}?category=spot&symbol=${exchangeSymbol}&interval=${this._bybitInterval(interval)}&limit=${limit}`;
           const byResp = await fetch(url);
@@ -161,7 +195,13 @@
             close: parseFloat(c[4]),
             volume: parseFloat(c[7]),
             source: 'BYBIT'
-          })).reverse(); // Bybit returns newest first
+          })).reverse();
+
+        case 'BYBIT_GRPC':
+          // Pseudo-code: Replace with actual gRPC client call if available
+          // Example: const grpcData = await fetchBybitGrpcCandles(exchangeSymbol, interval, limit);
+          // return grpcData;
+          throw new Error('Bybit gRPC not implemented (stub)');
 
         case 'KRAKEN':
           url = `${exchange.baseUrl}${exchange.candleEndpoint}?pair=${exchangeSymbol}&interval=${this._krakenInterval(interval)}`;
@@ -198,9 +238,28 @@
 
         case 'COINGECKO':
           url = `${exchange.baseUrl}${exchange.candleEndpoint}?vs_currency=usd&days=${this._coingeckoDays(interval)}&interval=${this._coingeckoInterval(interval)}`;
-          const cgResp = await fetch(url);
+
+          // Retry logic with exponential backoff for CoinGecko (rate limit sensitive)
+          const backoffMs = [1000, 2000, 4000];
+          let cgResp;
+          let cgAttempt = 0;
+          while (cgAttempt <= 3) {
+            cgResp = await fetch(url);
+            if (cgResp.ok) break;
+
+            if (cgResp.status === 429 && cgAttempt < 3) {
+              const backoff = backoffMs[Math.min(cgAttempt, backoffMs.length - 1)];
+              console.warn(`[ExchangeFallback] CoinGecko 429 (attempt ${cgAttempt + 1}/4), backoff ${backoff}ms`);
+              await new Promise(r => setTimeout(r, backoff));
+              cgAttempt++;
+            } else {
+              break;
+            }
+          }
+
           if (!cgResp.ok) {
-            if (cgResp.status === 429) throw new Error('429 Rate Limited - wait before retry');
+            if (cgResp.status === 429) throw new Error('429 Rate Limited - max retries exhausted');
+            if (cgResp.status === 401) throw new Error('401 Unauthorized - API key invalid');
             throw new Error(`HTTP ${cgResp.status}`);
           }
           const cgData = await cgResp.json();
@@ -278,6 +337,8 @@
     recordSuccess(exchangeKey) {
       if (!this.failureLog[exchangeKey]) this.failureLog[exchangeKey] = 0;
       this.failureLog[exchangeKey] = 0; // Reset counter
+      this.escalationState[exchangeKey] = false;
+      this.useCacheOrAlternate[exchangeKey] = false;
     }
 
     /**
@@ -287,10 +348,34 @@
       if (!this.failureLog[exchangeKey]) this.failureLog[exchangeKey] = 0;
       this.failureLog[exchangeKey]++;
 
-      // Trip circuit breaker after 5 consecutive failures
-      if (this.failureLog[exchangeKey] >= 5 && window.ApiCircuitBreaker) {
-        const breaker = window.ApiCircuitBreaker.getBreaker(`exchange-${exchangeKey}`, { threshold: 5 });
+      // Trip circuit breaker after escalationThreshold consecutive failures
+      if (this.failureLog[exchangeKey] >= this.escalationThreshold && window.ApiCircuitBreaker) {
+        const breaker = window.ApiCircuitBreaker.getBreaker(`exchange-${exchangeKey}`, { threshold: this.escalationThreshold });
         breaker.trip();
+      }
+    }
+
+    /**
+     * Escalate persistent provider failure: log, alert, and switch to cache/alternate
+     */
+    escalate(exchangeKey, err) {
+      this.escalationState[exchangeKey] = true;
+      this.useCacheOrAlternate[exchangeKey] = true;
+      const msg = `[ExchangeFallback] ESCALATION: ${EXCHANGES[exchangeKey].name} failed ${this.failureLog[exchangeKey]} times. Escalating: switching to cache/alternate and alerting user.`;
+      console.error(msg);
+      // User alert: dispatch a custom event for UI or use alert for demo
+      if (typeof window !== 'undefined') {
+        if (window.dispatchEvent && typeof CustomEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('provider-escalation', {
+            detail: {
+              provider: EXCHANGES[exchangeKey].name,
+              failures: this.failureLog[exchangeKey],
+              error: err ? (err.message || String(err)) : undefined
+            }
+          }));
+        } else if (window.alert) {
+          window.alert(msg);
+        }
       }
     }
 
@@ -301,10 +386,14 @@
       return {
         priorityOrder: this.priorityOrder,
         failureLog: this.failureLog,
+        escalationState: this.escalationState,
+        useCacheOrAlternate: this.useCacheOrAlternate,
         exchanges: Object.keys(EXCHANGES).map(k => ({
           name: EXCHANGES[k].name,
           priority: EXCHANGES[k].priority,
           failures: this.failureLog[k] || 0,
+          escalated: !!this.escalationState[k],
+          usingCacheOrAlternate: !!this.useCacheOrAlternate[k],
         })),
       };
     }

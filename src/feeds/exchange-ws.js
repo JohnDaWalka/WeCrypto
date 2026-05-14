@@ -13,6 +13,11 @@
 //   window.ExchangeWS.getMempool()
 //   window.ExchangeWS.start()/stop()
 // ================================================================
+// Circuit breaker state for provider flapping/failure
+const CIRCUIT_BREAKER = {};
+const FAILURE_THRESHOLD = 4; // Number of consecutive failures before disabling
+const COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes cooldown
+
 (function () {
   'use strict';
 
@@ -23,6 +28,68 @@
   const STORE = {}; // provider -> sym -> snapshot
   const MEMPOOL = { btcUnconfirmed: 0, btcValue: 0, lastTxTs: 0 };
   const CONNECTIONS = {}; // name -> { ws, reconnectMs, timer, active, extra }
+
+  // Track failures and circuit breaker state per provider
+  function getBreakerState(name) {
+    if (!CIRCUIT_BREAKER[name]) {
+      CIRCUIT_BREAKER[name] = {
+        failures: 0,
+        open: false,
+        openUntil: 0,
+      };
+    }
+    return CIRCUIT_BREAKER[name];
+  }
+
+  function recordFailure(name) {
+    const br = getBreakerState(name);
+    br.failures++;
+    if (!br.open && br.failures >= FAILURE_THRESHOLD) {
+      br.open = true;
+      br.openUntil = Date.now() + COOLDOWN_MS;
+      // User feedback: dispatch event
+      if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('provider-disabled', {
+          detail: { provider: name, until: br.openUntil }
+        }));
+      }
+      console.warn(`[CircuitBreaker] Provider ${name} disabled for ${COOLDOWN_MS / 1000}s due to repeated failures.`);
+    }
+  }
+
+  function recordSuccess(name) {
+    const br = getBreakerState(name);
+    if (br.open && Date.now() > br.openUntil) {
+      br.open = false;
+      br.failures = 0;
+      // User feedback: dispatch event
+      if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('provider-recovered', {
+          detail: { provider: name }
+        }));
+      }
+      console.info(`[CircuitBreaker] Provider ${name} re-enabled after cooldown.`);
+    } else if (!br.open) {
+      br.failures = 0;
+    }
+  }
+
+  function isProviderDisabled(name) {
+    const br = getBreakerState(name);
+    if (br.open && Date.now() > br.openUntil) {
+      // Auto-recover after cooldown
+      br.open = false;
+      br.failures = 0;
+      if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('provider-recovered', {
+          detail: { provider: name }
+        }));
+      }
+      console.info(`[CircuitBreaker] Provider ${name} auto-recovered after cooldown.`);
+      return false;
+    }
+    return br.open;
+  }
   const SSE = { stream: null, active: false, lastError: null };
 
   const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
@@ -145,6 +212,13 @@
     const c = conn(name);
     if (!c.active) return;
     clearConnTimer(c);
+    // If provider is disabled, skip reconnect until cooldown expires
+    if (isProviderDisabled(name)) {
+      const br = getBreakerState(name);
+      const wait = Math.max(0, br.openUntil - Date.now());
+      c.timer = setTimeout(() => reconnectFn(), wait + 1000);
+      return;
+    }
     c.timer = setTimeout(() => reconnectFn(), c.reconnectMs);
     c.reconnectMs = Math.min(Math.floor(c.reconnectMs * 1.5), RECONNECT_MAX_MS);
   }
@@ -158,15 +232,18 @@
         clearInterval(c.extra.pingTimer);
         c.extra.pingTimer = null;
       }
+      recordFailure(name);
       scheduleReconnect(name, reconnectFn);
     };
     c.ws.onerror = () => {
-      try { c.ws && c.ws.close(); } catch (_) {}
+      recordFailure(name);
+      try { c.ws && c.ws.close(); } catch (_) { }
     };
   }
 
   // ───────────────────────── Binance ─────────────────────────
   function connectBinance() {
+    if (isProviderDisabled('BINANCE')) return;
     const name = 'BINANCE';
     const c = conn(name);
     if (!c.active) return;
@@ -179,8 +256,12 @@
     }
     const url = `wss://stream.binance.com:9443/stream?streams=${streams.join('/')}`;
     c.ws = new WebSocket(url);
-    c.ws.onopen = () => { c.reconnectMs = RECONNECT_BASE_MS; };
+    c.ws.onopen = () => {
+      c.reconnectMs = RECONNECT_BASE_MS;
+      recordSuccess('BINANCE');
+    };
     c.ws.onmessage = (ev) => {
+      recordSuccess('BINANCE');
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       const stream = msg?.stream || '';
@@ -212,6 +293,7 @@
 
   // ─────────────────────── Coinbase Pro ───────────────────────
   function connectCoinbase() {
+    if (isProviderDisabled('COINBASE')) return;
     const name = 'COINBASE';
     const c = conn(name);
     if (!c.active) return;
@@ -219,6 +301,7 @@
     c.ws = new WebSocket('wss://ws-feed.exchange.coinbase.com');
     c.ws.onopen = () => {
       c.reconnectMs = RECONNECT_BASE_MS;
+      recordSuccess('COINBASE');
       const products = Object.values(MAP.COINBASE);
       c.ws.send(JSON.stringify({
         type: 'subscribe',
@@ -227,6 +310,7 @@
       }));
     };
     c.ws.onmessage = (ev) => {
+      recordSuccess('COINBASE');
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       const productId = msg.product_id;
@@ -255,6 +339,7 @@
 
   // ───────────────────────── Kraken ───────────────────────────
   function connectKraken() {
+    if (isProviderDisabled('KRAKEN')) return;
     const name = 'KRAKEN';
     const c = conn(name);
     if (!c.active) return;
@@ -262,11 +347,13 @@
     c.ws = new WebSocket('wss://ws.kraken.com');
     c.ws.onopen = () => {
       c.reconnectMs = RECONNECT_BASE_MS;
+      recordSuccess('KRAKEN');
       const pairs = Object.values(MAP.KRAKEN);
       c.ws.send(JSON.stringify({ event: 'subscribe', pair: pairs, subscription: { name: 'ticker' } }));
       c.ws.send(JSON.stringify({ event: 'subscribe', pair: pairs, subscription: { name: 'trade' } }));
     };
     c.ws.onmessage = (ev) => {
+      recordSuccess('KRAKEN');
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       if (!Array.isArray(msg) || msg.length < 4) return;
@@ -301,6 +388,7 @@
 
   // ───────────────────────── Bybit ────────────────────────────
   function connectBybit() {
+    if (isProviderDisabled('BYBIT')) return;
     const name = 'BYBIT';
     const c = conn(name);
     if (!c.active) return;
@@ -308,11 +396,13 @@
     c.ws = new WebSocket('wss://stream.bybit.com/v5/public/spot');
     c.ws.onopen = () => {
       c.reconnectMs = RECONNECT_BASE_MS;
+      recordSuccess('BYBIT');
       const syms = Object.values(MAP.BYBIT);
       c.ws.send(JSON.stringify({ op: 'subscribe', args: syms.map(s => `tickers.${s}`) }));
       c.ws.send(JSON.stringify({ op: 'subscribe', args: syms.map(s => `publicTrade.${s}`) }));
     };
     c.ws.onmessage = (ev) => {
+      recordSuccess('BYBIT');
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       const topic = msg?.topic || '';
@@ -346,6 +436,7 @@
 
   // ───────────────────────── OKX ──────────────────────────────
   function connectOKX() {
+    if (isProviderDisabled('OKX')) return;
     const name = 'OKX';
     const c = conn(name);
     if (!c.active) return;
@@ -353,11 +444,13 @@
     c.ws = new WebSocket('wss://ws.okx.com:8443/ws/v5/public');
     c.ws.onopen = () => {
       c.reconnectMs = RECONNECT_BASE_MS;
+      recordSuccess('OKX');
       const inst = Object.values(MAP.OKX);
       c.ws.send(JSON.stringify({ op: 'subscribe', args: inst.map(s => ({ channel: 'tickers', instId: s })) }));
       c.ws.send(JSON.stringify({ op: 'subscribe', args: inst.map(s => ({ channel: 'trades', instId: s })) }));
     };
     c.ws.onmessage = (ev) => {
+      recordSuccess('OKX');
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       const arg = msg?.arg || {};
@@ -392,6 +485,7 @@
 
   // ───────────────────────── KuCoin ───────────────────────────
   async function connectKuCoin() {
+    if (isProviderDisabled('KUCOIN')) return;
     const name = 'KUCOIN';
     const c = conn(name);
     if (!c.active) return;
@@ -407,15 +501,17 @@
       c.ws = new WebSocket(`${endpoint}?token=${token}&connectId=${connectId}`);
       c.ws.onopen = () => {
         c.reconnectMs = RECONNECT_BASE_MS;
+        recordSuccess('KUCOIN');
         const pairs = Object.values(MAP.KUCOIN).join(',');
         c.ws.send(JSON.stringify({ id: Date.now(), type: 'subscribe', topic: `/market/ticker:${pairs}`, privateChannel: false, response: true }));
         c.ws.send(JSON.stringify({ id: Date.now() + 1, type: 'subscribe', topic: `/market/match:${pairs}`, privateChannel: false, response: true }));
         if (c.extra.pingTimer) clearInterval(c.extra.pingTimer);
         c.extra.pingTimer = setInterval(() => {
-          try { c.ws && c.ws.readyState === WebSocket.OPEN && c.ws.send(JSON.stringify({ id: Date.now(), type: 'ping' })); } catch (_) {}
+          try { c.ws && c.ws.readyState === WebSocket.OPEN && c.ws.send(JSON.stringify({ id: Date.now(), type: 'ping' })); } catch (_) { }
         }, 18000);
       };
       c.ws.onmessage = (ev) => {
+        recordSuccess('KUCOIN');
         let msg;
         try { msg = JSON.parse(ev.data); } catch (_) { return; }
         if (msg.type === 'welcome' || msg.type === 'ack' || msg.type === 'pong') return;
@@ -450,6 +546,7 @@
 
   // ───────────────────────── Gate.io ──────────────────────────
   function connectGate() {
+    if (isProviderDisabled('GATE')) return;
     const name = 'GATE';
     const c = conn(name);
     if (!c.active) return;
@@ -457,11 +554,13 @@
     c.ws = new WebSocket('wss://api.gateio.ws/ws/v4/');
     c.ws.onopen = () => {
       c.reconnectMs = RECONNECT_BASE_MS;
+      recordSuccess('GATE');
       const pairs = Object.values(MAP.GATE);
       c.ws.send(JSON.stringify({ time: Math.floor(now() / 1000), channel: 'spot.tickers', event: 'subscribe', payload: pairs }));
       c.ws.send(JSON.stringify({ time: Math.floor(now() / 1000), channel: 'spot.trades', event: 'subscribe', payload: pairs }));
     };
     c.ws.onmessage = (ev) => {
+      recordSuccess('GATE');
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       const channel = msg?.channel || '';
@@ -577,11 +676,11 @@
         clearInterval(c.extra.pingTimer);
         c.extra.pingTimer = null;
       }
-      try { c.ws && c.ws.close(); } catch (_) {}
+      try { c.ws && c.ws.close(); } catch (_) { }
       c.ws = null;
     }
     if (SSE.stream) {
-      try { SSE.stream.close(); } catch (_) {}
+      try { SSE.stream.close(); } catch (_) { }
       SSE.stream = null;
       SSE.active = false;
     }
@@ -657,7 +756,7 @@
   };
 
   document.addEventListener('DOMContentLoaded', () => {
-    try { start(); } catch (_) {}
+    try { start(); } catch (_) { }
   });
 })();
 

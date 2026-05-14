@@ -21,15 +21,189 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+let selfsigned = null;
+try {
+  selfsigned = require('selfsigned');
+} catch (_) {
+  selfsigned = null;
+}
 
-const PORT = process.env.WECRYPTO_WEB_PORT || 3443;
+let webLLMSignalAssistant = null;
+try {
+  webLLMSignalAssistant = require('../src/llm/llm_signal_assistant');
+} catch (_) {
+  webLLMSignalAssistant = null;
+}
+
+let electronApp = null;
+try {
+  ({ app: electronApp } = require('electron'));
+} catch (e) {
+  electronApp = null;
+}
+
+let webGoogleCloudBridge = null;
+try {
+  webGoogleCloudBridge = require('../src/cloud/google-cloud-bridge');
+} catch (_) {
+  webGoogleCloudBridge = null;
+}
+
+const PORT = Number(process.env.WECRYPTO_WEB_PORT || 3443);
 const HOST = process.env.WECRYPTO_WEB_HOST || '0.0.0.0';
+const PORT_RETRY_LIMIT = Number(process.env.WECRYPTO_WEB_PORT_RETRY_LIMIT || 10);
 
 let app = null;
 let server = null;
 let wss = null;
 let runtimeMode = 'stopped';
 let runtimeProtocol = 'http';
+let runtimePort = PORT;
+
+function envFlagEnabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function isLiveDebugEnabled() {
+  if (envFlagEnabled(process.env.WECRYPTO_ENABLE_LIVE_DEBUG)) return true;
+  return !!(electronApp && electronApp.isPackaged === false);
+}
+
+function isLoopbackRequest(req) {
+  const candidates = [
+    req.ip,
+    req.socket?.remoteAddress,
+    req.connection?.remoteAddress,
+  ].filter(Boolean);
+
+  return candidates.some((value) => {
+    const normalized = String(value).trim().toLowerCase();
+    return normalized === '127.0.0.1'
+      || normalized === '::1'
+      || normalized === '::ffff:127.0.0.1'
+      || normalized === 'localhost';
+  });
+}
+
+async function executeRendererSnapshot(script, fallback = null) {
+  try {
+    const win = global.WECRYPTO_MAIN_WINDOW;
+    if (!win || win.isDestroyed?.() || !win.webContents) return fallback;
+    return await win.webContents.executeJavaScript(script, true);
+  } catch (e) {
+    return {
+      ...(fallback && typeof fallback === 'object' ? fallback : {}),
+      rendererError: e.message,
+    };
+  }
+}
+
+function getStateMeta() {
+  const state = global.WECRYPTO_STATE || {};
+  return {
+    schema_version: state.schemaVersion || 'wecrypto.web.v1',
+    revision: Number.isFinite(Number(state.revision)) ? Number(state.revision) : null,
+    published_at: state.publishedAt || state.lastUpdate || null,
+    publish_reason: state.publishReason || null,
+    current_view: state.currentView || null,
+    active_coins: Array.isArray(state.activeCoins) ? state.activeCoins : [],
+    counts: {
+      predictions: Object.keys(state.predictions || {}).length,
+      signals: Object.keys(state.signals || {}).length,
+      kalshi_markets: Object.keys(state.kalshiMarkets || {}).length,
+    },
+  };
+}
+
+function buildLiveDebugScript(symbols) {
+  return `(() => {
+    const syms = ${JSON.stringify(symbols)};
+    const validations = window.Validator15m?.getAll?.() || [];
+    const result = {
+      rendererReady: true,
+      activeCoins: (window.PREDICTION_COINS || []).map(c => c?.sym).filter(Boolean),
+      hasPredictions: !!window._predictions,
+      hasPredictionMarkets: !!window.PredictionMarkets,
+      hasOrchestrator: !!window.KalshiOrchestrator,
+      startupLogTail: window.__WECRYPTO_STARTUP?.getLog?.()?.slice(-12) || [],
+      coins: {},
+    };
+
+    syms.forEach(sym => {
+      const pred = window._predictions?.[sym] || null;
+      const market = window.PredictionMarkets?.getCoin?.(sym) || null;
+      const intent = window.KalshiOrchestrator?.getIntent?.(sym) || null;
+      const cfmAll = window._cfmAll || window.CFMEngine?.getAll?.() || window._cfm || {};
+      const cfm = cfmAll?.[sym] || null;
+
+      result.coins[sym] = {
+        prediction: pred ? {
+          direction: pred.direction ?? null,
+          signal: pred.signal ?? null,
+          score: pred.score ?? null,
+          confidence: pred.confidence ?? null,
+          price: pred.price ?? null,
+          tapeVelocity: pred.diagnostics?.tapeVelocity || null,
+          kalshiAlign: pred.projections?.p15?.kalshiAlign || null,
+          diagnostics: {
+            agreement: pred.diagnostics?.agreement ?? null,
+            conflict: pred.diagnostics?.conflict ?? null,
+            coreScore: pred.diagnostics?.coreScore ?? null,
+            microScore: pred.diagnostics?.microScore ?? null,
+            tapeReleaseValve: pred.diagnostics?.tapeReleaseValve ?? null,
+            vetoed: pred.diagnostics?.vetoed ?? null,
+            vetoReason: pred.diagnostics?.vetoReason ?? null,
+            preferredHorizon: pred.diagnostics?.preferredHorizon ?? null,
+            driverSummary: pred.diagnostics?.driverSummary ?? null,
+            llmRegime: pred.diagnostics?.llmRegime ?? null,
+            llmConfidence: pred.diagnostics?.llmConfidence ?? null,
+          },
+        } : null,
+        predictionMarket: market ? {
+          combinedProb: market.combinedProb ?? null,
+          kalshi: market.kalshi ?? null,
+          poly: market.poly ?? null,
+          kalshi15m: market.kalshi15m ? {
+            ticker: market.kalshi15m.ticker ?? null,
+            probability: market.kalshi15m.probability ?? null,
+            closeTime: market.kalshi15m.closeTime ?? null,
+            strikeDir: market.kalshi15m.strikeDir ?? null,
+            targetPriceNum: market.kalshi15m.targetPriceNum ?? null,
+            liquidity: market.kalshi15m.liquidity ?? null,
+          } : null,
+        } : null,
+        orchestrator: intent ? {
+          action: intent.action ?? null,
+          alignment: intent.alignment ?? null,
+          direction: intent.direction ?? null,
+          side: intent.side ?? null,
+          confidence: intent.confidence ?? null,
+          finalModelConfidence: intent.finalModelConfidence ?? null,
+          crowdFade: intent.crowdFade ?? false,
+          crowdFadeSuggested: intent.crowdFadeSuggested ?? false,
+          crowdFadeTimingLabel: intent.crowdFadeTimingLabel ?? null,
+          crowdFadeWindowLabel: intent.crowdFadeWindowLabel ?? null,
+          crowdFadeMispricingPp: intent.crowdFadeMispricingPp ?? null,
+          crowdFadeConfirmLeftSec: intent.crowdFadeConfirmLeftSec ?? null,
+          edgeCents: intent.edgeCents ?? null,
+          entryPrice: intent.entryPrice ?? null,
+          humanReason: intent.humanReason ?? null,
+          reason: intent.reason ?? null,
+          signalLocked: intent.signalLocked ?? false,
+        } : null,
+        cfm: cfm ? {
+          momentum: cfm.momentum ?? null,
+          trend: cfm.trend ?? null,
+          bidAsk: cfm.bidAsk ?? null,
+          spread: cfm.spread ?? null,
+        } : null,
+        recentValidations: validations.filter(v => v.sym === sym).slice(-3),
+      };
+    });
+
+    return result;
+  })()`;
+}
 
 /**
  * Start HTTPS web service
@@ -40,7 +214,7 @@ function startWebService() {
       started: true,
       mode: runtimeMode,
       protocol: runtimeProtocol,
-      port: PORT,
+      port: runtimePort,
       host: HOST,
     };
   }
@@ -71,6 +245,7 @@ function startWebService() {
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
+      meta: getStateMeta(),
       predictions: predictions
     });
   });
@@ -85,6 +260,7 @@ function startWebService() {
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
+      meta: getStateMeta(),
       signals: signals
     });
   });
@@ -112,6 +288,7 @@ function startWebService() {
 
     res.json({
       success: true,
+      meta: getStateMeta(),
       stats: stats
     });
   });
@@ -126,6 +303,7 @@ function startWebService() {
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
+      meta: getStateMeta(),
       markets: markets
     });
   });
@@ -140,7 +318,62 @@ function startWebService() {
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
+      meta: getStateMeta(),
       status: networkStatus
+    });
+  });
+
+  /**
+   * GET /api/llm-diagnostics
+   * Current LLM provider/cooldown diagnostics from the main process assistant
+   */
+  app.get('/api/llm-diagnostics', (req, res) => {
+    const diagnostics = (webLLMSignalAssistant && typeof webLLMSignalAssistant.getDiagnostics === 'function')
+      ? webLLMSignalAssistant.getDiagnostics()
+      : null;
+
+    res.json({
+      success: !!diagnostics,
+      timestamp: new Date().toISOString(),
+      meta: getStateMeta(),
+      diagnostics,
+      error: diagnostics ? null : 'LLM diagnostics unavailable',
+    });
+  });
+
+  /**
+   * GET /api/cloud-status
+   * Current Google Cloud / Firebase / Vertex bridge status
+   */
+  app.get('/api/cloud-status', (req, res) => {
+    const status = (webGoogleCloudBridge && typeof webGoogleCloudBridge.getStatus === 'function')
+      ? webGoogleCloudBridge.getStatus()
+      : null;
+
+    res.json({
+      success: !!status,
+      timestamp: new Date().toISOString(),
+      meta: getStateMeta(),
+      status,
+      error: status ? null : 'Google cloud bridge unavailable',
+    });
+  });
+
+  /**
+   * GET /api/cloudsql-status
+   * Live Cloud SQL instance/database probe using Google OAuth credentials
+   */
+  app.get('/api/cloudsql-status', async (_req, res) => {
+    const status = (webGoogleCloudBridge && typeof webGoogleCloudBridge.probeCloudSql === 'function')
+      ? await webGoogleCloudBridge.probeCloudSql({ includeDatabase: true, force: false })
+      : null;
+
+    res.json({
+      success: !!status?.success,
+      timestamp: new Date().toISOString(),
+      meta: getStateMeta(),
+      status,
+      error: status ? null : 'Google cloud bridge unavailable',
     });
   });
 
@@ -150,6 +383,8 @@ function startWebService() {
    */
   app.get('/api/status', (req, res) => {
     const uptime = process.uptime();
+    const state = global.WECRYPTO_STATE || {};
+    const meta = getStateMeta();
 
     res.json({
       success: true,
@@ -162,12 +397,55 @@ function startWebService() {
         node_version: process.version
       },
       wecrypto: {
-        running: !!global.WECRYPTO_STATE,
-        last_update: global.WECRYPTO_STATE?.lastUpdate || null,
-        active_coins: global.WECRYPTO_STATE?.activeCoins || []
-      }
+        running: !!state.running,
+        renderer_ready: !!state.rendererReady,
+        last_update: state.lastUpdate || state.publishedAt || null,
+        active_coins: meta.active_coins,
+        schema_version: meta.schema_version,
+        revision: meta.revision,
+        publish_reason: meta.publish_reason,
+        prediction_count: meta.counts.predictions,
+        signal_count: meta.counts.signals,
+      },
+      meta,
     });
   });
+
+  if (isLiveDebugEnabled()) {
+    console.log('[WebService] Live debug endpoint enabled');
+
+    /**
+     * GET /api/live-debug
+     * Pulls a live snapshot directly from the Electron renderer for the core four
+     * coins (or a single requested coin) so terminal/debug tools can inspect the
+     * exact in-memory prediction/orchestrator state.
+     *
+     * Disabled by default in packaged builds unless WECRYPTO_ENABLE_LIVE_DEBUG=1.
+     */
+    app.get('/api/live-debug', async (req, res) => {
+      if (!isLoopbackRequest(req)) {
+        return res.status(403).json({
+          success: false,
+          error: 'live-debug is restricted to loopback requests',
+        });
+      }
+
+      const requestedCoin = String(req.query.coin || '').trim().toUpperCase();
+      const symbols = requestedCoin ? [requestedCoin] : ['BTC', 'ETH', 'SOL', 'XRP'];
+      const snapshot = await executeRendererSnapshot(buildLiveDebugScript(symbols), {
+        rendererReady: false,
+        activeCoins: [],
+        coins: {},
+      });
+
+      res.json({
+        success: true,
+        timestamp: new Date().toISOString(),
+        symbols,
+        snapshot,
+      });
+    });
+  }
 
   // Web UI
   app.get('/', (req, res) => {
@@ -183,20 +461,51 @@ function startWebService() {
     fs.mkdirSync(certDir, { recursive: true });
   }
 
+  function tryGenerateCertWithOpenSSL() {
+    const { execSync } = require('child_process');
+    execSync(`openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 365 -nodes -subj "/CN=localhost"`, {
+      stdio: 'ignore',
+      shell: true
+    });
+  }
+
+  function tryGenerateCertWithSelfsigned() {
+    if (!selfsigned) {
+      throw new Error('selfsigned package unavailable');
+    }
+    const attrs = [{ name: 'commonName', value: 'localhost' }];
+    const pems = selfsigned.generate(attrs, {
+      keySize: 2048,
+      days: 365,
+      algorithm: 'sha256',
+      extensions: [{
+        name: 'subjectAltName',
+        altNames: [
+          { type: 2, value: 'localhost' },
+          { type: 7, ip: '127.0.0.1' }
+        ]
+      }]
+    });
+    fs.writeFileSync(keyFile, pems.private, 'utf8');
+    fs.writeFileSync(certFile, pems.cert, 'utf8');
+  }
+
   // Try to generate self-signed cert
   let useHTTPS = true;
   if (!fs.existsSync(certFile) || !fs.existsSync(keyFile)) {
     console.log('[WebService] Generating self-signed HTTPS certificate...');
-    const { execSync } = require('child_process');
     try {
-      execSync(`openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 365 -nodes -subj "/CN=localhost"`, {
-        stdio: 'ignore',
-        shell: true
-      });
-      console.log('[WebService] Certificate generated successfully');
+      tryGenerateCertWithOpenSSL();
+      console.log('[WebService] Certificate generated successfully via OpenSSL');
     } catch (e) {
       console.warn('[WebService] Could not generate certificate with openssl:', e.message);
-      useHTTPS = false;
+      try {
+        tryGenerateCertWithSelfsigned();
+        console.log('[WebService] Certificate generated successfully via selfsigned fallback');
+      } catch (fallbackErr) {
+        console.warn('[WebService] Could not generate certificate with selfsigned fallback:', fallbackErr.message);
+        useHTTPS = false;
+      }
     }
   }
 
@@ -247,18 +556,44 @@ function startWebService() {
     });
   });
 
-  // Start listening
-  server.listen(PORT, HOST, () => {
-    const protocol = useHTTPS ? 'HTTPS' : 'HTTP';
-    console.log(`[WebService] WECRYPTO web service running: ${protocol}://localhost:${PORT}`);
-    console.log(`[WebService] Access via Edge: edge://open?url=https://localhost:${PORT}`);
-  });
+  // Start listening with automatic failover when port is already in use.
+  let listenAttempts = 0;
+  const maxAttempts = Number.isFinite(PORT_RETRY_LIMIT) ? Math.max(1, PORT_RETRY_LIMIT) : 10;
+
+  const tryListen = (port) => {
+    const onError = (err) => {
+      server.off('error', onError);
+      if (err && err.code === 'EADDRINUSE' && listenAttempts < maxAttempts) {
+        listenAttempts += 1;
+        const nextPort = port + 1;
+        runtimePort = nextPort;
+        console.warn(`[WebService] Port ${port} busy (EADDRINUSE). Retrying on ${nextPort} (${listenAttempts}/${maxAttempts})`);
+        setTimeout(() => tryListen(nextPort), 40);
+        return;
+      }
+      runtimeMode = 'stopped';
+      runtimeProtocol = 'http';
+      console.error('[WebService] Failed to bind server:', err?.message || err);
+    };
+
+    server.once('error', onError);
+    server.listen(port, HOST, () => {
+      server.off('error', onError);
+      runtimePort = port;
+      const protocol = runtimeProtocol.toUpperCase();
+      console.log(`[WebService] WECRYPTO web service running: ${protocol}://localhost:${runtimePort}`);
+      console.log(`[WebService] Access via Edge: edge://open?url=${runtimeProtocol}://localhost:${runtimePort}`);
+    });
+  };
+
+  runtimePort = PORT;
+  tryListen(runtimePort);
 
   return {
     started: true,
     mode: runtimeMode,
     protocol: runtimeProtocol,
-    port: PORT,
+    port: runtimePort,
     host: HOST,
   };
 }
@@ -284,10 +619,20 @@ function updateState(stateUpdate) {
     global.WECRYPTO_STATE = {};
   }
   Object.assign(global.WECRYPTO_STATE, stateUpdate);
-  global.WECRYPTO_STATE.lastUpdate = new Date().toISOString();
+  global.WECRYPTO_STATE.lastUpdate = stateUpdate?.publishedAt || new Date().toISOString();
 
   // Broadcast to all WebSocket clients
   broadcastUpdate('state', global.WECRYPTO_STATE);
+}
+
+function getWebServiceHealth() {
+  return {
+    started: !!(server && server.listening),
+    mode: runtimeMode,
+    protocol: runtimeProtocol,
+    port: runtimePort,
+    host: HOST,
+  };
 }
 
 /**
@@ -586,14 +931,15 @@ function getWebUIHTML() {
       // Update signals
       if (state.signals) {
         const html = Object.entries(state.signals).map(([coin, sig]) => {
-          const dir = sig.direction.toLowerCase();
+          const safeDirection = String(sig.direction || sig.finalDirection || 'WAIT').toUpperCase();
+          const dir = safeDirection.toLowerCase();
           const color = dir === 'up' ? 'up' : dir === 'down' ? 'down' : 'wait';
           return \`
             <div class="signal \${color}">
               <span class="coin-name">\${coin}</span>
               <div style="display: flex; gap: 10px; align-items: center;">
                 <span style="color: #90caf9;">\${sig.confidence}%</span>
-                <span class="direction \${color}">\${sig.direction}</span>
+                <span class="direction \${color}">\${safeDirection}</span>
               </div>
             </div>
           \`;
@@ -651,22 +997,22 @@ function getWebUIHTML() {
     // Load initial data
     async function loadInitialData() {
       try {
-        const [predsRes, statsRes, marketsRes, networkRes, statusRes] = await Promise.all([
-          fetch('/api/predictions'),
+        const [signalsRes, statsRes, marketsRes, networkRes, statusRes] = await Promise.all([
+          fetch('/api/signals'),
           fetch('/api/stats'),
           fetch('/api/kalshi-markets'),
           fetch('/api/network-status'),
           fetch('/api/status')
         ]);
 
-        const preds = await predsRes.json();
+        const signals = await signalsRes.json();
         const stats = await statsRes.json();
         const markets = await marketsRes.json();
         const network = await networkRes.json();
         const status = await statusRes.json();
 
         const combined = {
-          signals: preds.predictions || {},
+          signals: signals.signals || {},
           stats: stats.stats || {},
           kalshiMarkets: markets.markets || {},
           networkStatus: network.status || {},
@@ -693,6 +1039,7 @@ function getWebUIHTML() {
 // Export
 module.exports = {
   startWebService,
+  getWebServiceHealth,
   updateState,
   broadcastUpdate,
   PORT,

@@ -58,8 +58,21 @@
   let advancedBacktestWarmPromise = null;
   let inferenceRunPromise = null;
   let lastInferenceRunTs = 0;
+  let tideRunPromise = null;
+  let lastTideRunTs = 0;
+  let tideStatusCache = null;
+  let tideStatusCacheTs = 0;
   const INFERENCE_MIN_INTERVAL_MS = 12000;
   const INFERENCE_REQUEST_TIMEOUT_MS = 7000;
+  const INFERENCE_QUOTA_COOLDOWN_MS = 5 * 60 * 1000;
+  const TIDE_MIN_INTERVAL_MS = 15000;
+  const TIDE_REQUEST_TIMEOUT_MS = 6500;
+  const TIDE_STATUS_TTL_MS = 60 * 1000;
+  const TIDE_DISABLED_RETRY_MS = 5 * 60 * 1000;
+  let inferenceCooldownUntilTs = 0;
+  let inferenceCooldownReason = '';
+  let tideDisabledUntilTs = 0;
+  let tideDisabledReason = '';
 
   // ── Backtest localStorage cache (cold-start / refresh acceleration) ───────
   // Bump cache key to force recomputation after h1/h5 horizon-candle fix.
@@ -120,11 +133,19 @@
     // Throttle on attempt (not only success) so transient outages don't spam requests.
     _fngCache.ts = now;
     try {
-      const res = await fetchAnalyticsWithRoute('https://api.alternative.me/fng/?limit=1', 5000);
-      if (!res.ok) return _fngCache.value;
+      // Reduced timeout to 2s (fail fast for non-critical indicator)
+      const res = await fetchAnalyticsWithRoute('https://api.alternative.me/fng/?limit=1', 2000);
+      if (!res.ok) {
+        console.warn(`[FNG] HTTP ${res.status} after 2s - using cached value`);
+        return _fngCache.value;
+      }
       const data = await res.json();
       _fngCache.value = parseInt(data.data[0].value, 10);
-    } catch (e) { /* use cached value */ }
+      console.info(`[FNG] Updated: ${_fngCache.value}`);
+    } catch (e) {
+      console.warn(`[FNG] Timeout/error after 2s: ${e.message} - using cached value`);
+      /* use cached value */
+    }
     return _fngCache.value;
   }
 
@@ -168,6 +189,9 @@
     // Live-only microstructure (INCREASED for h1/h5 edge)
     book: 0.25,  // was 0.13 — 92% increase for order flow signal at short horizons
     flow: 0.22,  // was 0.12 — 83% increase for trade flow signal
+    toxicity: 0.06,
+    spoof: 0.07,
+    iceberg: 0.08,
     mktSentiment: 0.18,  // was 0.11 — 64% increase for macro context
     fearGreed: 0.12,  // Fear & Greed Index macro overlay
     cmcMacro: 0.08,  // ★ CoinMarketCap Pro: BTC dominance + global volume flux (added 2026-05-06)
@@ -467,51 +491,51 @@
   //      Gate raised to 0.55 (very tight); re-run backtest before trusting live signals.
   const SIGNAL_GATE_OVERRIDES = {
     BTC: {
-      minAbsScore: 0.35,  // ★ WF-calibrated 2026-05-04: h15 OOS 52.6% (recent 10-fold: 65.1%)
+      minAbsScore: 0.35,  // ★ Safety patch 2026-05-14: Raised confidence floor from 44% → 70% to block low-qual h15 signals
       minAgreement: 0.50,
-      minConfidence: 44,
+      minConfidence: 70,   // ★★★ CRITICAL FIX: was 44%, now 70% to prevent lossy small-bet executions
       medAbsScore: 0.52,
       medAgreement: 0.60,
     },
     ETH: {
-      minAbsScore: 0.30,  // ★ WF-calibrated 2026-05-04: 0.40 was over-tight, h15 OOS 51.8% (recent 56.7%)
+      minAbsScore: 0.30,  // ★ Safety patch 2026-05-14: Raised confidence floor from 44% → 70%
       minAgreement: 0.56,
-      minConfidence: 44,
+      minConfidence: 70,   // ★★★ CRITICAL FIX: was 44%, now 70%
       medAbsScore: 0.45,
       medAgreement: 0.62,
     },
     XRP: {
-      minAbsScore: 0.30,  // ★ WF-calibrated 2026-05-04: h15 OOS 45.7% avg (recent 10-fold: 64.7%)
+      minAbsScore: 0.30,  // ★ Safety patch 2026-05-14: Raised confidence floor from 50% → 70%
       minAgreement: 0.50,
-      minConfidence: 50,
+      minConfidence: 70,   // ★★★ CRITICAL FIX: was 50%, now 70%
       medAbsScore: 0.45,
       medAgreement: 0.60,
     },
     SOL: {
-      minAbsScore: 0.44,  // ★ Keep tight (noisy); minAgreement lowered: 0.64 blocked valid h15 signals
+      minAbsScore: 0.44,  // ★ Safety patch 2026-05-14: Raised confidence floor from 52% → 70%
       minAgreement: 0.54,
-      minConfidence: 52,
+      minConfidence: 70,   // ★★★ CRITICAL FIX: was 52%, now 70%
       medAbsScore: 0.62,
       medAgreement: 0.66,
     },
     BNB: {
       minAbsScore: 0.55,  // ★ very tight gate — re-enabled 2026-04-27 with overhauled bias; validate via backtest
       minAgreement: 0.72,
-      minConfidence: 68,    // ↑ RETUNED: moderate floor to add diversification (0% → 5-10% allocation)
+      minConfidence: 72,   // ★★★ Maintained high bar (was 68%, now 72% for safety)
       medAbsScore: 0.75,
       medAgreement: 0.78,
     },
     DOGE: {
-      minAbsScore: 0.24,  // ★ LOWERED 2026-05-05: Pyth ID 10 + History API = better data quality
+      minAbsScore: 0.24,  // ★ Safety patch 2026-05-14: Raised confidence floor from 55% → 70%
       minAgreement: 0.56,
-      minConfidence: 55,    // ↑ RETUNED: lower floor for scalp opportunities
+      minConfidence: 70,   // ★★★ CRITICAL FIX: was 55%, now 70%
       medAbsScore: 0.32,
       medAgreement: 0.62,
     },
     HYPE: {
       minAbsScore: 0.20,
       minAgreement: 0.56,
-      minConfidence: 70,    // ↑ RETUNED: moderate floor for emerging alpha (1% → 5-8% allocation)
+      minConfidence: 72,   // ★★★ Maintained high bar (was 70%, now 72% for safety)
       medAbsScore: 0.30,
       medAgreement: 0.60,
     },
@@ -526,10 +550,21 @@
    *          'blocked' — fails hard gate (noisy/conflicted, do not show directional)
    *
    * gated: true when quality === 'blocked' (signal should show HOLD in UI)
+   *
+   * ★ SAFETY PATCH 2026-05-14: Added close-window guard (skip final 45s of 15m candle)
    */
   function evaluateSignalGate(pred, coin) {
     if (!pred || pred.signal === 'neutral' || !Number.isFinite(pred.score)) {
       return { passed: true, gated: false, quality: 'medium', label: 'NEUTRAL', reasons: [] };
+    }
+
+    // ★ SAFETY PATCH: Close-window guard — skip trading in final 45 seconds before h15 expiry
+    const now = Date.now();
+    const secsSinceEpoch = (now % 900_000); // ms within any 15-min slot
+    const secsIntoWindow = (secsSinceEpoch / 1000);
+    const secsUntilClose = (900 - secsIntoWindow); // seconds until next 15m close
+    if (pred.horizon === 15 && secsUntilClose < 45) {
+      return { passed: false, gated: true, quality: 'blocked', label: '⏱️ CLOSE-WINDOW GUARD', reasons: ['Too close to 15m candle close (skip final 45s)'] };
     }
 
     const conf = pred.confidence ?? 0;
@@ -596,7 +631,7 @@
   // Signals below threshold are labelled LOW CONVICTION or BLOCKED.
   // ================================================================
   const CORE_SIGNAL_KEYS = ['hma', 'vwma', 'rsi', 'ema', 'sma', 'obv', 'volume', 'momentum', 'bands', 'persistence', 'structure', 'macd', 'stochrsi', 'adx', 'ichimoku', 'williamsR', 'mfi', 'vwap', 'supertrend', 'cci', 'cmf', 'fisher', 'keltner'];
-  const MICRO_SIGNAL_KEYS = ['book', 'flow'];
+  const MICRO_SIGNAL_KEYS = ['book', 'flow', 'toxicity', 'spoof', 'iceberg'];
   const SIGNAL_LABELS = {
     rsi: 'RSI',
     ema: 'EMA Cross',
@@ -611,6 +646,9 @@
     structure: 'Support/Resistance',
     book: 'Order Book',
     flow: 'Tape Flow',
+    toxicity: 'Flow Toxicity',
+    spoof: 'Spoofing Risk',
+    iceberg: 'Iceberg Absorption',
     macd: 'MACD',
     stochrsi: 'Stoch RSI',
     adx: 'ADX',
@@ -773,16 +811,40 @@
   }
 
   async function fetchWithTimeout(url, timeoutMs = 4000, options = {}) {
-    if (typeof AbortController === 'undefined') {
-      return (window.throttledFetch ?? fetch)(url, options);
-    }
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await (window.throttledFetch ?? fetch)(url, { ...options, signal: controller.signal });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    const {
+      schedulerLane = null,
+      schedulerProvider = null,
+      schedulerDelayMs = 0,
+      schedulerDedupeKey = null,
+      schedulerPriorityBoost = 0,
+      ...fetchOptions
+    } = options || {};
+
+    const runFetch = async () => {
+      const fetchImpl = (window.throttledFetch ?? fetch).bind(window);
+      if (typeof AbortController === 'undefined') {
+        return fetchImpl(url, fetchOptions);
+      }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetchImpl(url, { ...fetchOptions, signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const scheduler = window._signalScheduler;
+    if (!scheduler) return runFetch();
+
+    return scheduler.schedule(runFetch, {
+      lane: schedulerLane || scheduler.inferLaneFromUrl?.(url, 'momentum') || 'momentum',
+      provider: schedulerProvider || scheduler.inferProviderFromUrl?.(url) || 'default',
+      delayMs: schedulerDelayMs,
+      priorityBoost: schedulerPriorityBoost,
+      dedupeKey: schedulerDedupeKey || `${String(fetchOptions.method || 'GET').toUpperCase()}:${url}`,
+      tag: `pred:${url}`,
+    });
   }
 
   function randomBetween(min, max) {
@@ -797,18 +859,48 @@
     lastExchangeRequestAt = Date.now();
   }
 
+  // Track consecutive 429s for circuit breaker (5+ consecutive → 60s pause)
+  let geckoConsecutive429s = 0;
+  let geckoCircuitBreakerUntil = 0;
+
   async function fetchGeckoJSON(path, options = {}) {
-    const { minGapMs = 1800, retries = 1 } = options;  // max 1 retry — 4 retries created 22s+ backlog
+    const { minGapMs = 1800, retries = 3 } = options;  // Exponential backoff: 1s, 2s, 4s, 8s
+    const backoffMs = [1000, 2000, 4000, 8000];  // Exponential progression
+
     const run = async (attempt = 0) => {
+      // Circuit breaker: if 5+ consecutive 429s, pause for 60s
+      if (geckoConsecutive429s >= 5 && Date.now() < geckoCircuitBreakerUntil) {
+        throw new Error(`Gecko circuit breaker open (${Math.ceil((geckoCircuitBreakerUntil - Date.now()) / 1000)}s remaining)`);
+      }
+
       const now = Date.now();
       const waitMs = Math.max(0, minGapMs - (now - lastGeckoRequestAt));
       if (waitMs > 0) await wait(waitMs);
       lastGeckoRequestAt = Date.now();
       const res = await fetchWithTimeout(`${GECKO_BASE}${path}`, 4500);
+
+      // Handle 429 with exponential backoff
       if (res.status === 429 && attempt < retries) {
-        await wait(1500);   // flat 1.5s backoff instead of compounding
+        geckoConsecutive429s++;
+        if (geckoConsecutive429s >= 5) {
+          geckoCircuitBreakerUntil = Date.now() + 60000;  // 60s pause
+          console.warn(`[Gecko] Circuit breaker activated after ${geckoConsecutive429s} consecutive 429s`);
+        }
+        const backoff = backoffMs[Math.min(attempt, backoffMs.length - 1)];
+        console.warn(`[Gecko] 429 rate limit (attempt ${attempt + 1}/${retries + 1}), backoff ${backoff}ms, consecutive=${geckoConsecutive429s}`);
+        await wait(backoff);
         return run(attempt + 1);
       }
+
+      // Success: reset consecutive 429 counter
+      if (res.ok) geckoConsecutive429s = 0;
+
+      // Handle 401 auth errors
+      if (res.status === 401) {
+        geckoConsecutive429s = 0;
+        throw new Error(`Gecko 401 Unauthorized (API key expired)`);
+      }
+
       if (!res.ok) throw new Error(`Gecko ${res.status}`);
       return res.json();
     };
@@ -1645,10 +1737,49 @@
       }
       // Re-score this coin with the enriched data
       window._backtests[coin.sym] = runWalkForwardBacktest(coin);
-      window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
+      window._predictions[coin.sym] = preservePredictionOverlay(
+        window._predictions[coin.sym],
+        computePrediction(coin, window._backtests[coin.sym])
+      );
     } catch (err) {
       console.warn(`[enrichCoinDataBackground] ${coin.sym}:`, err.message);
     }
+  }
+
+  function preservePredictionOverlay(previousPrediction, nextPrediction) {
+    if (!nextPrediction || typeof nextPrediction !== 'object') return nextPrediction;
+    const prev = previousPrediction && typeof previousPrediction === 'object' ? previousPrediction : null;
+    if (!prev) return nextPrediction;
+
+    if (prev.llm && typeof prev.llm === 'object' && !nextPrediction.llm) {
+      nextPrediction.llm = { ...prev.llm };
+    }
+
+    if (prev.tide && typeof prev.tide === 'object' && !nextPrediction.tide) {
+      nextPrediction.tide = { ...prev.tide };
+    }
+
+    if (prev.diagnostics && typeof prev.diagnostics === 'object') {
+      nextPrediction.diagnostics = {
+        ...(nextPrediction.diagnostics || {}),
+        llmRegime: nextPrediction.diagnostics?.llmRegime ?? prev.diagnostics.llmRegime ?? null,
+        llmConfidence: nextPrediction.diagnostics?.llmConfidence ?? prev.diagnostics.llmConfidence ?? null,
+        llmWarnings: nextPrediction.diagnostics?.llmWarnings ?? prev.diagnostics.llmWarnings ?? [],
+        llmDegraded: nextPrediction.diagnostics?.llmDegraded ?? prev.diagnostics.llmDegraded ?? null,
+        llmCooldownRemainingMs: nextPrediction.diagnostics?.llmCooldownRemainingMs ?? prev.diagnostics.llmCooldownRemainingMs ?? null,
+        llmSuggestedIncreases: nextPrediction.diagnostics?.llmSuggestedIncreases ?? prev.diagnostics.llmSuggestedIncreases ?? [],
+        llmSuggestedDecreases: nextPrediction.diagnostics?.llmSuggestedDecreases ?? prev.diagnostics.llmSuggestedDecreases ?? [],
+        llmNotes: nextPrediction.diagnostics?.llmNotes ?? prev.diagnostics.llmNotes ?? null,
+        tideDirection: nextPrediction.diagnostics?.tideDirection ?? prev.diagnostics.tideDirection ?? null,
+        tideConfidence: nextPrediction.diagnostics?.tideConfidence ?? prev.diagnostics.tideConfidence ?? null,
+        tideForecastPrice: nextPrediction.diagnostics?.tideForecastPrice ?? prev.diagnostics.tideForecastPrice ?? null,
+        tideMode: nextPrediction.diagnostics?.tideMode ?? prev.diagnostics.tideMode ?? null,
+        tideQueued: nextPrediction.diagnostics?.tideQueued ?? prev.diagnostics.tideQueued ?? null,
+        tideError: nextPrediction.diagnostics?.tideError ?? prev.diagnostics.tideError ?? null,
+      };
+    }
+
+    return nextPrediction;
   }
 
   // ================================================================
@@ -3265,6 +3396,141 @@
   }
 
   /**
+   * Detect whether the current 15m tape is expanding faster than the model's
+   * legacy assumptions. This is a data-driven release valve for modern crypto
+   * sessions: stronger range expansion, more persistent bodies, and heavier
+   * volume can justify slightly faster targets/confidence without hardcoding
+   * any macro narrative into the signal engine.
+   */
+  function buildTapeVelocityProfile(candles, tradeFlow, liveRegime, rawComposite = 0) {
+    const n = candles?.length || 0;
+    const lastPrice = candles?.[n - 1]?.c || 0;
+    if (n < 12 || !Number.isFinite(lastPrice) || lastPrice <= 0) {
+      return {
+        state: 'normal',
+        label: 'Normal 15m tape',
+        rangeExpansion: 1,
+        bodyExpansion: 1,
+        volumeBurst: 1,
+        directionalConsistency: 0.5,
+        netMovePct: 0,
+        scoreAligned: false,
+        scoreBoostMult: 1,
+        confidenceBoostMult: 1,
+        targetDriftMult: 1,
+        rangeExpansionMult: 1,
+        releaseValve: false,
+      };
+    }
+
+    const recent = candles.slice(-3);
+    const baseline = candles.slice(-12, -3);
+    const avgRangePct = set => average((set || []).map(c => ((c.h - c.l) / (c.c || 1)) * 100));
+    const avgBodyPct = set => average((set || []).map(c => (Math.abs(c.c - c.o) / (Math.abs(c.o) || 1)) * 100));
+    const avgVolume = set => average((set || []).map(c => c.v || 0));
+
+    const recentRangePct = avgRangePct(recent) || 0;
+    const baselineRangePct = Math.max(avgRangePct(baseline) || recentRangePct || 0.01, 0.01);
+    const recentBodyPct = avgBodyPct(recent) || 0;
+    const baselineBodyPct = Math.max(avgBodyPct(baseline) || recentBodyPct || 0.005, 0.005);
+    const recentVolume = avgVolume(recent) || 0;
+    const baselineVolume = Math.max(avgVolume(baseline) || recentVolume || 1, 1);
+
+    const rangeExpansion = clamp(recentRangePct / baselineRangePct, 0.70, 2.60);
+    const bodyExpansion = clamp(recentBodyPct / baselineBodyPct, 0.70, 2.60);
+    const volumeBurst = clamp(recentVolume / baselineVolume, 0.50, 3.00);
+
+    let sameDirBars = 0;
+    let directionalBars = 0;
+    for (const bar of recent) {
+      const dir = Math.sign((bar.c || 0) - (bar.o || 0));
+      if (dir !== 0) {
+        directionalBars += 1;
+        if (dir === Math.sign((recent[recent.length - 1]?.c || 0) - (recent[0]?.o || 0))) sameDirBars += 1;
+      }
+    }
+    const directionalConsistency = directionalBars ? sameDirBars / directionalBars : 0.5;
+
+    const windowOpen = candles[Math.max(0, n - 4)]?.o || candles[Math.max(0, n - 4)]?.c || lastPrice;
+    const netMovePct = ((lastPrice - windowOpen) / (windowOpen || 1)) * 100;
+    const driftDir = Math.sign(netMovePct);
+    const scoreDir = Math.sign(rawComposite || 0);
+    const flowDir = tradeFlow?.aggressor === 'buyers' ? 1 : tradeFlow?.aggressor === 'sellers' ? -1 : 0;
+    const momentumDir = liveRegime?.momentumBias === 'strong_up' ? 1
+      : liveRegime?.momentumBias === 'strong_down' ? -1 : 0;
+    const alignmentVotes = [driftDir, flowDir, momentumDir].filter(v => v !== 0);
+    const alignedVotes = scoreDir === 0 ? 0 : alignmentVotes.filter(v => v === scoreDir).length;
+    const alignmentScore = scoreDir === 0
+      ? 0.5
+      : clamp(alignedVotes / Math.max(1, alignmentVotes.length), 0, 1);
+    const scoreAligned = scoreDir !== 0 && alignmentScore >= 0.67;
+    const trendConfidence = clamp(Number(liveRegime?.confidence ?? 0.5), 0, 1);
+    const velocityScore = clamp(
+      Math.max(0, rangeExpansion - 1) * 0.34
+      + Math.max(0, bodyExpansion - 1) * 0.22
+      + Math.max(0, volumeBurst - 1) * 0.16
+      + directionalConsistency * 0.18
+      + trendConfidence * 0.10,
+      0,
+      1.25
+    );
+
+    const trendingRegime = /trending/.test(String(liveRegime?.regime || ''));
+    let state = 'normal';
+    let label = 'Normal 15m tape';
+    if (velocityScore >= 0.82) {
+      state = 'explosive';
+      label = 'Explosive 15m tape — fast range expansion';
+    } else if (velocityScore >= 0.54) {
+      state = 'accelerating';
+      label = 'Accelerating 15m tape — momentum carrying farther';
+    } else if (rangeExpansion <= 0.88 && bodyExpansion <= 0.92) {
+      state = 'compressed';
+      label = 'Compressed tape — smaller 15m drift';
+    }
+
+    let scoreBoostMult = 1;
+    let confidenceBoostMult = 1;
+    let targetDriftMult = 1;
+    const rangeExpansionMult = clamp(
+      1 + Math.max(0, rangeExpansion - 1) * 0.24 + Math.max(0, bodyExpansion - 1) * 0.16,
+      0.95,
+      1.38
+    );
+
+    const boostable = trendingRegime
+      && trendConfidence >= 0.58
+      && scoreAligned
+      && directionalConsistency >= 0.60
+      && velocityScore >= 0.48;
+    if (boostable) {
+      const accel = clamp((velocityScore - 0.48) / 0.62, 0, 1);
+      scoreBoostMult = 1 + accel * 0.14;
+      confidenceBoostMult = 1 + accel * 0.12;
+      targetDriftMult = 1 + accel * 0.26;
+    } else if (state === 'compressed') {
+      targetDriftMult = 0.94;
+    }
+
+    return {
+      state,
+      label,
+      rangeExpansion,
+      bodyExpansion,
+      volumeBurst,
+      directionalConsistency,
+      netMovePct,
+      scoreAligned,
+      alignmentScore,
+      scoreBoostMult,
+      confidenceBoostMult,
+      targetDriftMult,
+      rangeExpansionMult,
+      releaseValve: boostable && (state === 'accelerating' || state === 'explosive'),
+    };
+  }
+
+  /**
    * Builds a human-readable + machine-usable prediction rationale.
    * sigVec = array of { name, value, weight } signal contributions.
    * Returns rationale object with lines[], dirLabel, conviction, preLocked flag.
@@ -3537,14 +3803,23 @@
     const microstructureComposite = clamp(microstructure?.composite || 0, -1, 1);
     const sweepScore = clamp(microstructure?.sweep?.score || 0, -1, 1);
     const vacuumPenalty = clamp(microstructure?.vacuum?.severity || 0, 0, 1);
-    const toxicityPenalty = clamp(microstructure?.toxicity?.proxy || 0, 0, 1);
+    const toxicityPenalty = clamp((microstructure?.toxicity?.tox ?? microstructure?.toxicity?.proxy ?? 0), 0, 1);
+    const spoofScore = clamp(microstructure?.spoofing?.score || 0, 0, 1);
+    const spoofDir = clamp(microstructure?.spoofing?.direction || 0, -1, 1);
+    const icebergScore = clamp(microstructure?.iceberg?.score || 0, 0, 1);
+    const icebergDir = clamp(microstructure?.iceberg?.direction || 0, -1, 1);
+    const toxicitySig = -toxicityPenalty;
+    const spoofSig = clamp(spoofDir * spoofScore, -1, 1);
+    const icebergSig = clamp(icebergDir * icebergScore, -1, 1);
     const bookSig = clamp(bookSigBase * 0.86 + microstructureComposite * 0.14, -1, 1);
     let flowSig = clamp(flowSigBase * 0.84 + sweepScore * 0.16, -1, 1);
+    const bookSigAdj = clamp(bookSig + spoofSig * 0.12, -1, 1);
+    flowSig = clamp(flowSig + icebergSig * 0.16, -1, 1);
     if (vacuumPenalty > 0.55) {
       flowSig *= (1 - vacuumPenalty * 0.35);
     }
     if (toxicityPenalty > 0.60) {
-      flowSig *= (1 - (toxicityPenalty - 0.60) * 0.20);
+      flowSig *= (1 - (toxicityPenalty - 0.60) * 0.35);
     }
 
     // --- Prediction Market Sentiment (Kalshi + Polymarket) ---
@@ -3640,8 +3915,11 @@
       bands: bandSig,
       persistence: persistence.signal,
       structure: structure.signal,
-      book: includeMicrostructure ? bookSig : 0,
+      book: includeMicrostructure ? bookSigAdj : 0,
       flow: includeMicrostructure ? flowSig : 0,
+      toxicity: includeMicrostructure ? toxicitySig : 0,
+      spoof: includeMicrostructure ? spoofSig : 0,
+      iceberg: includeMicrostructure ? icebergSig : 0,
       macd: macdSig,
       stochrsi: stochSig,
       adx: adxSig,
@@ -3705,6 +3983,7 @@
     const coreComposite = weightedComposite(CORE_SIGNAL_KEYS);
     const microComposite = includeMicrostructure ? weightedComposite(MICRO_SIGNAL_KEYS) : 0;
     const rawComposite = weightedComposite(modelActiveKeys);
+    const tapeVelocity = buildTapeVelocityProfile(candles, tradeFlow, liveRegime, rawComposite);
 
     // ADX gate: suppress signal in flat/ranging markets (ADX < 20 = noise).
     // Proportional — dead-flat market (ADX=5) dampens composite by 75%.
@@ -3746,7 +4025,7 @@
 
     const divergenceSuppression = bearishDivergence ? 0.15 : 1.0;  // Kill 85% of signal if divergence detected
 
-    const score = clamp(rawComposite * 1.6 * adxGate * divergenceSuppression * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult, -1, 1);
+    const score = clamp(rawComposite * 1.6 * adxGate * divergenceSuppression * (ENABLE_MDT_SCORE_MULT ? mdtScoreMult : 1) * _sessMult * (tapeVelocity.scoreBoostMult || 1), -1, 1);
     const agreement = summarizeAgreement(Object.fromEntries(modelActiveKeys.map(key => [key, signalVector[key]])));
     const coreAgreement = summarizeAgreement(Object.fromEntries(CORE_SIGNAL_KEYS.map(key => [key, signalVector[key]])));
 
@@ -3769,11 +4048,12 @@
         composite: 0,
         sweep: { score: 0, label: 'No tape' },
         vacuum: { active: false, severity: 0, label: 'Unknown' },
-        toxicity: { available: false, proxy: 0, label: 'Unavailable' },
+        toxicity: { available: false, proxy: 0, vpin: 0, tox: 0, label: 'Unavailable' },
+        spoofing: { score: 0, direction: 0, side: 'none', label: 'Unavailable' },
+        iceberg: { score: 0, direction: 0, side: 'none', label: 'Unavailable' },
       },
       macd: { macd: macdResult.macd, signal: macdResult.signal, histogram: macdResult.histogram, sig: macdSig, label: macdResult.histogram > 0 ? (macdResult.macd > macdResult.signal ? 'Bull MACD' : 'Bullish') : (macdResult.macd < macdResult.signal ? 'Bear MACD' : 'Bearish') },
       stochrsi: { k: stochRsiResult.k, d: stochRsiResult.d, signal: stochSig, label: stochRsiResult.k > 80 ? 'Overbought' : stochRsiResult.k < 20 ? 'Oversold' : stochRsiResult.k > stochRsiResult.d ? 'Bull cross' : 'Bear cross' },
-      adx: { adx: adxResult.adx, pdi: adxResult.pdi, mdi: adxResult.mdi, signal: adxSig, label: adxResult.adx > 25 ? (adxResult.pdi > adxResult.mdi ? 'Strong uptrend' : 'Strong downtrend') : 'Ranging' },
       ichimoku: { ...ichimoku, signal: ichiSig, label: ichimoku.cloudPos === 'above' ? 'Above cloud' : ichimoku.cloudPos === 'below' ? 'Below cloud' : 'In cloud' },
       williamsR: { value: wR, signal: wRSig, label: wR > -20 ? 'Overbought' : wR < -80 ? 'Oversold' : 'Neutral' },
       mfi: { value: mfi, signal: mfiSig, label: mfi > 80 ? 'Overbought' : mfi < 20 ? 'Oversold' : mfi > 55 ? 'Bullish' : mfi < 45 ? 'Bearish' : 'Neutral' },
@@ -3785,6 +4065,16 @@
         combined: mktData?.combinedProb ?? null,
         signal: mktSig,
         label: mktSig > 0.3 ? 'Markets say UP' : mktSig < -0.3 ? 'Markets say DOWN' : 'Markets neutral',
+      },
+      tapeVelocity: {
+        state: tapeVelocity.state,
+        label: tapeVelocity.label,
+        rangeExpansion: tapeVelocity.rangeExpansion,
+        bodyExpansion: tapeVelocity.bodyExpansion,
+        volumeBurst: tapeVelocity.volumeBurst,
+        directionalConsistency: tapeVelocity.directionalConsistency,
+        targetDriftMult: tapeVelocity.targetDriftMult,
+        rangeExpansionMult: tapeVelocity.rangeExpansionMult,
       },
       cmcMacro: {
         signal: cmcMacroSig,
@@ -3813,12 +4103,15 @@
     if (typeof bandSig !== 'undefined') _sigVec.push({ name: 'bands', value: bandSig, weight: adaptiveWeights.bands ?? COMPOSITE_WEIGHTS.bands ?? 0.08 });
     if (typeof stochSig !== 'undefined') _sigVec.push({ name: 'stochrsi', value: stochSig, weight: adaptiveWeights.stochrsi ?? COMPOSITE_WEIGHTS.stochrsi ?? 0.04 });
     if (typeof wRSig !== 'undefined') _sigVec.push({ name: 'williamsR', value: wRSig, weight: adaptiveWeights.williamsR ?? COMPOSITE_WEIGHTS.williamsR ?? 0.07 });
-    if (typeof bookSig !== 'undefined') _sigVec.push({ name: 'book', value: bookSig, weight: adaptiveWeights.book ?? COMPOSITE_WEIGHTS.book ?? 0.25 });
+    if (typeof bookSigAdj !== 'undefined') _sigVec.push({ name: 'book', value: bookSigAdj, weight: adaptiveWeights.book ?? COMPOSITE_WEIGHTS.book ?? 0.25 });
     if (typeof obvSig !== 'undefined') _sigVec.push({ name: 'obv', value: obvSig, weight: adaptiveWeights.obv ?? COMPOSITE_WEIGHTS.obv ?? 0.07 });
     if (typeof cciSig !== 'undefined') _sigVec.push({ name: 'cci', value: cciSig, weight: adaptiveWeights.cci ?? COMPOSITE_WEIGHTS.cci ?? 0.05 });
     if (typeof fngSig !== 'undefined') _sigVec.push({ name: 'fearGreed', value: fngSig, weight: adaptiveWeights.fearGreed ?? COMPOSITE_WEIGHTS.fearGreed ?? 0.12 });
     if (typeof vwapSig !== 'undefined') _sigVec.push({ name: 'vwap', value: vwapSig, weight: adaptiveWeights.vwap ?? OUTER_ORBITAL_WEIGHTS.vwap ?? 0.05 });
     if (typeof flowSig !== 'undefined') _sigVec.push({ name: 'flow', value: flowSig, weight: adaptiveWeights.flow ?? COMPOSITE_WEIGHTS.flow ?? 0.22 });
+    if (typeof toxicitySig !== 'undefined') _sigVec.push({ name: 'toxicity', value: toxicitySig, weight: adaptiveWeights.toxicity ?? COMPOSITE_WEIGHTS.toxicity ?? 0.06 });
+    if (typeof spoofSig !== 'undefined') _sigVec.push({ name: 'spoof', value: spoofSig, weight: adaptiveWeights.spoof ?? COMPOSITE_WEIGHTS.spoof ?? 0.07 });
+    if (typeof icebergSig !== 'undefined') _sigVec.push({ name: 'iceberg', value: icebergSig, weight: adaptiveWeights.iceberg ?? COMPOSITE_WEIGHTS.iceberg ?? 0.08 });
     if (typeof volSig !== 'undefined') _sigVec.push({ name: 'volume', value: volSig, weight: adaptiveWeights.volume ?? COMPOSITE_WEIGHTS.volume ?? 0.10 });
     if (!KALSHI_VERIFY_ONLY && typeof mktSig !== 'undefined') _sigVec.push({ name: 'mktSentiment', value: mktSig, weight: adaptiveWeights.mktSentiment ?? COMPOSITE_WEIGHTS.mktSentiment ?? 0.18 });
 
@@ -3826,23 +4119,25 @@
     const _kalshiProb = mktData?.combinedProb ?? null;
 
     const rationale = buildRationale(_sigVec, liveRegime, _kalshiProb, options.sym || '');
+    const projectionTargetDriftMult = tapeVelocity.targetDriftMult || 1;
+    const projectionRangeExpansionMult = tapeVelocity.rangeExpansionMult || 1;
 
     return {
       price: lastPrice,
       score,
       signal: signalFromScore(score),
-      confidence: confidenceFromScore(Math.abs(score)),
+      confidence: Math.round(clamp(confidenceFromScore(Math.abs(score)) * (tapeVelocity.confidenceBoostMult || 1), 0, 95)),
       indicators: indicatorsSummary,
       projections: SHORT_HORIZON_MINUTES.reduce((acc, horizonMin) => {
         const targetScale = horizonMin / 60;
-        const rangeScale = Math.max(0.12, Math.sqrt(horizonMin / 15) * 0.5);
-        const target = lastPrice * (1 + mom / 100 * targetScale);
+        const rangeScale = Math.max(0.12, Math.sqrt(horizonMin / 15) * 0.5) * projectionRangeExpansionMult;
+        const target = lastPrice * (1 + mom / 100 * targetScale * projectionTargetDriftMult);
         const entry = projectionKey(horizonMin);
         acc[entry] = { horizonMin, target, high: target + atr * rangeScale, low: target - atr * rangeScale };
         // For the 15-min horizon, align target to the NEXT 15-min candle session
         if (horizonMin === 15) {
           const ns = getNextCandleSession();
-          const scaledMom = mom / 100 * (ns.minsRemaining / 60);
+          const scaledMom = mom / 100 * (ns.minsRemaining / 60) * projectionTargetDriftMult;
           const nsTarget = lastPrice * (1 + scaledMom);
           acc[entry].nextSession = {
             target: nsTarget,
@@ -3873,7 +4168,7 @@
 
           if (kalshiRef !== null && kalshiRef > 0) {
             // sigma: one-sigma price move over 15 min based on ATR
-            const sigma = (atr * rangeScale) || (settlementPrice * 0.003);
+            const sigma = (atr * rangeScale) || (settlementPrice * 0.003 * projectionRangeExpansionMult);
             // z: how far our projected target is above/below the reference threshold
             const z = (target - kalshiRef) / sigma;
             // P(closePrice ≥ kalshiRef) via normal CDF
@@ -3919,6 +4214,9 @@
               rtiPrice: rtiPrice,
               rtiData: rtiData ? { openAvg: rtiData.openAvg, closeAvg: rtiData.closeAvg, delta: rtiData.delta } : null,
               priceSource: rtiPrice ? 'RTI' : 'candle',
+              tapeVelocityState: tapeVelocity.state,
+              targetDriftMult: projectionTargetDriftMult,
+              rangeExpansionMult: projectionRangeExpansionMult,
               dirConflict,      // true when momentum direction contradicts CDF direction
               cdfImpliedDir,    // direction implied by model probability
               status: divergence === null ? 'no-market'
@@ -3947,6 +4245,7 @@
         bullishSignals: agreement.bulls,
         bearishSignals: agreement.bears,
         consensusLabel: agreement.label,
+        tapeVelocity,
         components: signalVector,
         coreScore: clamp(coreComposite, -1, 1),
         microScore: clamp(microComposite, -1, 1),
@@ -4246,6 +4545,7 @@
     if (Array.isArray(pred?.reversalFlags) && pred.reversalFlags.length) {
       conflicts.push(`Reversal flags active (${pred.reversalFlags.length})`);
     }
+    const tapeVelocity = pred?.diagnostics?.tapeVelocity || {};
 
     const summary = pred?.backtest?.summary || {};
     const winRatePct = Number.isFinite(summary.winRate) ? summary.winRate : 50;
@@ -4277,13 +4577,142 @@
         winRate: clamp(winRatePct / 100, 0, 1),
         trend: clamp(avgSignedReturn / 100, -1, 1),
       },
+      marketStructure: {
+        tapeVelocityState: String(tapeVelocity.state || 'normal'),
+        rangeExpansion: toFiniteNumber(tapeVelocity.rangeExpansion, 1),
+        bodyExpansion: toFiniteNumber(tapeVelocity.bodyExpansion, 1),
+        volumeBurst: toFiniteNumber(tapeVelocity.volumeBurst, 1),
+        directionalConsistency: toFiniteNumber(tapeVelocity.directionalConsistency, 0.5),
+        targetDriftMult: toFiniteNumber(tapeVelocity.targetDriftMult, 1),
+        rangeExpansionMult: toFiniteNumber(tapeVelocity.rangeExpansionMult, 1),
+      },
       conflicts,
+    };
+  }
+
+  function normalizeTideConfidence(value, fallback = 0) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    if (n >= 0 && n <= 1) return Math.round(clamp(n, 0, 1) * 100);
+    return Math.round(clamp(n, 0, 100));
+  }
+
+  function normalizeTideDirection(value, fallback = 'WAIT') {
+    const text = String(value || '').trim().toUpperCase();
+    if (!text) return fallback;
+    if (/(BUY|LONG|UP|BULL)/.test(text)) return 'UP';
+    if (/(SELL|SHORT|DOWN|BEAR)/.test(text)) return 'DOWN';
+    if (/(WAIT|HOLD|NEUTRAL|FLAT|SIDEWAYS)/.test(text)) return 'WAIT';
+    return fallback;
+  }
+
+  function normalizeTideCandle(candle) {
+    if (!candle) return null;
+    const source = Array.isArray(candle)
+      ? {
+        t: candle[0],
+        o: candle[1],
+        h: candle[2],
+        l: candle[3],
+        c: candle[4],
+        v: candle[5],
+      }
+      : candle;
+    const t = Number(source.t ?? source.ts ?? source.time ?? source.timestamp ?? 0);
+    const o = Number(source.o ?? source.open ?? 0);
+    const h = Number(source.h ?? source.high ?? 0);
+    const l = Number(source.l ?? source.low ?? 0);
+    const c = Number(source.c ?? source.close ?? 0);
+    const v = Number(source.v ?? source.volume ?? 0);
+    if (!Number.isFinite(t) || !Number.isFinite(c)) return null;
+    return {
+      t,
+      o: Number.isFinite(o) ? o : c,
+      h: Number.isFinite(h) ? h : c,
+      l: Number.isFinite(l) ? l : c,
+      c,
+      v: Number.isFinite(v) ? v : 0,
+    };
+  }
+
+  function buildTideSeries(series, limit = 96) {
+    return (Array.isArray(series) ? series : [])
+      .slice(-Math.max(1, limit))
+      .map(normalizeTideCandle)
+      .filter(Boolean);
+  }
+
+  async function getGoogleCloudStatus(force = false) {
+    if (!window?.electron?.invoke) return null;
+    if (!force && tideStatusCache && (Date.now() - tideStatusCacheTs) < TIDE_STATUS_TTL_MS) {
+      return tideStatusCache;
+    }
+
+    try {
+      const response = await window.electron.invoke('google:cloudStatus');
+      tideStatusCache = response?.success
+        ? response.status
+        : { enabled: false, error: response?.error || 'cloud-status-unavailable' };
+    } catch (error) {
+      tideStatusCache = { enabled: false, error: error?.message || 'cloud-status-unavailable' };
+    }
+    tideStatusCacheTs = Date.now();
+    return tideStatusCache;
+  }
+
+  function buildTideSnapshot(coin, pred) {
+    const cache = candleCache[coin.sym] || {};
+    const indicators = pred?.indicators || {};
+    const diagnostics = pred?.diagnostics || {};
+    const mktSentiment = indicators.mktSentiment || {};
+    const book = indicators.book || {};
+    const volume = indicators.volume || {};
+    const series1m = buildTideSeries(cache.candles1m, 90);
+    const series5m = buildTideSeries(cache.candles, 120);
+    const series15m = buildTideSeries(cache.candles15m, 96);
+
+    return {
+      schemaVersion: 'wecrypto.tide.v1',
+      coin: coin.sym,
+      horizonMinutes: DEFAULT_SHORT_HORIZON_MIN,
+      asOfTs: new Date().toISOString(),
+      source: cache.source || pred?.source || null,
+      currentPrice: toFiniteNumber(pred?.price || cache?.ticker?.usd || series1m[series1m.length - 1]?.c || series5m[series5m.length - 1]?.c, 0),
+      market: {
+        modelDirection: normalizeTideDirection(pred?.direction || pred?.signal || null),
+        confidencePct: Math.round(clamp(toFiniteNumber(pred?.confidence, 0), 0, 1) * 100),
+        kalshiProb: clamp(Number.isFinite(mktSentiment.kalshi) ? mktSentiment.kalshi : 0.5, 0, 1),
+        combinedProb: clamp(Number.isFinite(mktSentiment.combined) ? mktSentiment.combined : 0.5, 0, 1),
+      },
+      indicators: {
+        rsi: toFiniteNumber(indicators.rsi?.value, 50),
+        macd: toFiniteNumber(indicators.macd?.macd, 0),
+        macdSignal: toFiniteNumber(indicators.macd?.signal, 0),
+        macdHist: toFiniteNumber(indicators.macd?.histogram, 0),
+        adx: toFiniteNumber(indicators.adx?.adx, 20),
+        atrPct: toFiniteNumber(pred?.volatility?.atrPct, 0),
+        fisher: toFiniteNumber(indicators.fisher?.value ?? diagnostics.components?.fisher, 0),
+        cci: toFiniteNumber(indicators.cci?.value, 0),
+        orderbookImbalance: toFiniteNumber(book.imbalance, 0),
+        buyPressurePct: toFiniteNumber(volume.buyPct, 50),
+      },
+      series: {
+        m1: series1m,
+        m5: series5m,
+        m15: series15m,
+      },
+      windows: {
+        m1Count: series1m.length,
+        m5Count: series5m.length,
+        m15Count: series15m.length,
+      },
     };
   }
 
   async function runInferenceOverlay(predictionsMap) {
     if (!window?.electron?.invoke) return [];
     if (inferenceRunPromise) return inferenceRunPromise;
+    if (inferenceCooldownUntilTs && Date.now() < inferenceCooldownUntilTs) return [];
     if ((Date.now() - lastInferenceRunTs) < INFERENCE_MIN_INTERVAL_MS) return [];
 
     const work = PREDICTION_COINS
@@ -4293,20 +4722,38 @@
     if (!work.length) return [];
 
     inferenceRunPromise = (async () => {
-      const results = await Promise.all(work.map(async ({ coin, pred }) => {
+      const results = await Promise.all(work.map(async ({ coin, pred }, idx) => {
         const snapshot = buildInferenceSnapshot(coin, pred);
         try {
-          const response = await withTimeout(
+          const runLlm = () => withTimeout(
             window.electron.invoke('llm:analyzeSnapshot', snapshot),
             INFERENCE_REQUEST_TIMEOUT_MS,
             `llm:${coin.sym}`
           );
+
+          const response = window._signalScheduler
+            ? await window._signalScheduler.schedule(runLlm, {
+              lane: 'validation',
+              provider: 'llm',
+              delayMs: idx * 220,
+              dedupeKey: `llm:${coin.sym}`,
+              timeoutMs: INFERENCE_REQUEST_TIMEOUT_MS + 250,
+              tag: `llm:${coin.sym}`,
+            })
+            : await runLlm();
 
           if (!response?.success || !response.output) {
             return { coin: coin.sym, ok: false, reason: response?.error || 'empty-response' };
           }
 
           const llmOutput = response.output;
+          const llmCooldown = response?.providerStatus?.cooldown || response?.diagnostics?.cooldown || null;
+          const llmCooldownRemainingMs = Math.max(0, Number(llmCooldown?.remaining_ms || 0));
+          const llmDegraded = !!response?.degraded || !!llmCooldown?.active;
+          if (llmCooldownRemainingMs > 0) {
+            inferenceCooldownUntilTs = Math.max(inferenceCooldownUntilTs || 0, Date.now() + llmCooldownRemainingMs);
+            inferenceCooldownReason = llmCooldown?.last_reason || llmOutput?.warnings?.[0] || 'LLM cooldown active';
+          }
           const llmConfidencePct = Math.round(clamp(toFiniteNumber(llmOutput.confidence, 0), 0, 1) * 100);
           const llmNotes = String(
             llmOutput?.suggestions?.notes
@@ -4321,6 +4768,9 @@
             warnings: Array.isArray(llmOutput.warnings) ? llmOutput.warnings.map(String) : [],
             notes: llmNotes,
             provider: response?.diagnostics?.provider || null,
+            degraded: llmDegraded,
+            cooldownRemainingMs: llmCooldownRemainingMs,
+            providerStatus: response?.providerStatus || null,
           };
 
           pred.diagnostics = {
@@ -4328,6 +4778,8 @@
             llmRegime: pred.llm.regime,
             llmConfidence: llmConfidencePct,
             llmWarnings: pred.llm.warnings.slice(0, 3),
+            llmDegraded,
+            llmCooldownRemainingMs,
             llmSuggestedIncreases: Array.isArray(pred.llm.suggestions?.increase_weight)
               ? pred.llm.suggestions.increase_weight.slice(0, 3)
               : [],
@@ -4355,13 +4807,21 @@
 
           return { coin: coin.sym, ok: true };
         } catch (err) {
-          return { coin: coin.sym, ok: false, reason: err?.message || 'failed' };
+          const reason = err?.message || 'failed';
+          if (/429|quota|resource_exhausted/i.test(reason)) {
+            inferenceCooldownUntilTs = Date.now() + INFERENCE_QUOTA_COOLDOWN_MS;
+            inferenceCooldownReason = reason;
+          }
+          return { coin: coin.sym, ok: false, reason };
         }
       }));
 
       const updated = results.filter(r => r.ok).length;
       if (updated > 0) {
         emitPredictionEvent('predictioninference', { updated, total: results.length });
+      }
+      if (inferenceCooldownUntilTs && inferenceCooldownReason) {
+        console.warn('[LLM] Inference cooldown active after quota/rate-limit failure:', inferenceCooldownReason);
       }
       if (window.MultiDriveCache?.flushSync) {
         try { window.MultiDriveCache.flushSync(); } catch (_) { }
@@ -4374,6 +4834,124 @@
     } finally {
       inferenceRunPromise = null;
       lastInferenceRunTs = Date.now();
+    }
+  }
+
+  async function runTideOverlay(predictionsMap) {
+    if (!window?.electron?.invoke) return [];
+    if (tideRunPromise) return tideRunPromise;
+    if (tideDisabledUntilTs && Date.now() < tideDisabledUntilTs) return [];
+    if ((Date.now() - lastTideRunTs) < TIDE_MIN_INTERVAL_MS) return [];
+
+    const cloudStatus = await getGoogleCloudStatus();
+    const tideBridgeEnabled = !!(cloudStatus?.vertexTideEnabled || cloudStatus?.pubSubEnabled);
+    if (!tideBridgeEnabled) {
+      tideDisabledUntilTs = Date.now() + TIDE_DISABLED_RETRY_MS;
+      tideDisabledReason = cloudStatus?.error || 'Google TiDE bridge disabled';
+      return [];
+    }
+
+    const work = PREDICTION_COINS
+      .map(coin => ({ coin, pred: predictionsMap?.[coin.sym], cache: candleCache[coin.sym] || {} }))
+      .filter(({ pred, cache }) => {
+        const seriesCount = (cache?.candles1m?.length || 0) + (cache?.candles?.length || 0) + (cache?.candles15m?.length || 0);
+        return pred && pred.source !== 'error' && pred.source !== 'loading' && seriesCount >= 30;
+      });
+
+    if (!work.length) return [];
+
+    tideRunPromise = (async () => {
+      const results = await Promise.all(work.map(async ({ coin, pred }, idx) => {
+        const snapshot = buildTideSnapshot(coin, pred);
+        if (!snapshot.series.m1.length && !snapshot.series.m5.length && !snapshot.series.m15.length) {
+          return { coin: coin.sym, ok: false, reason: 'no-series' };
+        }
+
+        try {
+          const runTide = () => withTimeout(
+            window.electron.invoke('google:tideForecast', snapshot),
+            TIDE_REQUEST_TIMEOUT_MS,
+            `tide:${coin.sym}`
+          );
+
+          const response = window._signalScheduler
+            ? await window._signalScheduler.schedule(runTide, {
+              lane: 'momentum',
+              provider: 'vertex-tide',
+              delayMs: idx * 180,
+              dedupeKey: `tide:${coin.sym}`,
+              timeoutMs: TIDE_REQUEST_TIMEOUT_MS + 300,
+              tag: `tide:${coin.sym}`,
+            })
+            : await runTide();
+
+          if (!response?.success && !response?.queued) {
+            return { coin: coin.sym, ok: false, reason: response?.error || 'tide-failed' };
+          }
+
+          const currentPred = window._predictions?.[coin.sym] || predictionsMap?.[coin.sym] || pred;
+          const forecast = response?.forecast || {};
+          const previousTide = currentPred?.tide || null;
+          const tideDirection = normalizeTideDirection(
+            forecast.direction,
+            previousTide?.direction || 'WAIT'
+          );
+          const tideConfidence = normalizeTideConfidence(
+            forecast.confidence,
+            Number.isFinite(Number(previousTide?.confidence)) ? Number(previousTide.confidence) : 0
+          );
+          const tideForecastPrice = Number.isFinite(Number(forecast.forecastPrice))
+            ? Number(forecast.forecastPrice)
+            : (Number.isFinite(Number(previousTide?.forecastPrice)) ? Number(previousTide.forecastPrice) : null);
+
+          currentPred.tide = {
+            direction: tideDirection,
+            confidence: tideConfidence,
+            forecastPrice: tideForecastPrice,
+            quantiles: forecast.quantiles || previousTide?.quantiles || null,
+            mode: response?.mode || previousTide?.mode || null,
+            queued: !!response?.queued,
+            error: response?.error || null,
+            asOfTs: snapshot.asOfTs,
+            schemaVersion: snapshot.schemaVersion,
+          };
+
+          currentPred.diagnostics = {
+            ...(currentPred.diagnostics || {}),
+            tideDirection,
+            tideConfidence,
+            tideForecastPrice,
+            tideMode: currentPred.tide.mode,
+            tideQueued: currentPred.tide.queued,
+            tideError: currentPred.tide.error,
+          };
+
+          return { coin: coin.sym, ok: true, mode: currentPred.tide.mode, queued: currentPred.tide.queued };
+        } catch (error) {
+          const reason = error?.message || 'tide-failed';
+          if (/not configured|cloud-status-unavailable|bridge disabled/i.test(reason)) {
+            tideDisabledUntilTs = Date.now() + TIDE_DISABLED_RETRY_MS;
+            tideDisabledReason = reason;
+          }
+          return { coin: coin.sym, ok: false, reason };
+        }
+      }));
+
+      const updated = results.filter(r => r.ok).length;
+      if (updated > 0) {
+        emitPredictionEvent('predictiontide', { updated, total: results.length });
+      }
+      if (tideDisabledUntilTs && tideDisabledReason) {
+        console.warn('[TiDE] Shadow forecast paused:', tideDisabledReason);
+      }
+      return results;
+    })();
+
+    try {
+      return await tideRunPromise;
+    } finally {
+      tideRunPromise = null;
+      lastTideRunTs = Date.now();
     }
   }
 
@@ -4473,7 +5051,10 @@
           ...window._backtests[coin.sym],
           advanced,
         };
-        window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
+        window._predictions[coin.sym] = preservePredictionOverlay(
+          window._predictions[coin.sym],
+          computePrediction(coin, window._backtests[coin.sym])
+        );
         updated = true;
       }
       if (updated) emitPredictionEvent('predictionadvancedready');
@@ -4618,6 +5199,10 @@
     const liveFilter = defaultBacktestFilter(preferredHorizon, backtest?.sym || null);
     const entryThreshold = preferredStats?.entryThreshold ?? backtest?.summary?.entryThreshold ?? liveFilter.entryThreshold;
     const minAgreement = preferredStats?.minAgreement ?? backtest?.summary?.minAgreement ?? liveFilter.minAgreement;
+    const tapeVelocity = model.diagnostics?.tapeVelocity || null;
+    const tapeReleaseValve = !!tapeVelocity?.releaseValve
+      && agreement >= Math.max(0.5, minAgreement - 0.03)
+      && conflict < 0.30;
     // maxScore cap: prevents momentum-exhaustion signals (conf 60%+ = anti-predictive for high-beta coins)
     const maxScore = liveFilter.maxScore ?? 1.0;
     const decisionFloor = 0.08;
@@ -4656,9 +5241,11 @@
       const belowThreshold = Math.abs(coreScore) < entryThreshold || agreement < minAgreement;
       if (belowThreshold) {
         const thresholdRatio = Math.abs(coreScore) / Math.max(entryThreshold, 0.001);
-        adjustedScore *= clamp(0.55 + thresholdRatio * 0.25, 0.55, 0.80);
+        adjustedScore *= tapeReleaseValve
+          ? clamp(0.68 + thresholdRatio * 0.22, 0.68, 0.88)
+          : clamp(0.55 + thresholdRatio * 0.25, 0.55, 0.80);
       } else {
-        adjustedScore *= 0.88;
+        adjustedScore *= tapeReleaseValve ? 0.94 : 0.88;
       }
     }
     if (hardVeto) {
@@ -4670,9 +5257,13 @@
       const softClamp = Math.max(decisionFloor * 0.9, Math.abs(coreScore) * 0.48);
       adjustedScore = clamp(adjustedScore, -softClamp, softClamp) * 0.82;
     }
+    if (tapeReleaseValve && !hardVeto) {
+      const velocityLift = 1 + Math.max(0, (tapeVelocity?.scoreBoostMult || 1) - 1) * 0.45;
+      adjustedScore = clamp(adjustedScore * velocityLift, -1, 1);
+    }
     const horizonBiasBoost = preferredHorizon <= 5 ? 1.06 : preferredHorizon <= 10 ? 1.04 : preferredHorizon <= 15 ? 1.02 : 1;
     const adjustedConfidence = Math.round(clamp(
-      confidenceFromScore(Math.abs(adjustedScore)) * (0.74 + reliability * 0.22) * (0.80 + tradeFit * 0.24) * (0.78 + agreement * 0.22) * (1 - conflict * 0.30) * horizonBiasBoost * (inBufferZone ? 0.82 : 1) * (softVeto ? 0.74 : 1),
+      confidenceFromScore(Math.abs(adjustedScore)) * (0.74 + reliability * 0.22) * (0.80 + tradeFit * 0.24) * (0.78 + agreement * 0.22) * (1 - conflict * 0.30) * horizonBiasBoost * (inBufferZone ? (tapeReleaseValve ? 0.90 : 0.82) : 1) * (softVeto ? 0.74 : 1) * (tapeReleaseValve ? (1 + Math.max(0, (tapeVelocity?.confidenceBoostMult || 1) - 1) * 0.60) : 1),
       0,
       95
     ));
@@ -4709,6 +5300,7 @@
         vetoSeverity,
         hardVeto,
         softVeto,
+        tapeReleaseValve,
         thresholdFactor: Math.abs(coreScore) >= entryThreshold ? 1 : Math.abs(coreScore) / Math.max(entryThreshold, 0.001),
       },
     };
@@ -4922,6 +5514,32 @@
         trust: microTrust * 0.82,
         relevance: ultraFast ? 0.90 : shortBias ? 0.74 : 0.40,
       });
+
+      if ((micro.spoofing?.score || 0) >= 0.50) {
+        pushPacket({
+          family: 'micro-spoof',
+          category: 'microstructure',
+          label: 'Spoofing pressure',
+          detail: micro.spoofing?.label || 'Spoofing risk',
+          direction: Math.sign(micro.spoofing?.direction || 0),
+          strength: clamp(micro.spoofing?.score || 0, 0, 1),
+          trust: microTrust * 0.78,
+          relevance: ultraFast ? 0.90 : shortBias ? 0.78 : 0.44,
+        });
+      }
+
+      if ((micro.iceberg?.score || 0) >= 0.50) {
+        pushPacket({
+          family: 'micro-iceberg',
+          category: 'microstructure',
+          label: 'Iceberg absorption',
+          detail: micro.iceberg?.label || 'Absorption detected',
+          direction: Math.sign(micro.iceberg?.direction || 0),
+          strength: clamp(micro.iceberg?.score || 0, 0, 1),
+          trust: microTrust * 0.80,
+          relevance: ultraFast ? 0.92 : shortBias ? 0.80 : 0.46,
+        });
+      }
     }
 
     if (innerArmed && fastTiming) {
@@ -5016,6 +5634,20 @@
         freshness: sourceFreshness,
         trust: 0.86,
         relevance: ultraFast ? 0.98 : shortBias ? 0.86 : 0.66,
+      }, routerProfile));
+    }
+    if ((model.indicators?.microstructure?.toxicity?.tox || model.indicators?.microstructure?.toxicity?.proxy || 0) >= 0.62) {
+      riskPackets.push(applyRouterProfile({
+        family: 'toxicity-risk',
+        category: 'microstructure',
+        role: 'risk',
+        label: 'Flow toxicity',
+        detail: model.indicators?.microstructure?.toxicity?.label || 'One-sided flow toxicity',
+        direction: 0,
+        strength: clamp(model.indicators?.microstructure?.toxicity?.tox || model.indicators?.microstructure?.toxicity?.proxy || 0, 0, 1),
+        freshness: sourceFreshness,
+        trust: 0.84,
+        relevance: ultraFast ? 0.92 : shortBias ? 0.84 : 0.58,
       }, routerProfile));
     }
     if (model.diagnostics?.conflict >= 0.34) {
@@ -5183,6 +5815,65 @@
     };
   }
 
+  // Session-scoped verification logging for microstructure execution cues.
+  // Auto-disables to avoid permanent console noise.
+  const _liveCueVerify = {
+    remaining: 90,
+    lastBySym: {},
+    trail: [],
+    maxTrail: 120,
+  };
+
+  function _recordLiveCueEntry(entry) {
+    _liveCueVerify.trail.push(entry);
+    if (_liveCueVerify.trail.length > _liveCueVerify.maxTrail) {
+      _liveCueVerify.trail = _liveCueVerify.trail.slice(-_liveCueVerify.maxTrail);
+    }
+
+    if (typeof window !== 'undefined') {
+      window._execCueVerifyTrail = _liveCueVerify.trail;
+      window.__WECRYPTO_EXEC_CUES = {
+        remaining: _liveCueVerify.remaining,
+        latest: _liveCueVerify.trail[_liveCueVerify.trail.length - 1] || null,
+        getTrail: () => _liveCueVerify.trail.slice(),
+      };
+      try {
+        window.dispatchEvent(new CustomEvent('exec-cue:micro-verify', { detail: entry }));
+      } catch (_) { }
+    }
+  }
+
+  function logLiveExecutionCues(sym, routed, packets) {
+    if (_liveCueVerify.remaining <= 0) return;
+    const microFamilies = new Set(['micro-book', 'micro-flow', 'micro-engine', 'micro-spoof', 'micro-iceberg', 'toxicity-risk', 'vacuum-risk']);
+    const cuePackets = (Array.isArray(packets) ? packets : []).filter(p => microFamilies.has(p.family));
+    if (!cuePackets.length) return;
+
+    const short = cuePackets
+      .map(p => `${p.family}:${(p.role || 'driver')[0]}:${(p.direction || 0) > 0 ? 'UP' : (p.direction || 0) < 0 ? 'DOWN' : 'NEUT'}:${(p.strength || 0).toFixed(2)}`)
+      .join('|');
+    const risk = (routed?.riskFlags || []).join(',');
+    const sig = `${short}#${risk}`;
+    if (_liveCueVerify.lastBySym[sym] === sig) return;
+    _liveCueVerify.lastBySym[sym] = sig;
+
+    const entry = {
+      ts: Date.now(),
+      sym,
+      action: routed?.action || 'n/a',
+      bias: Number(routed?.bias || 0),
+      cues: short,
+      risks: risk ? risk.split(',').filter(Boolean) : [],
+    };
+    _recordLiveCueEntry(entry);
+
+    console.log(`[ExecCue][MICRO-VERIFY] ${sym} action=${entry.action} bias=${entry.bias.toFixed(3)} cues=${short}${risk ? ` risks=${risk}` : ''}`);
+    _liveCueVerify.remaining--;
+    if (_liveCueVerify.remaining === 0) {
+      console.log('[ExecCue][MICRO-VERIFY] Session verification logging complete; auto-disabled');
+    }
+  }
+
   function buildExecutionGuard(model, cache) {
     const closeTimeMs = model?.projections?.p15?.kalshiAlign?.closeTimeMs;
     if (!Number.isFinite(closeTimeMs)) return null;
@@ -5236,6 +5927,7 @@
     const routerContext = buildSignalRouterContext(coin, timed, fastTiming, backtest, cache);
     const routedPackets = filterSignalPackets(buildSignalPackets(routerContext), routerContext);
     const routed = summarizeRoutedSignals(routedPackets, routerContext);
+    logLiveExecutionCues(coin.sym, routed, routedPackets);
 
     // ── CFM Floating Router ─────────────────────────────────────────
     // Base score from existing packet router (unchanged path)
@@ -5623,6 +6315,7 @@
         }
 
         runInferenceOverlay(window._predictions).catch(() => { });
+        runTideOverlay(window._predictions).catch(() => { });
 
         warmAdvancedBacktests().catch(() => { });
         // Phase 2: enrich with slow proxy-routed sources 30 s after initial score.

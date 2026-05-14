@@ -3,6 +3,41 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
+// Prevent startup crashes when stdout/stderr pipes are unavailable (EPIPE)
+function _isBrokenPipe(err) {
+  return err && (err.code === 'EPIPE' || /broken pipe/i.test(String(err.message || '')));
+}
+
+const _consoleLog = console.log.bind(console);
+const _consoleWarn = console.warn.bind(console);
+const _consoleError = console.error.bind(console);
+
+function _safeConsoleWrite(writer, args) {
+  try {
+    writer(...args);
+  } catch (err) {
+    if (_isBrokenPipe(err)) return;
+    throw err;
+  }
+}
+
+console.log = (...args) => _safeConsoleWrite(_consoleLog, args);
+console.warn = (...args) => _safeConsoleWrite(_consoleWarn, args);
+console.error = (...args) => _safeConsoleWrite(_consoleError, args);
+
+if (process.stdout && typeof process.stdout.on === 'function') {
+  process.stdout.on('error', (err) => {
+    if (_isBrokenPipe(err)) return;
+    throw err;
+  });
+}
+if (process.stderr && typeof process.stderr.on === 'function') {
+  process.stderr.on('error', (err) => {
+    if (_isBrokenPipe(err)) return;
+    throw err;
+  });
+}
+
 // Load .env — check next to .exe (packaged) then repo root (dev)
 try {
   const dotenv = require('dotenv');
@@ -36,8 +71,10 @@ const { startKalshiWorker, stopKalshiWorker, getWorkerReadiness } = require('./k
 require('./multi-drive-logger-handlers.js');
 
 // ── Web Service (HTTPS) ────────────────────────────────────────────────────
-const { startWebService, updateState, broadcastUpdate } = require('./wecrypto-web-service.js');
+const { startWebService, getWebServiceHealth, updateState, broadcastUpdate } = require('./wecrypto-web-service.js');
 let LLMSignalAssistant = null;
+let GoogleCloudBridge = null;
+let FirebaseAdminFirestore = null;
 try {
   LLMSignalAssistant = require('../src/llm/llm_signal_assistant');
   const diagnostics = typeof LLMSignalAssistant.getDiagnostics === 'function'
@@ -52,6 +89,34 @@ try {
   console.warn('[LLM] Assistant module unavailable:', e.message);
 }
 
+try {
+  GoogleCloudBridge = require('../src/cloud/google-cloud-bridge');
+  const status = typeof GoogleCloudBridge.getStatus === 'function'
+    ? GoogleCloudBridge.getStatus()
+    : null;
+  if (status?.enabled) {
+    console.log(`[GoogleCloud] Bridge ready (pubsub=${status.pubSubEnabled}, firebase=${status.firebaseEnabled}, tide=${status.vertexTideEnabled})`);
+  } else {
+    console.log('[GoogleCloud] Bridge loaded (disabled until env configuration is provided)');
+  }
+} catch (e) {
+  console.warn('[GoogleCloud] Bridge unavailable:', e.message);
+}
+
+try {
+  FirebaseAdminFirestore = require('../src/cloud/firebase-admin-firestore');
+  const status = typeof FirebaseAdminFirestore.getStatus === 'function'
+    ? FirebaseAdminFirestore.getStatus()
+    : null;
+  if (status?.available) {
+    console.log(`[FirebaseAdmin] Module loaded (source=${status.source || 'pending'}, project=${status.projectId || 'n/a'})`);
+  } else {
+    console.warn('[FirebaseAdmin] Module loaded but unavailable until firebase-admin + service account are configured');
+  }
+} catch (e) {
+  console.warn('[FirebaseAdmin] Module unavailable:', e.message);
+}
+
 // ── Pyth Lazer real-time WebSocket service ────────────────────────────────────
 let mainWin = null;
 let pythLazerClient = null;
@@ -60,7 +125,11 @@ let proxyHealthy = false;
 let webServiceHealth = { started: false, mode: 'stopped', protocol: 'http', port: 3443 };
 const LAZER_FEED_IDS = [1, 2, 6, 10, 13, 14, 15, 110]; // BTC,ETH,SOL,DOGE,F13,XRP,BNB,F110
 const LAZER_ID_MAP = { 1: 'BTCUSD', 2: 'ETHUSD', 6: 'SOLUSD', 10: 'DOGEUSD', 14: 'XRPUSD', 15: 'BNBUSD' };
-const PYTH_FALLBACK_TIMEOUT_MS = 1000; // STRICT: 1s timeout before fallback
+const PYTH_FALLBACK_TIMEOUT_MS = Number(process.env.PYTH_FALLBACK_TIMEOUT_MS || 2500); // default 2.5s to reduce false DOWN on jitter
+const PYTH_FALLBACK_GRACE_MS = Number(process.env.PYTH_FALLBACK_GRACE_MS || 350); // jitter tolerance
+const PYTH_TIMEOUT_CONSECUTIVE_LIMIT = Number(process.env.PYTH_TIMEOUT_CONSECUTIVE_LIMIT || 2);
+const PYTH_FALLBACK_EVENT_COOLDOWN_MS = Number(process.env.PYTH_FALLBACK_EVENT_COOLDOWN_MS || 5000);
+const PYTH_LAZER_CHANNEL = process.env.PYTH_LAZER_CHANNEL || 'fixed_rate@1000ms';
 
 function configureCachePaths() {
   try {
@@ -128,7 +197,7 @@ async function startPythLazerService(win) {
           'publisherCount', 'feedUpdateTimestamp', 'marketSession',
           'fundingRate', 'fundingTimestamp', 'fundingRateInterval'],
         formats: ['solana', 'leUnsigned', 'leEcdsa', 'evm'],
-        channel: 'fixed_rate@1000ms',  // ★ STRICT 1000ms updates for predictable fallback
+        channel: PYTH_LAZER_CHANNEL,
         deliveryFormat: 'json',
         jsonBinaryEncoding: 'hex',
         parsed: true,
@@ -137,23 +206,47 @@ async function startPythLazerService(win) {
 
       let lastPush = 0;
       let pythTimeoutHandle = null;
+      let pythConsecutiveTimeouts = 0;
+      let pythLastFallbackEventTs = 0;
 
       // ★ STRICT TIMEOUT WATCHER: If no data arrives within 1000ms, trigger fallback
       function resetPythTimeout() {
         if (pythTimeoutHandle) clearTimeout(pythTimeoutHandle);
+        const timeoutBudgetMs = PYTH_FALLBACK_TIMEOUT_MS + PYTH_FALLBACK_GRACE_MS;
         pythTimeoutHandle = setTimeout(() => {
+          const now = Date.now();
+          const elapsedMs = pythLazerStatus.lastDataTs ? (now - pythLazerStatus.lastDataTs) : timeoutBudgetMs;
+          if (elapsedMs < timeoutBudgetMs) {
+            // Stale timer fired after newer data already arrived.
+            return;
+          }
+
           pythLazerStatus.connected = false;
           pythLazerStatus.timeoutCount++;
-          console.warn(`[PythLazer] ⚠️ TIMEOUT: No data in ${PYTH_FALLBACK_TIMEOUT_MS}ms — fallback triggered`);
-          if (!win.isDestroyed()) {
-            win.webContents.send('pyth:timeout-fallback', {
-              reason: 'no_data_1000ms',
-              timeoutCount: pythLazerStatus.timeoutCount,
-              fallbackTo: 'crypto.com,binance,coingecko,kraken',
-              recoveryAttempt: true
-            });
+          pythConsecutiveTimeouts++;
+
+          if (pythConsecutiveTimeouts < PYTH_TIMEOUT_CONSECUTIVE_LIMIT) {
+            console.warn(`[PythLazer] ⚠️ JITTER: no data for ${elapsedMs}ms (${pythConsecutiveTimeouts}/${PYTH_TIMEOUT_CONSECUTIVE_LIMIT})`);
+            resetPythTimeout();
+            return;
           }
-        }, PYTH_FALLBACK_TIMEOUT_MS);
+
+          console.warn(`[PythLazer] ⚠️ TIMEOUT: no data for ${elapsedMs}ms (target=${PYTH_FALLBACK_TIMEOUT_MS}ms, grace=${PYTH_FALLBACK_GRACE_MS}ms) — fallback triggered`);
+          if (!win.isDestroyed()) {
+            if (now - pythLastFallbackEventTs >= PYTH_FALLBACK_EVENT_COOLDOWN_MS) {
+              pythLastFallbackEventTs = now;
+              win.webContents.send('pyth:timeout-fallback', {
+                reason: 'no_data_timeout_plus_grace',
+                elapsedMs,
+                timeoutCount: pythLazerStatus.timeoutCount,
+                consecutiveMisses: pythConsecutiveTimeouts,
+                fallbackTo: 'crypto.com,binance,coingecko,kraken',
+                recoveryAttempt: true
+              });
+            }
+          }
+          resetPythTimeout();
+        }, timeoutBudgetMs);
       }
       resetPythTimeout(); // Start watching immediately
 
@@ -195,6 +288,7 @@ async function startPythLazerService(win) {
           pythLazerStatus.lastDataTs = now;
           pythLazerStatus.dataCount++;
           pythLazerStatus.timeoutCount = 0;  // Reset timeout counter on success
+          pythConsecutiveTimeouts = 0;
           win.webContents.send('pyth:tickers', prices);
           // Also send health status update every 5 data points
           if (pythLazerStatus.dataCount % 5 === 0) {
@@ -237,6 +331,9 @@ async function startPythLazerService(win) {
 }
 
 function logStartupHealth(tag = 'snapshot') {
+  if (typeof getWebServiceHealth === 'function') {
+    webServiceHealth = getWebServiceHealth() || webServiceHealth;
+  }
   const kalshi = typeof getWorkerReadiness === 'function'
     ? getWorkerReadiness()
     : { ready: false, readyLatencyMs: null, lastHealthError: 'readiness unavailable' };
@@ -283,6 +380,9 @@ function logStartupHealth(tag = 'snapshot') {
 // ── Proxy server lifecycle ────────────────────────────────────────────────────
 let proxyProcess = null;
 let proxyPort = 3010;
+let proxyRestartTimer = null;
+let proxyRestartAttempts = 0;
+let proxyManualStop = false;
 
 const PROXY_PORT_CASCADE = [3010, 3011, 3012, 3013, 3014];
 
@@ -308,7 +408,6 @@ function buildProxyConfig(port) {
 host         = "127.0.0.1"
 port         = ${port}
 timeout_secs = 12
-
 [exchanges]
 binance         = "https://api.binance.us"
 binance-f       = "https://fapi.binance.com"
@@ -342,6 +441,11 @@ crypto-com      = "https://api.crypto.com"
 }
 
 async function startProxy() {
+  if (proxyProcess && !proxyProcess.killed) {
+    return;
+  }
+  proxyManualStop = false;
+
   // Dev: __dirname  |  Packaged: resources/app.asar.unpacked/
   // KEY: When running inside app.asar, __dirname is inside the archive (can't execute).
   // Must ALWAYS look in app.asar.unpacked, not app.asar.
@@ -352,6 +456,8 @@ async function startProxy() {
     path.join(process.resourcesPath || '', 'we-crypto-proxy.exe'),
     // Dev path: electron/ is one level down from root, so ../we-crypto-proxy.exe
     path.join(__dirname, '..', 'we-crypto-proxy.exe'),
+    // Build output path: proxy/target/x86_64-pc-windows-gnu/release/we-crypto-proxy.exe
+    path.join(__dirname, '..', 'proxy', 'target', 'x86_64-pc-windows-gnu', 'release', 'we-crypto-proxy.exe'),
   ];
 
   const exePath = candidates.find(p => fs.existsSync(p));
@@ -387,16 +493,41 @@ async function startProxy() {
 
   proxyProcess = spawn(exePath, [], {
     detached: false,
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
     cwd: proxyDir,
   });
   proxyProcess.stdout.on('data', chunk => console.log('[proxy]', chunk.toString().trim()));
+  proxyProcess.stderr?.on('data', chunk => console.warn('[proxy:stderr]', chunk.toString().trim()));
   proxyProcess.on('error', e => console.error('[proxy] start error:', e.message));
-  proxyProcess.on('exit', code => console.log('[proxy] exited, code', code));
+  proxyProcess.on('exit', (code, signal) => {
+    console.log('[proxy] exited, code', code, 'signal', signal || 'none');
+    proxyProcess = null;
+    if (proxyManualStop) return;
+
+    // Auto-restart with capped exponential backoff to keep feeds alive.
+    const delayMs = Math.min(1000 * Math.pow(2, proxyRestartAttempts), 30000);
+    proxyRestartAttempts = Math.min(proxyRestartAttempts + 1, 10);
+    if (proxyRestartTimer) clearTimeout(proxyRestartTimer);
+    proxyRestartTimer = setTimeout(async () => {
+      try {
+        console.warn(`[proxy] restarting after unexpected exit (attempt ${proxyRestartAttempts}, delay ${delayMs}ms)`);
+        await startProxy();
+        await waitForProxy(5000, 150);
+      } catch (e) {
+        console.error('[proxy] restart failed:', e?.message || e);
+      }
+    }, delayMs);
+  });
+  proxyRestartAttempts = 0;
   console.log(`[proxy] started on port ${chosenPort} — pid ${proxyProcess.pid}`);
 }
 
 function stopProxy() {
+  proxyManualStop = true;
+  if (proxyRestartTimer) {
+    clearTimeout(proxyRestartTimer);
+    proxyRestartTimer = null;
+  }
   if (proxyProcess && !proxyProcess.killed) {
     try { proxyProcess.kill(); } catch (_) { }
     proxyProcess = null;
@@ -1184,6 +1315,62 @@ ipcMain.handle('storage:readContractCache', async (_event, options = {}) => {
   };
 });
 
+ipcMain.handle('storage:writeContractCache', async (_event, payload = [], options = {}) => {
+  const startedAt = Date.now();
+  try {
+    const settlements = Array.isArray(payload) ? payload : [];
+    const now = Date.now();
+    const cacheDoc = {
+      version: 1,
+      savedAt: now,
+      settlements,
+    };
+
+    const discoveryTargets = getContractCacheDiscoveryTargets({ forceRefresh: !!options.forceRefresh });
+    const candidateFiles = gatherContractCacheCandidateFiles(discoveryTargets);
+    const targets = dedupePaths([
+      ...candidateFiles,
+      ...(discoveryTargets?.directFiles || []),
+    ]);
+
+    if (!targets.length) {
+      return { success: false, error: 'No cache targets discovered', count: settlements.length };
+    }
+
+    const serialized = JSON.stringify(cacheDoc, null, 2);
+    let writeCount = 0;
+    let firstPath = null;
+
+    for (const filePath of targets) {
+      try {
+        const dir = path.dirname(filePath);
+        fs.mkdirSync(dir, { recursive: true });
+        const tmpPath = `${filePath}.tmp`;
+        fs.writeFileSync(tmpPath, serialized, 'utf8');
+        fs.renameSync(tmpPath, filePath);
+        writeCount++;
+        if (!firstPath) firstPath = filePath;
+      } catch (_) {
+        // Continue writing to other targets
+      }
+    }
+
+    return {
+      success: writeCount > 0,
+      path: firstPath,
+      writeCount,
+      count: settlements.length,
+      elapsedMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      elapsedMs: Date.now() - startedAt,
+    };
+  }
+});
+
 // ── IPC: Enumerate all available storage roots (local, network, cloud) ──────
 ipcMain.handle('storage:getDrives', async () => {
   const found = [];
@@ -1236,8 +1423,143 @@ ipcMain.handle('storage:getDrives', async () => {
   return found;
 });
 
-// ── IPC: LLM inference bridge (main process inference layer) ──────────────────
-ipcMain.handle('llm:analyzeSnapshot', async (_event, snapshot = {}) => {
+ipcMain.handle('drive:sync-backup', async (_event, payload = {}) => {
+  try {
+    const drives = await ipcMain._invokeHandler('storage:getDrives', { sender: null });
+    const cloudRoots = (Array.isArray(drives) ? drives : [])
+      .filter((drive) => drive?.type === 'cloud' && drive?.root)
+      .map((drive) => drive.root);
+
+    if (!cloudRoots.length) {
+      return { success: false, error: 'No cloud sync roots discovered' };
+    }
+
+    const stamp = new Date().toISOString().replace(/[T:.]/g, '-');
+    const backupName = `wecrypto-backup-${stamp}.json`;
+    const backupPayload = {
+      schemaVersion: 'wecrypto.backup.v1',
+      createdAt: new Date().toISOString(),
+      source: 'electron-main',
+      payload,
+    };
+
+    const written = [];
+    const serialized = JSON.stringify(backupPayload, null, 2);
+    for (const root of cloudRoots) {
+      try {
+        const dir = path.join(root, 'WECRYP', 'backups');
+        fs.mkdirSync(dir, { recursive: true });
+        const filePath = path.join(dir, backupName);
+        fs.writeFileSync(filePath, serialized, 'utf8');
+        written.push(filePath);
+      } catch (_) {
+        // continue with next cloud root
+      }
+    }
+
+    if (GoogleCloudBridge && typeof GoogleCloudBridge.publishPubSub === 'function') {
+      GoogleCloudBridge.publishPubSub('drive-sync-backup', {
+        backupName,
+        paths: written,
+        payloadMeta: {
+          hasPayload: !!payload,
+          keys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [],
+        },
+      }, { backupName }).catch((err) => {
+        console.warn('[GoogleCloud] Drive backup publish skipped:', err.message);
+      });
+    }
+
+    return {
+      success: written.length > 0,
+      backupName,
+      paths: written,
+      count: written.length,
+      error: written.length ? null : 'No backup files were written',
+    };
+  } catch (error) {
+    return { success: false, error: error.message || 'Drive sync backup failed' };
+  }
+});
+
+ipcMain.handle('drive:recover-backups', async (_event, options = {}) => {
+  try {
+    const drives = await ipcMain._invokeHandler('storage:getDrives', { sender: null });
+    const cloudRoots = (Array.isArray(drives) ? drives : [])
+      .filter((drive) => drive?.type === 'cloud' && drive?.root)
+      .map((drive) => drive.root);
+
+    if (!cloudRoots.length) {
+      return { success: false, error: 'No cloud sync roots discovered', recovered: 0, matches: [] };
+    }
+
+    const containsAny = Array.isArray(options?.containsAny) ? options.containsAny.map((v) => String(v).toLowerCase()) : ['wecrypto', 'wecryp'];
+    const maxResults = Math.max(1, Math.min(200, Number(options?.maxResults) || 25));
+
+    const matches = [];
+    for (const root of cloudRoots) {
+      const backupDir = path.join(root, 'WECRYP', 'backups');
+      if (!fs.existsSync(backupDir)) continue;
+      let files = [];
+      try {
+        files = fs.readdirSync(backupDir)
+          .filter((name) => name.toLowerCase().endsWith('.json'))
+          .map((name) => path.join(backupDir, name));
+      } catch (_) {
+        continue;
+      }
+
+      for (const filePath of files) {
+        if (matches.length >= maxResults) break;
+        const lower = filePath.toLowerCase();
+        if (!containsAny.some((needle) => lower.includes(needle))) continue;
+        try {
+          const stat = fs.statSync(filePath);
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const parsed = JSON.parse(raw);
+          matches.push({
+            root,
+            path: filePath,
+            modifiedAt: stat?.mtime ? stat.mtime.toISOString() : null,
+            payloadKind: parsed?.payload?.kind || null,
+            count: Number(parsed?.payload?.count || parsed?.payload?.inferences?.length || 0),
+            parsed,
+          });
+        } catch (_) {
+          // ignore malformed backup files
+        }
+      }
+
+      if (matches.length >= maxResults) break;
+    }
+
+    matches.sort((a, b) => Date.parse(String(b.modifiedAt || 0)) - Date.parse(String(a.modifiedAt || 0)));
+    const latest = matches.length ? matches[0].parsed?.payload || null : null;
+
+    return {
+      success: true,
+      scannedRoots: cloudRoots.length,
+      recovered: matches.length,
+      matches: matches.map((item) => ({
+        root: item.root,
+        path: item.path,
+        modifiedAt: item.modifiedAt,
+        payloadKind: item.payloadKind,
+        count: item.count,
+      })),
+      latestPayload: latest,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || 'Drive recovery failed',
+      recovered: 0,
+      matches: [],
+    };
+  }
+});
+
+async function runLLMInferencePacket(snapshot = {}) {
   if (!LLMSignalAssistant || typeof LLMSignalAssistant.analyzeSnapshot !== 'function') {
     return { success: false, error: 'LLM assistant unavailable' };
   }
@@ -1251,9 +1573,160 @@ ipcMain.handle('llm:analyzeSnapshot', async (_event, snapshot = {}) => {
     const diagnostics = typeof LLMSignalAssistant.getDiagnostics === 'function'
       ? LLMSignalAssistant.getDiagnostics()
       : {};
-    return { success: true, output, diagnostics };
+    const cooldown = diagnostics?.cooldown || null;
+    const degraded = !!cooldown?.active
+      || (Array.isArray(output?.warnings) && output.warnings.some((warning) => /cooldown|rate limit|quota/i.test(String(warning || ''))));
+
+    const packet = {
+      success: true,
+      output,
+      diagnostics,
+      degraded,
+      providerStatus: {
+        degraded,
+        provider: diagnostics?.provider || null,
+        model: diagnostics?.model || null,
+        cooldown,
+      },
+    };
+
+    if (GoogleCloudBridge && typeof GoogleCloudBridge.publishLLMInference === 'function') {
+      GoogleCloudBridge.publishLLMInference(snapshot, packet).catch((err) => {
+        console.warn('[GoogleCloud] LLM inference publish skipped:', err.message);
+      });
+    }
+
+    return packet;
   } catch (error) {
     return { success: false, error: error.message || 'LLM inference failed' };
+  }
+}
+
+// ── IPC: LLM inference bridge (main process inference layer) ──────────────────
+ipcMain.handle('llm:analyzeSnapshot', async (_event, snapshot = {}) => {
+  return runLLMInferencePacket(snapshot);
+});
+
+ipcMain.handle('ai:run-inference', async (_event, payload = {}) => {
+  const prompt = String(payload?.prompt || '').trim();
+  const context = payload?.context && typeof payload.context === 'object' ? payload.context : {};
+  const coin = String(context.coin || context.sym || context.symbol || 'BTC').toUpperCase();
+
+  const snapshot = {
+    coin,
+    horizon: Number.isFinite(Number(context.horizon)) ? Number(context.horizon) : 15,
+    confidence: Number.isFinite(Number(context.confidence)) ? Number(context.confidence) : 0,
+    score: Number.isFinite(Number(context.score)) ? Number(context.score) : 0,
+    signal: String(context.signal || 'neutral'),
+    prompt,
+    context,
+    meta: {
+      source: 'ai:run-inference',
+      ts: Date.now(),
+    },
+  };
+
+  return runLLMInferencePacket(snapshot);
+});
+
+ipcMain.handle('google:cloudStatus', async () => {
+  try {
+    return {
+      success: true,
+      status: GoogleCloudBridge && typeof GoogleCloudBridge.getStatus === 'function'
+        ? GoogleCloudBridge.getStatus()
+        : { enabled: false },
+    };
+  } catch (error) {
+    return { success: false, error: error.message || 'Google cloud status unavailable' };
+  }
+});
+
+ipcMain.handle('google:cloudSqlStatus', async (_event, options = {}) => {
+  if (!GoogleCloudBridge || typeof GoogleCloudBridge.probeCloudSql !== 'function') {
+    return { success: false, error: 'Google cloud bridge unavailable' };
+  }
+  try {
+    const status = await GoogleCloudBridge.probeCloudSql({
+      includeDatabase: options?.includeDatabase !== false,
+      force: !!options?.force,
+    });
+    return { success: !!status?.success, status };
+  } catch (error) {
+    return { success: false, error: error.message || 'Cloud SQL status unavailable' };
+  }
+});
+
+ipcMain.handle('google:testCloudSql', async () => {
+  if (!GoogleCloudBridge || typeof GoogleCloudBridge.probeCloudSql !== 'function') {
+    return { success: false, error: 'Google cloud bridge unavailable' };
+  }
+  try {
+    const status = await GoogleCloudBridge.probeCloudSql({ includeDatabase: true, force: true });
+    return { success: !!status?.success, status };
+  } catch (error) {
+    return { success: false, error: error.message || 'Cloud SQL test failed' };
+  }
+});
+
+ipcMain.handle('google:tideForecast', async (_event, payload = {}) => {
+  if (!GoogleCloudBridge || typeof GoogleCloudBridge.predictTide !== 'function') {
+    return { success: false, error: 'Google cloud bridge unavailable' };
+  }
+  try {
+    return await GoogleCloudBridge.predictTide(payload);
+  } catch (error) {
+    return { success: false, error: error.message || 'TiDE forecast failed' };
+  }
+});
+
+ipcMain.handle('firebase:status', async () => {
+  try {
+    return {
+      success: true,
+      status: FirebaseAdminFirestore && typeof FirebaseAdminFirestore.getStatus === 'function'
+        ? FirebaseAdminFirestore.getStatus()
+        : { available: false },
+    };
+  } catch (error) {
+    return { success: false, error: error.message || 'Firebase status unavailable' };
+  }
+});
+
+ipcMain.handle('firebase:startupCheck', async (_event, options = {}) => {
+  if (!FirebaseAdminFirestore || typeof FirebaseAdminFirestore.startupCheck !== 'function') {
+    return { success: false, error: 'Firebase Admin module unavailable' };
+  }
+  try {
+    return await FirebaseAdminFirestore.startupCheck({
+      required: !!options.required,
+      probe: options.probe !== false,
+    });
+  } catch (error) {
+    return { success: false, error: error.message || 'Firebase startup check failed' };
+  }
+});
+
+ipcMain.handle('firebase:getInferences', async (_event, options = {}) => {
+  if (!FirebaseAdminFirestore || typeof FirebaseAdminFirestore.getInferenceRecords !== 'function') {
+    return { success: false, records: [], error: 'Firebase Admin module unavailable' };
+  }
+  try {
+    const records = await FirebaseAdminFirestore.getInferenceRecords(options?.limit || 30);
+    return { success: true, records };
+  } catch (error) {
+    return { success: false, records: [], error: error.message || 'Failed to read inference history' };
+  }
+});
+
+ipcMain.handle('firebase:appendInference', async (_event, record = {}) => {
+  if (!FirebaseAdminFirestore || typeof FirebaseAdminFirestore.appendInferenceRecord !== 'function') {
+    return { success: false, error: 'Firebase Admin module unavailable' };
+  }
+  try {
+    return await FirebaseAdminFirestore.appendInferenceRecord(record);
+  } catch (error) {
+    return { success: false, error: error.message || 'Failed to write inference record' };
   }
 });
 
@@ -1338,6 +1811,23 @@ ipcMain.handle('validator:getCoin', async (event, sym) => {
 // ── Web Service State Sync ────────────────────────────────────────────────
 ipcMain.on('web:update-state', (event, stateUpdate) => {
   updateState(stateUpdate);
+  const telemetryPacket = {
+    ts: Date.now(),
+    revision: stateUpdate?.revision ?? null,
+    schemaVersion: stateUpdate?.schemaVersion || null,
+    publishReason: stateUpdate?.publishReason || null,
+    activeCoins: Array.isArray(stateUpdate?.activeCoins) ? stateUpdate.activeCoins : [],
+    predictionCount: Object.keys(stateUpdate?.predictions || {}).length,
+    signalCount: Object.keys(stateUpdate?.signals || {}).length,
+  };
+  if (mainWin && !mainWin.isDestroyed()) {
+    mainWin.webContents.send('telemetry-update', telemetryPacket);
+  }
+  if (GoogleCloudBridge && typeof GoogleCloudBridge.publishWebState === 'function') {
+    GoogleCloudBridge.publishWebState(stateUpdate).catch((err) => {
+      console.warn('[GoogleCloud] Web state publish skipped:', err.message);
+    });
+  }
 });
 
 ipcMain.on('web:broadcast-update', (event, { type, data }) => {
@@ -1358,13 +1848,24 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
       webSecurity: false
     }
   });
+  global.WECRYPTO_MAIN_WINDOW = win;
 
   win.once('ready-to-show', () => {
     win.show();
     win.webContents.openDevTools();
+  });
+
+  win.on('closed', () => {
+    if (global.WECRYPTO_MAIN_WINDOW === win) {
+      global.WECRYPTO_MAIN_WINDOW = null;
+    }
+    if (mainWin === win) {
+      mainWin = null;
+    }
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -1389,7 +1890,30 @@ app.whenReady().then(async () => {
 
   // Start web service (HTTPS)
   webServiceHealth = startWebService() || webServiceHealth;
-  console.log(`[Main] Web service started on ${webServiceHealth.protocol}://localhost:${webServiceHealth.port}`);
+  console.log(`[Main] Web service bootstrap on ${webServiceHealth.protocol}://localhost:${webServiceHealth.port} (auto-port-failover enabled)`);
+
+  if (FirebaseAdminFirestore && typeof FirebaseAdminFirestore.startupCheck === 'function') {
+    const firebaseEnabled = FirebaseAdminFirestore.envFlagEnabled
+      ? FirebaseAdminFirestore.envFlagEnabled(process.env.WECRYPTO_FIREBASE_ENABLED || '0')
+      : true;
+    const firebaseRequired = FirebaseAdminFirestore.envFlagEnabled
+      ? FirebaseAdminFirestore.envFlagEnabled(process.env.WECRYPTO_FIREBASE_REQUIRED || '0')
+      : false;
+    if (firebaseEnabled || firebaseRequired) {
+      try {
+        const fb = await FirebaseAdminFirestore.startupCheck({ required: firebaseRequired, probe: true });
+        if (fb.success) {
+          console.log(`[FirebaseAdmin] Ready (project=${fb.projectId}, saHash=${fb.clientEmailHash})`);
+        } else {
+          console.warn('[FirebaseAdmin] Disabled/not ready:', fb.error || 'unknown');
+        }
+      } catch (error) {
+        console.error('[FirebaseAdmin] FAIL-CLOSED:', error.message);
+        app.exit(78);
+        return;
+      }
+    }
+  }
 
   createWindow();
   logStartupHealth('post-bootstrap');

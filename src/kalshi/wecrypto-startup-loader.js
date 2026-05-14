@@ -53,8 +53,13 @@
       if (result.success) {
         log(`✓ Loaded ${result.count} contracts from cache (${result.source})`);
 
-        // Store in window for accuracy-debug.js
-        window._contractCache = result.data;
+        // Keep cache-manager object intact; store imported settlements separately
+        window._driveContractSettlements = Array.isArray(result.data) ? result.data : [];
+        window._driveContractCacheMeta = {
+          source: result.source || null,
+          count: result.count || window._driveContractSettlements.length,
+          loadedAt: Date.now(),
+        };
         return true;
       }
     } catch (err) {
@@ -194,6 +199,32 @@
 
       // Phase 4: Background persistence (async, doesn't block)
       phaseBackgroundPersistence();
+
+      // Phase 5: Background feed wiring (non-blocking)
+      try {
+        if (window.EthereumWSConnectors?.start) {
+          const wsStatus = window.EthereumWSConnectors.start({
+            enablePending: true,
+            enableLogs: false,
+          });
+          if (wsStatus?.success) log('✓ Ethereum WS connectors started');
+          else log(`ℹ Ethereum WS connectors not started: ${wsStatus?.error || 'not configured'}`);
+        }
+        if (window.MempoolTelemetryNormalizer?.start) {
+          window.MempoolTelemetryNormalizer.start();
+          log('✓ Mempool telemetry normalizer started');
+        }
+        if (window.DatasetReplayCapture?.start) {
+          const replay = window.DatasetReplayCapture.start();
+          log(`✓ Dataset replay capture started (${replay?.loaded || 0} records loaded)`);
+        }
+        if (window.FeedQualityMonitor?.start) {
+          window.FeedQualityMonitor.start();
+          log('✓ Feed quality monitor started');
+        }
+      } catch (e) {
+        log(`⚠ Feed wiring background start failed: ${e.message}`);
+      }
 
       // Expose logs + timeline for debugging
       window.__STARTUP_LOG = STARTUP_LOG;

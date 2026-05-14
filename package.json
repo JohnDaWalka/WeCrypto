@@ -6,9 +6,18 @@
   "author": "WalkerEnterprise",
   "main": "electron/main.js",
   "scripts": {
+    "scan:google-fragments": "node scripts/scan-google-fragments.js",
+    "install:firebase-service-account": "node scripts/install-firebase-service-account.js",
+    "cloud:precheck": "node -e \"const g=require('./src/cloud/google-cloud-bridge'); g.probeCloudSql({force:true}).then(r=>{console.log('[cloud-precheck]', JSON.stringify({configured:r.configured, success:r.success, cached:!!r.cached, state:r.instanceState||null, dbExists:r.databaseExists ?? null, error:r.error||null}, null, 2)); if(process.env.WECRYPTO_REQUIRE_CLOUD_READY==='1' && (!r.configured || !r.success)){process.exit(1);} }).catch(err=>{console.error('[cloud-precheck] fatal', err?.message||err); process.exit(1);});\"",
+    "cloud:ensure-db": "node -e \"const g=require('./src/cloud/google-cloud-bridge'); g.ensureCloudSqlDatabase({force:true}).then(r=>{console.log('[cloud-ensure-db]', JSON.stringify(r,null,2)); if(!r.success){process.exit(1);} }).catch(err=>{console.error('[cloud-ensure-db] fatal', err?.message||err); process.exit(1);});\"",
+    "firebase:precheck": "node -e \"const fb=require('./src/cloud/firebase-admin-firestore'); fb.startupCheck({required:false,probe:true}).then(r=>{console.log('[firebase-precheck]', JSON.stringify(r,null,2));}).catch(err=>{console.log('[firebase-precheck]', JSON.stringify({success:false,error:err?.message||String(err)},null,2));});\"",
+    "prestart": "npm run cloud:ensure-db && npm run cloud:precheck && npm run firebase:precheck",
     "start": "electron .",
+    "prebuild": "npm run cloud:ensure-db && npm run cloud:precheck && npm run firebase:precheck",
     "build": "electron-builder --win",
+    "prebuild:portable": "npm run cloud:ensure-db && npm run cloud:precheck && npm run firebase:precheck",
     "build:portable": "electron-builder --win portable",
+    "prebuild:installer": "npm run cloud:ensure-db && npm run cloud:precheck && npm run firebase:precheck",
     "build:installer": "electron-builder --win nsis",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
@@ -22,6 +31,7 @@
       "src/**",
       "electron/**",
       "assets/**",
+      "settlement-retune.js",
       "we-crypto-proxy.exe",
       "package.json"
     ],
@@ -69,7 +79,9 @@
     "@pythnetwork/pyth-lazer-sdk": "^6.2.2",
     "dotenv": "^17.4.2",
     "express": "^5.1.0",
+    "firebase-admin": "^12.7.0",
     "kalshi-typescript": "^3.15.0",
+    "selfsigned": "^5.5.0",
     "ws": "^8.18.3"
   }
 }

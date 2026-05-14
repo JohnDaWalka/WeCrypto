@@ -18,21 +18,22 @@
 
   // ── Config ──────────────────────────────────────────────────────
   const CMC_TRIAL_BASE_URL = 'https://pro-api.coinmarketcap.com/trial-pro-api';  // ★ No API key!
-  const CMC_PRO_BASE_URL    = 'https://pro-api.coinmarketcap.com/v1';  // Requires API key
-  const CMC_QUOTES_PATH     = '/cryptocurrency/quotes/latest';
-  const CMC_GLOBAL_PATH     = '/global-metrics/quotes/latest';
+  const CMC_PRO_BASE_URL = 'https://pro-api.coinmarketcap.com/v1';  // Requires API key
+  const CMC_QUOTES_PATH = '/cryptocurrency/quotes/latest';
+  const CMC_GLOBAL_PATH = '/global-metrics/quotes/latest';
   const CMC_FEAR_INDEX_PATH = '/fear-and-greed/latest';
-  const CACHE_TTL_MS        = 5 * 60 * 1000;  // 5-min cache for live quotes
-  const POLL_MS             = 60_000;  // 60-sec poll (anti-throttle)
-  const cache               = {};   // sym → { price, marketCap, volume24h, change24h, ts }
-  const globalMetrics       = {}; // { dominance, totalMarketCap, totalVolume24h, ts }
-  const fearGreed           = {}; // { value, label, ts }
+  const CACHE_TTL_MS = 5 * 60 * 1000;  // 5-min cache for live quotes
+  const POLL_MS = 60_000;  // 60-sec poll (anti-throttle)
+  const cache = {};   // sym → { price, marketCap, volume24h, change24h, ts }
+  const globalMetrics = {}; // { dominance, totalMarketCap, totalVolume24h, ts }
+  const fearGreed = {}; // { value, label, ts }
+  let cmcFearGreedUnsupported = false;
 
   // ── Credential helpers ──────────────────────────────────────────────────────
-  function getApiKey()       { return localStorage.getItem('cmc_pro_api_key') || '8e6b728e402b4fdab69fa87aed758ab1'; }  // ★ Fallback to user-provided key
-  function setApiKey(key)    { localStorage.setItem('cmc_pro_api_key', key); }
-  function hasApiKey()       { return !!getApiKey(); }
-  function getBaseUrl()      { return hasApiKey() ? CMC_PRO_BASE_URL : CMC_TRIAL_BASE_URL; }
+  function getApiKey() { return localStorage.getItem('cmc_pro_api_key') || '8e6b728e402b4fdab69fa87aed758ab1'; }  // ★ Fallback to user-provided key
+  function setApiKey(key) { localStorage.setItem('cmc_pro_api_key', key); }
+  function hasApiKey() { return !!getApiKey(); }
+  function getBaseUrl() { return hasApiKey() ? CMC_PRO_BASE_URL : CMC_TRIAL_BASE_URL; }
 
   // ── Rate limiter (CMC Trial: ~30 req/min; Pro: 10K/month = ~14 req/min) ──────────────────
   let _lastRequestTime = 0;
@@ -58,7 +59,7 @@
     try {
       // Trial uses /trial-pro-api/v1/... vs Pro uses /v1/... (both same path)
       const url = `${baseUrl}${CMC_QUOTES_PATH}?symbol=${encodeURIComponent(symbolStr)}&convert=USD`;
-      
+
       // Try ProxyOrchestrator if available for deduplication and caching
       if (typeof window.ProxyOrchestrator !== 'undefined' && window._proxyOrchestrator) {
         try {
@@ -68,7 +69,7 @@
             retries: 2,
             fallbackChain: ['cmc', 'pyth', 'cache'],
           });
-          
+
           // Cache result in local cache for backwards compatibility
           if (result && result.data) {
             Object.entries(result.data).forEach(([sym, data]) => {
@@ -82,7 +83,7 @@
               };
             });
           }
-          
+
           console.info(`[CMC ${isProMode ? 'Pro' : 'Trial'}] Quotes via proxy: ${Object.keys(result?.data || {}).length} coins ✓`);
           return result?.data || {};
         } catch (err) {
@@ -177,39 +178,45 @@
   async function getFearGreedIndex() {
     try {
       // Primary: CoinMarketCap (if available)
-      const cmcUrl = `${getBaseUrl()}${CMC_FEAR_INDEX_PATH}`;
-      const cmcHeaders = { 'Accept': 'application/json' };
-      if (hasApiKey()) cmcHeaders['X-CMC_PRO_API_KEY'] = getApiKey();
+      if (!cmcFearGreedUnsupported) {
+        const cmcUrl = `${getBaseUrl()}${CMC_FEAR_INDEX_PATH}`;
+        const cmcHeaders = { 'Accept': 'application/json' };
+        if (hasApiKey()) cmcHeaders['X-CMC_PRO_API_KEY'] = getApiKey();
 
-      try {
-        const resp = await _rateLimitedFetch(cmcUrl, { method: 'GET', headers: cmcHeaders });
-        if (resp.ok) {
-          // Add rate limiter call before processing response
-          if (window.ApiRateLimiter) {
-            const limiter = window.ApiRateLimiter.getLimiter('coinmarketcap');
-            await limiter.acquire();
+        try {
+          const resp = await _rateLimitedFetch(cmcUrl, { method: 'GET', headers: cmcHeaders });
+          if (resp.ok) {
+            // Add rate limiter call before processing response
+            if (window.ApiRateLimiter) {
+              const limiter = window.ApiRateLimiter.getLimiter('coinmarketcap');
+              await limiter.acquire();
+            }
+
+            const json = await resp.json();
+            if (json.data) {
+              const data = Array.isArray(json.data) ? json.data[0] : json.data;
+              fearGreed.value = data.value || null;
+              fearGreed.label = data.value_classification || 'N/A';
+              fearGreed.ts = Date.now();
+              console.info(`[CMC] F&G: ${fearGreed.value} (${fearGreed.label}) ✓`);
+              return fearGreed;
+            }
+          } else if (resp.status === 404) {
+            cmcFearGreedUnsupported = true;
+            console.info('[CMC] F&G endpoint unsupported (404); using Alternative.me only for this session.');
+          } else if (resp.status === 401) {
+            console.error('[CMC] 401 Unauthorized - Invalid or missing API key');
+            console.info('[CMC] Falling back to Alternative.me...');
           }
-          
-          const json = await resp.json();
-          if (json.data) {
-            const data = Array.isArray(json.data) ? json.data[0] : json.data;
-            fearGreed.value = data.value || null;
-            fearGreed.label = data.value_classification || 'N/A';
-            fearGreed.ts = Date.now();
-            console.info(`[CMC] F&G: ${fearGreed.value} (${fearGreed.label}) ✓`);
-            return fearGreed;
-          }
-        } else if (resp.status === 401) {
-          console.error('[CMC] 401 Unauthorized - Invalid or missing API key');
-          console.info('[CMC] Falling back to trial mode...');
+        } catch (cmcErr) {
+          console.debug('[CMC] F&G failed, trying Alternative.me:', cmcErr.message);
         }
-      } catch (cmcErr) {
-        console.debug('[CMC] F&G failed, trying Alternative.me:', cmcErr.message);
       }
 
       // Fallback: Alternative.me (free, no auth required)
+      // Timeout: 2s (fail fast for non-critical indicator)
       const altUrl = 'https://api.alternative.me/fng/';
-      const altResp = await fetch(altUrl, { signal: AbortSignal.timeout(5000) });
+      const altResp = await fetch(altUrl, { signal: AbortSignal.timeout(2000) });
       if (altResp.ok) {
         const json = await altResp.json();
         const data = json.data?.[0] || json;
@@ -220,11 +227,11 @@
         return fearGreed;
       }
 
-      console.warn('[F&G] Both CMC and Alternative.me failed');
+      console.warn('[F&G] Both CMC and Alternative.me failed - using cached value');
       return fearGreed;
     } catch (e) {
-      console.warn('[F&G] Error:', e.message);
-      return fearGreed;
+      console.warn(`[F&G] Timeout/error after 2s: ${e.message} - using cached value`);
+      return fearGreed;  // Return cached value on timeout/error
     }
   }
 

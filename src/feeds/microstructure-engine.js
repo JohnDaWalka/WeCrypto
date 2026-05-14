@@ -187,9 +187,12 @@
             return {
                 available: false,
                 proxy: 0,
+                vpin: 0,
+                tox: 0,
                 imbalance: 0,
                 signedMean: 0,
                 signedStd: 0,
+                bucketCount: 0,
                 label: "No flow",
             };
         }
@@ -205,13 +208,193 @@
         const variancePressure = signedStd > 0 ? Math.min(1, Math.abs(signedMean) / (signedStd + 1e-9) * 1.7) : 0;
         const proxy = clamp(Math.abs(imbalance) * 0.65 + variancePressure * 0.35, 0, 1);
 
+        // Bucketed VPIN approximation using rolling trade volume buckets.
+        const totalQty = tradesN.reduce((s, t) => s + t.qty, 0);
+        const bucketTarget = Math.max(1e-9, totalQty / 6);
+        const buckets = [];
+        let buyVol = 0;
+        let sellVol = 0;
+        let bucketVol = 0;
+
+        for (const t of tradesN) {
+            const qty = t.qty;
+            bucketVol += qty;
+            if (t.side === "buy") buyVol += qty;
+            else sellVol += qty;
+
+            if (bucketVol >= bucketTarget) {
+                const denom = buyVol + sellVol;
+                const imb = denom > 0 ? Math.abs(buyVol - sellVol) / denom : 0;
+                buckets.push(imb);
+                buyVol = 0;
+                sellVol = 0;
+                bucketVol = 0;
+            }
+        }
+        if ((buyVol + sellVol) > bucketTarget * 0.45) {
+            const denom = buyVol + sellVol;
+            buckets.push(denom > 0 ? Math.abs(buyVol - sellVol) / denom : 0);
+        }
+
+        const vpin = buckets.length ? clamp(avg(buckets), 0, 1) : proxy;
+        const tox = clamp(vpin * 0.7 + proxy * 0.3, 0, 1);
+
         return {
             available: true,
             proxy,
+            vpin,
+            tox,
             imbalance,
             signedMean,
             signedStd,
-            label: proxy > 0.6 ? "High toxicity" : proxy > 0.35 ? "Elevated toxicity" : "Calm flow",
+            bucketCount: buckets.length,
+            label: tox > 0.62 ? "High toxicity" : tox > 0.42 ? "Elevated toxicity" : "Calm flow",
+        };
+    }
+
+    function analyzeSpoofing(sym, bookN) {
+        const alerts = Array.isArray(window.OB?.wallAlerts) ? window.OB.wallAlerts : [];
+        const now = Date.now();
+        const recent = alerts.filter(a => a?.sym === sym && (now - toNum(a.ts, 0)) <= 180000);
+        if (!recent.length) {
+            return {
+                score: 0,
+                direction: 0,
+                side: "none",
+                appeared: 0,
+                pulledFast: 0,
+                reappears: 0,
+                label: "No spoofing signal",
+            };
+        }
+
+        let appearedBid = 0, appearedAsk = 0;
+        let pulledFastBid = 0, pulledFastAsk = 0;
+        let reappearBid = 0, reappearAsk = 0;
+
+        const bidEvents = recent.filter(e => e.side === "BID").sort((a, b) => toNum(a.ts, 0) - toNum(b.ts, 0));
+        const askEvents = recent.filter(e => e.side === "ASK").sort((a, b) => toNum(a.ts, 0) - toNum(b.ts, 0));
+
+        function countReappears(sideEvents) {
+            let count = 0;
+            const minTick = (() => {
+                if (!bookN) return 0.01;
+                const bestBid = bookN.bids[0]?.price || 0;
+                const bestAsk = bookN.asks[0]?.price || 0;
+                const spread = Math.abs(bestAsk - bestBid);
+                return Math.max(spread / 10, bestBid * 1e-5, 1e-6);
+            })();
+
+            for (let i = 0; i < sideEvents.length; i++) {
+                const e = sideEvents[i];
+                if (e.type !== "PULLED") continue;
+                const p = toNum(e.price, NaN);
+                const ts = toNum(e.ts, 0);
+                for (let j = i + 1; j < sideEvents.length; j++) {
+                    const n = sideEvents[j];
+                    const nts = toNum(n.ts, 0);
+                    if (nts - ts > 15000) break;
+                    if (n.type !== "APPEARED") continue;
+                    const np = toNum(n.price, NaN);
+                    if (Number.isFinite(p) && Number.isFinite(np) && Math.abs(np - p) <= minTick * 3) {
+                        count++;
+                        break;
+                    }
+                }
+            }
+            return count;
+        }
+
+        for (const e of bidEvents) {
+            if (e.type === "APPEARED") appearedBid++;
+            if (e.type === "PULLED" && toNum(e.ageMs, 999999) < 2000) pulledFastBid++;
+        }
+        for (const e of askEvents) {
+            if (e.type === "APPEARED") appearedAsk++;
+            if (e.type === "PULLED" && toNum(e.ageMs, 999999) < 2000) pulledFastAsk++;
+        }
+
+        reappearBid = countReappears(bidEvents);
+        reappearAsk = countReappears(askEvents);
+
+        const askPullRate = appearedAsk > 0 ? pulledFastAsk / appearedAsk : 0;
+        const bidPullRate = appearedBid > 0 ? pulledFastBid / appearedBid : 0;
+        const askReappearRate = pulledFastAsk > 0 ? reappearAsk / pulledFastAsk : 0;
+        const bidReappearRate = pulledFastBid > 0 ? reappearBid / pulledFastBid : 0;
+
+        const askScore = clamp(askPullRate * 0.7 + askReappearRate * 0.3, 0, 1);
+        const bidScore = clamp(bidPullRate * 0.7 + bidReappearRate * 0.3, 0, 1);
+
+        const side = askScore > bidScore ? "ask" : bidScore > askScore ? "bid" : "none";
+        const score = side === "ask" ? askScore : side === "bid" ? bidScore : 0;
+        const direction = side === "ask" ? 1 : side === "bid" ? -1 : 0;
+
+        return {
+            score,
+            direction,
+            side,
+            appeared: appearedAsk + appearedBid,
+            pulledFast: pulledFastAsk + pulledFastBid,
+            reappears: reappearAsk + reappearBid,
+            label: score > 0.68 ? (side === "ask" ? "Ask spoof risk" : side === "bid" ? "Bid spoof risk" : "No spoofing signal") : "No spoofing signal",
+        };
+    }
+
+    function analyzeIceberg(tradesN, bookN) {
+        if (!tradesN.length || !bookN) {
+            return {
+                score: 0,
+                direction: 0,
+                side: "none",
+                touches: 0,
+                execToDisplay: 0,
+                label: "No iceberg signal",
+            };
+        }
+
+        const bestBid = bookN.bids[0]?.price || 0;
+        const bestAsk = bookN.asks[0]?.price || 0;
+        const spread = Math.abs(bestAsk - bestBid);
+        const tick = Math.max(spread / 10, bestBid * 1e-5, 1e-6);
+        const band = tick * 2;
+
+        const buyNearAsk = tradesN.filter(t => t.side === "buy" && Math.abs(t.price - bestAsk) <= band);
+        const sellNearBid = tradesN.filter(t => t.side === "sell" && Math.abs(t.price - bestBid) <= band);
+
+        const execAsk = buyNearAsk.reduce((s, t) => s + t.qty, 0);
+        const execBid = sellNearBid.reduce((s, t) => s + t.qty, 0);
+        const dispAsk = Math.max(1e-9, bookN.asks.slice(0, 3).reduce((s, l) => s + getLevelQty(l), 0));
+        const dispBid = Math.max(1e-9, bookN.bids.slice(0, 3).reduce((s, l) => s + getLevelQty(l), 0));
+
+        const askTouches = buyNearAsk.length;
+        const bidTouches = sellNearBid.length;
+        const askExecDisplay = execAsk / dispAsk;
+        const bidExecDisplay = execBid / dispBid;
+
+        const askTouchDensity = clamp((askTouches - 2) / 6, 0, 1);
+        const bidTouchDensity = clamp((bidTouches - 2) / 6, 0, 1);
+        const askExecNorm = clamp(askExecDisplay / 3, 0, 1);
+        const bidExecNorm = clamp(bidExecDisplay / 3, 0, 1);
+
+        const askPriceAnchor = clamp(1 - std(buyNearAsk.map(t => t.price)) / (tick * 3 + 1e-9), 0, 1);
+        const bidPriceAnchor = clamp(1 - std(sellNearBid.map(t => t.price)) / (tick * 3 + 1e-9), 0, 1);
+
+        const askScore = clamp(askTouchDensity * 0.5 + askExecNorm * 0.35 + askPriceAnchor * 0.15, 0, 1);
+        const bidScore = clamp(bidTouchDensity * 0.5 + bidExecNorm * 0.35 + bidPriceAnchor * 0.15, 0, 1);
+
+        const side = bidScore > askScore ? "bid" : askScore > bidScore ? "ask" : "none";
+        const score = side === "bid" ? bidScore : side === "ask" ? askScore : 0;
+        const direction = side === "bid" ? 1 : side === "ask" ? -1 : 0;
+        const touches = side === "bid" ? bidTouches : side === "ask" ? askTouches : 0;
+        const execToDisplay = side === "bid" ? bidExecDisplay : side === "ask" ? askExecDisplay : 0;
+
+        return {
+            score,
+            direction,
+            side,
+            touches,
+            execToDisplay,
+            label: score > 0.62 ? (side === "bid" ? "Bid iceberg absorption" : side === "ask" ? "Ask iceberg absorption" : "No iceberg signal") : "No iceberg signal",
         };
     }
 
@@ -230,6 +413,8 @@
         const sweep = analyzeSweep(tradesN, bookN);
         const vacuum = analyzeVacuum(state, imbalance, bookN);
         const toxicity = analyzeToxicity(tradesN);
+        const spoofing = analyzeSpoofing(symKey, bookN);
+        const iceberg = analyzeIceberg(tradesN, bookN);
 
         pushHist(state.spreadPctHist, imbalance.spreadPct);
         pushHist(state.depthHist, bookN
@@ -238,11 +423,18 @@
         pushHist(state.imbalanceHist, imbalance.value);
         pushHist(state.sweepHist, sweep.score);
         pushHist(state.vacuumHist, vacuum.severity);
-        pushHist(state.toxicityHist, toxicity.proxy || 0);
+        pushHist(state.toxicityHist, toxicity.tox || toxicity.proxy || 0);
 
-        // Conservative composite: imbalance remains dominant; sweep/vacuum/toxicity are secondary.
+        // Conservative composite: imbalance remains dominant; new micro features are bounded.
+        const toxPenalty = clamp(toxicity.tox || toxicity.proxy || 0, 0, 1);
+        const flowSign = Math.sign((imbalance.value || 0) + (sweep.score || 0)) || 1;
         const composite = clamp(
-            imbalance.value * 0.55 + sweep.score * 0.25 + vacuum.score * 0.12 + (toxicity.available ? (-Math.sign(imbalance.value || sweep.score || 1) * toxicity.proxy * 0.08) : 0),
+            imbalance.value * 0.48 +
+            sweep.score * 0.22 +
+            vacuum.score * 0.12 +
+            (spoofing.direction * spoofing.score) * 0.08 +
+            (iceberg.direction * iceberg.score) * 0.10 +
+            (toxicity.available ? (-flowSign * toxPenalty * 0.10) : 0),
             -1,
             1
         );
@@ -254,6 +446,8 @@
             sweep,
             vacuum,
             toxicity,
+            spoofing,
+            iceberg,
             composite,
             latencySafe: true,
             sampleSize: {
@@ -303,7 +497,12 @@
                 imbalance: s.imbalance?.value || 0,
                 sweep: s.sweep?.score || 0,
                 vacuum: s.vacuum?.severity || 0,
-                toxicity: s.toxicity?.proxy || 0,
+                toxicity: s.toxicity?.tox || s.toxicity?.proxy || 0,
+                vpin: s.toxicity?.vpin || 0,
+                spoofing: s.spoofing?.score || 0,
+                spoofSide: s.spoofing?.side || 'none',
+                iceberg: s.iceberg?.score || 0,
+                icebergSide: s.iceberg?.side || 'none',
                 label: s.vacuum?.active ? "vacuum" : s.sweep?.label || "normal",
             };
         });

@@ -15,6 +15,9 @@ class AdaptiveWeightRestorer {
     this.lastWeights = null;
     this.restoredAt = null;
     this.source = null; // 'cache' | 'electron' | 'fresh'
+    this._initialized = false;
+    this._initPromise = null;
+    this._refreshTimer = null;
   }
 
   /**
@@ -32,11 +35,11 @@ class AdaptiveWeightRestorer {
       const ageHours = ageMs / (1000 * 60 * 60);
 
       console.log(`[WeightRestorer] ✓ Loaded cached weights (${ageHours.toFixed(1)}h old)`);
-      
+
       this.lastWeights = data.weights;
       this.restoredAt = Date.now();
       this.source = 'cache';
-      
+
       return data;
     } catch (err) {
       console.warn('[WeightRestorer] Cache load failed:', err.message);
@@ -52,18 +55,19 @@ class AdaptiveWeightRestorer {
       if (typeof window === 'undefined' || !window.electron) return null;
 
       const result = await window.electron.invoke('storage:readContractCache');
-      if (!result.success || !result.data) return null;
+      const settlements = result?.settlements || result?.data || result?.contracts || [];
+      if (!result?.success || !Array.isArray(settlements) || settlements.length === 0) return null;
 
       // Calculate current weights from historical accuracy
-      const stats = this._calculateStatsFromContracts(result.data);
+      const stats = this._calculateStatsFromContracts(settlements);
       const weights = this._deriveWeights(stats);
 
-      console.log(`[WeightRestorer] ✓ Derived weights from Electron cache (${result.count} contracts)`);
-      
+      console.log(`[WeightRestorer] ✓ Derived weights from Electron cache (${settlements.length} contracts)`);
+
       this.lastWeights = weights;
       this.restoredAt = Date.now();
       this.source = 'electron';
-      
+
       return { weights, stats, source: 'electron' };
     } catch (err) {
       console.warn('[WeightRestorer] Electron restore failed:', err.message);
@@ -102,32 +106,50 @@ class AdaptiveWeightRestorer {
    * Startup sequence: restore instantly, then update in background
    */
   async initialize() {
-    console.log('[WeightRestorer] Startup: restoring calibration...');
-
-    // Step 1: Restore from cache (instant)
-    let restored = this.restoreFromCache();
-    
-    if (!restored) {
-      // Step 2: Fallback to Electron cache
-      restored = await this.restoreFromElectron();
+    if (this._initialized) {
+      return {
+        success: !!this.lastWeights,
+        source: this.source,
+        weights: this.lastWeights,
+      };
     }
+    if (this._initPromise) return this._initPromise;
 
-    if (restored) {
-      // Step 3: Apply weights immediately
-      this.applyWeights();
-      console.log('[WeightRestorer] ✓ Calibration restored and applied');
-    } else {
-      console.warn('[WeightRestorer] ⚠ No calibration to restore (first run?)');
+    this._initPromise = (async () => {
+      console.log('[WeightRestorer] Startup: restoring calibration...');
+
+      // Step 1: Restore from cache (instant)
+      let restored = this.restoreFromCache();
+
+      if (!restored) {
+        // Step 2: Fallback to Electron cache
+        restored = await this.restoreFromElectron();
+      }
+
+      if (restored) {
+        // Step 3: Apply weights immediately
+        this.applyWeights();
+        console.log('[WeightRestorer] ✓ Calibration restored and applied');
+      } else {
+        console.warn('[WeightRestorer] ⚠ No calibration to restore (first run?)');
+      }
+
+      // Step 4: Schedule background refresh (don't block startup)
+      this._scheduleBackgroundRefresh();
+      this._initialized = true;
+
+      return {
+        success: !!restored,
+        source: this.source,
+        weights: this.lastWeights,
+      };
+    })();
+
+    try {
+      return await this._initPromise;
+    } finally {
+      this._initPromise = null;
     }
-
-    // Step 4: Schedule background refresh (don't block startup)
-    this._scheduleBackgroundRefresh();
-
-    return {
-      success: !!restored,
-      source: this.source,
-      weights: this.lastWeights,
-    };
   }
 
   /**
@@ -138,7 +160,7 @@ class AdaptiveWeightRestorer {
       if (typeof localStorage === 'undefined') return false;
 
       const weights = {};
-      
+
       for (const sym of symbols) {
         if (typeof window !== 'undefined' && window.AdaptiveLearner) {
           const symWeights = window.AdaptiveLearner.getSymbolWeights?.(sym);
@@ -169,7 +191,7 @@ class AdaptiveWeightRestorer {
     const stats = { bySymbol: {} };
 
     for (const c of contracts) {
-      const sym = c.symbol || 'UNKNOWN';
+      const sym = (c.symbol || c.sym || c.coin || 'UNKNOWN').toUpperCase();
       if (!stats.bySymbol[sym]) {
         stats.bySymbol[sym] = {
           total: 0,
@@ -240,8 +262,9 @@ class AdaptiveWeightRestorer {
   _scheduleBackgroundRefresh() {
     // Refresh every 5 minutes in background
     if (typeof window === 'undefined') return;
+    if (this._refreshTimer) return;
 
-    setInterval(() => {
+    this._refreshTimer = setInterval(() => {
       if (typeof window !== 'undefined' && window.ContractWinRateCalculator) {
         const calc = new window.ContractWinRateCalculator();
         calc.updateInBackground()
@@ -258,22 +281,20 @@ class AdaptiveWeightRestorer {
 // Browser/Node compatibility
 if (typeof window !== 'undefined') {
   window.AdaptiveWeightRestorer = AdaptiveWeightRestorer;
-  
-  // Auto-init on page load
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      const restorer = new AdaptiveWeightRestorer();
-      restorer.initialize().catch(err => 
-        console.error('[WeightRestorer] Init failed:', err.message)
-      );
-      window.__AdaptiveWeightRestorer = restorer;
-    });
-  } else {
-    const restorer = new AdaptiveWeightRestorer();
-    restorer.initialize().catch(err => 
+
+  const bootRestorer = () => {
+    const restorer = window.__AdaptiveWeightRestorer || new AdaptiveWeightRestorer();
+    window.__AdaptiveWeightRestorer = restorer;
+    restorer.initialize().catch(err =>
       console.error('[WeightRestorer] Init failed:', err.message)
     );
-    window.__AdaptiveWeightRestorer = restorer;
+  };
+
+  // Auto-init once on page load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootRestorer, { once: true });
+  } else {
+    bootRestorer();
   }
 }
 

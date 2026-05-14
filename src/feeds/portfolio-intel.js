@@ -13,8 +13,8 @@
   'use strict';
 
   const ALCHEMY_KEY = localStorage.getItem('alchemyApiKey') ||
-                      window._env?.ALCHEMY_KEY ||
-                      'UNcUYppLXPl4s0jAkQe_J';
+    window._env?.ALCHEMY_KEY ||
+    'UNcUYppLXPl4s0jAkQe_J';
 
   // Multi-chain Alchemy endpoints (mainnet + devnet/testnet options)
   const ALCHEMY_ENDPOINTS = {
@@ -71,8 +71,8 @@
     if (!chainConfig) return null;
 
     // Select endpoint (mainnet or devnet)
-    const endpoint = useDevnet && chainConfig.devnet 
-      ? chainConfig.devnet 
+    const endpoint = useDevnet && chainConfig.devnet
+      ? chainConfig.devnet
       : chainConfig.endpoint;
 
     if (!endpoint) return null;
@@ -153,7 +153,7 @@
       if (window.WhaleAlertMonitor) {
         try {
           const result = await window.WhaleAlertMonitor.getWhaleTransactions(chainKey);
-          whales = result.txs.filter(t => 
+          whales = result.txs.filter(t =>
             t.from === normalized || t.to === normalized
           );
         } catch (e) { /* ignore */ }
@@ -164,7 +164,7 @@
       if (window.DexActivityMonitor && (chainKey === 'ETH' || chainKey === 'BNB')) {
         try {
           const result = await window.DexActivityMonitor.getSwaps(chainKey);
-          swaps = result.swaps.filter(s => 
+          swaps = result.swaps.filter(s =>
             s.user?.toLowerCase() === normalized
           );
         } catch (e) { /* ignore */ }
@@ -238,18 +238,35 @@
     const tracked = _trackedWallets.get(addr);
     if (!tracked) return;
 
-    const activity = await _getWalletActivityAggregated(addr, tracked.chains[0]);
-    if (!activity) return;
+    const chains = Array.isArray(tracked.chains) && tracked.chains.length
+      ? tracked.chains
+      : ['ETH', 'BNB', 'BTC', 'SOL', 'XRP', 'DOGE', 'HYPE'];
 
-    const risks = _analyzeRisks(activity);
+    const settled = await Promise.allSettled(
+      chains.map(chain => _getWalletActivityAggregated(addr, chain))
+    );
+
+    const activities = settled
+      .filter(r => r.status === 'fulfilled' && r.value)
+      .map(r => r.value);
+
+    if (!activities.length) return;
+
+    const chainRisks = activities.map(activity => ({
+      chain: activity.chain,
+      risks: _analyzeRisks(activity),
+    }));
+
+    const risks = chainRisks.flatMap(x => x.risks.map(r => ({ ...r, chain: x.chain })));
 
     tracked.data = {
-      activity,
+      activities,
+      chainRisks,
       risks,
       timestamp: Date.now(),
     };
 
-    tracked.callback?.({ activity, risks });
+    tracked.callback?.({ activities, chainRisks, risks });
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -263,7 +280,7 @@
       const results = [];
 
       for (const wallet of wallets) {
-        const chains = opts.chains || ['ETH', 'BNB', 'BTC'];
+        const chains = opts.chains || ['ETH', 'BNB', 'BTC', 'SOL', 'XRP', 'DOGE', 'HYPE'];
         for (const chain of chains) {
           const activity = await _getWalletActivityAggregated(wallet, chain);
           if (activity) {
@@ -303,9 +320,12 @@
     /**
      * Start tracking a wallet with real-time updates.
      */
-    trackWallet(addr, callback, chains = ['ETH', 'BNB']) {
+    trackWallet(addr, callback, chains = ['ETH', 'BNB', 'BTC', 'SOL', 'XRP', 'DOGE', 'HYPE']) {
       const normalized = addr.toLowerCase().trim();
-      _trackedWallets.set(normalized, { chains, callback, data: null });
+      const normalizedChains = (chains || [])
+        .map(c => String(c || '').toUpperCase())
+        .filter(Boolean);
+      _trackedWallets.set(normalized, { chains: normalizedChains, callback, data: null });
       _watchList.add(normalized);
 
       // Initial fetch

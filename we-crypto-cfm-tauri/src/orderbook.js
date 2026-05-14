@@ -9,46 +9,60 @@
   const WALL_MIN_QTY = {
     BTC: 3, ETH: 50, SOL: 2000, XRP: 100000, HYPE: 5000, DOGE: 1000000, BNB: 200
   };
-  const WALL_MULTI    = 3.5;
-  const WALL_MIN_AGE  = 400;  // ms
+  const WALL_MULTI = 3.5;
+  const WALL_MIN_AGE = 400;  // ms
   const LIQSNAP_INTERVAL = 2000;
-  const LIQSNAP_MAX   = 450;
+  const LIQSNAP_MAX = 450;
 
-  const books        = {};   // sym → { bids, asks, mid }
-  const wallTracker  = {};   // sym → { bids: Map<priceStr,{qty,firstTs,lastQty}>, asks: Map }
+  const books = {};   // sym → { bids, asks, mid }
+  const wallTracker = {};   // sym → { bids: Map<priceStr,{qty,firstTs,lastQty}>, asks: Map }
   const liquiditySnaps = {}; // sym → [{ts, mid, bids, asks}]
-  const wallAlerts   = [];   // global, newest first
+  const wallAlerts = [];   // global, newest first
   const wallEventLog = {};   // sym → [{ts, price, side, type}] for canvas markers
-  const WS_MAP       = {};
-  const listeners    = new Map();
+  const WS_MAP = {};
+  const WS_RETRY_CNT = {};  // sym → retry attempt count
+  const listeners = new Map();
   const alertListeners = [];
-  let lastSnapTs     = {};
-  let soundEnabled   = true;
-  let audioCtx       = null;
+  let lastSnapTs = {};
+  let soundEnabled = true;
+  let audioCtx = null;
 
-  // ── WebSocket connection ──────────────────────────────────────────────────
-  function connect(sym) {
+  // ── WebSocket connection with exponential backoff reconnect ──────────────────────────────────────────────────
+  function connect(sym, retryAttempt = 0) {
     const bnSym = BN_MAP[sym];
     if (!bnSym) return;
     if (WS_MAP[sym]?.readyState === WebSocket.OPEN) return;
 
-    books[sym]         = { bids: [], asks: [], mid: 0, spread: 0, spreadPct: 0 };
-    wallTracker[sym]   = { bids: new Map(), asks: new Map() };
+    books[sym] = { bids: [], asks: [], mid: 0, spread: 0, spreadPct: 0 };
+    wallTracker[sym] = { bids: new Map(), asks: new Map() };
     liquiditySnaps[sym] = [];
-    wallEventLog[sym]  = [];
-    lastSnapTs[sym]    = 0;
+    wallEventLog[sym] = [];
+    lastSnapTs[sym] = 0;
 
     const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${bnSym}@depth20@100ms`);
     WS_MAP[sym] = ws;
+    WS_RETRY_CNT[sym] = retryAttempt;
 
     ws.onmessage = (e) => {
       try {
         const d = JSON.parse(e.data);
         processBook(sym, d.bids, d.asks);
-      } catch (_) {}
+        // Reset retry count on successful data
+        WS_RETRY_CNT[sym] = 0;
+      } catch (_) { }
     };
-    ws.onclose = () => { delete WS_MAP[sym]; setTimeout(() => connect(sym), 3000); };
-    ws.onerror = () => { ws.close(); };
+    ws.onclose = () => {
+      delete WS_MAP[sym];
+      const nextRetry = WS_RETRY_CNT[sym] + 1;
+      // Exponential backoff: 500ms * 2^n, capped at 64s
+      const delay = Math.min(500 * Math.pow(2, nextRetry), 64000);
+      console.warn(`[Orderbook WS] ${sym} closed, reconnecting in ${delay}ms (attempt ${nextRetry})`);
+      setTimeout(() => connect(sym, nextRetry), delay);
+    };
+    ws.onerror = (e) => {
+      console.error(`[Orderbook WS] ${sym} error:`, e);
+      ws.close();
+    };
   }
 
   // ── Book processing ───────────────────────────────────────────────────────
@@ -83,10 +97,10 @@
   // ── Wall detection ────────────────────────────────────────────────────────
   function detectWalls(sym, side, levels, mid, now) {
     const tracker = wallTracker[sym][side];
-    const minQty  = WALL_MIN_QTY[sym] || 100;
+    const minQty = WALL_MIN_QTY[sym] || 100;
 
     const totalQty = levels.reduce((s, [, q]) => s + q, 0);
-    const avgQty   = levels.length > 0 ? totalQty / levels.length : 0;
+    const avgQty = levels.length > 0 ? totalQty / levels.length : 0;
     const threshold = Math.max(minQty, avgQty * WALL_MULTI);
 
     const currentWalls = new Set();
@@ -148,7 +162,7 @@
   function playBeep(bias) {
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc  = audioCtx.createOscillator();
+      const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.connect(gain);
       gain.connect(audioCtx.destination);
@@ -157,8 +171,8 @@
       gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
       osc.start(audioCtx.currentTime);
-      osc.stop(audioCtx.currentTime  + 0.4);
-    } catch (_) {}
+      osc.stop(audioCtx.currentTime + 0.4);
+    } catch (_) { }
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -169,7 +183,7 @@
     toggleSound: () => { soundEnabled = !soundEnabled; return soundEnabled; },
     connect, connectAll: () => Object.keys(BN_MAP).forEach(connect),
     onAlert: (fn) => alertListeners.push(fn),
-    onBook:  (sym, fn) => {
+    onBook: (sym, fn) => {
       if (!listeners.has(sym)) listeners.set(sym, []);
       listeners.get(sym).push(fn);
     },
@@ -182,7 +196,7 @@
     getConnected: () => Object.keys(WS_MAP).filter(s => WS_MAP[s]?.readyState === WebSocket.OPEN),
     formatQty: (sym, qty) => {
       if (qty >= 1000000) return (qty / 1000000).toFixed(2) + 'M';
-      if (qty >= 1000)    return (qty / 1000).toFixed(1) + 'K';
+      if (qty >= 1000) return (qty / 1000).toFixed(1) + 'K';
       return qty.toFixed(2);
     },
   };

@@ -9,6 +9,10 @@
 const fs = require("fs");
 const path = require("path");
 const { generateSystemPrompt, generateUserPrompt } = require("./specialized_prompt");
+const {
+  readSecretFromEnvOrFiles,
+  extractGoogleApiKey,
+} = require("../cloud/secrets-loader");
 
 function loadLLMEnv() {
   const loadedPaths = [];
@@ -39,15 +43,44 @@ function loadLLMEnv() {
 
 const LLM_ENV_SOURCES = loadLLMEnv();
 
+function resolveCompatibleApiKey() {
+  const secret = readSecretFromEnvOrFiles(
+    ['LLM_API_KEY', 'OPENAI_API_KEY', 'OPENAI_KEY'],
+    [
+      'OPENAI-WECRYPTO.txt',
+      'OPENAI-Service-account.txt',
+      'LLM-API-KEY.txt',
+      'OPENAI-API-KEY.txt',
+    ]
+  );
+  return String(secret?.value || '').trim();
+}
+
+function resolveGoogleApiKey() {
+  const secret = readSecretFromEnvOrFiles(
+    ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+    [
+      'GOOGLE-CREDENTIAL-API.txt',
+      'GOOGLE-GEMINI-API-KEY.txt',
+      'GEMINI-API-KEY.txt',
+      'GOOGLE-API-KEY.txt',
+    ]
+  );
+  return extractGoogleApiKey(secret?.value || '');
+}
+
 // Configuration from environment
 const LLM_API_URL = process.env.LLM_API_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1/chat/completions";
-const LLM_API_KEY = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENAI_KEY;
+const LLM_API_KEY = resolveCompatibleApiKey();
 const LLM_MODEL = process.env.LLM_MODEL || process.env.OPENAI_MODEL || "gpt-4-mini";
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || "";
+const GOOGLE_API_KEY = resolveGoogleApiKey();
 const GOOGLE_MODEL = process.env.GOOGLE_MODEL || process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const LLM_PROVIDER = (process.env.LLM_PROVIDER || "auto").toLowerCase();
 const CONTEXT_CACHE_TTL_MS = Number(process.env.LLM_CONTEXT_CACHE_TTL_MS || 15000);
 const MARKET_MEMORY_LIMIT = Number(process.env.LLM_MARKET_MEMORY_LIMIT || 12);
+const LLM_RATE_LIMIT_BASE_COOLDOWN_MS = Number(process.env.LLM_RATE_LIMIT_BASE_COOLDOWN_MS || 15000);
+const LLM_RATE_LIMIT_MAX_COOLDOWN_MS = Number(process.env.LLM_RATE_LIMIT_MAX_COOLDOWN_MS || 5 * 60 * 1000);
+const LLM_RATE_LIMIT_LOG_DEBOUNCE_MS = Number(process.env.LLM_RATE_LIMIT_LOG_DEBOUNCE_MS || 10000);
 
 class LLMSignalAssistant {
   constructor() {
@@ -73,6 +106,15 @@ class LLMSignalAssistant {
       failures: 0,
       influenceCount: 0,
       cacheHits: 0,
+      cooldownSkips: 0,
+    };
+
+    this.rateLimitState = {
+      cooldownUntilTs: 0,
+      consecutiveFailures: 0,
+      lastReason: null,
+      lastRetryAfterMs: 0,
+      lastRateLimitLogTs: 0,
     };
 
     console.log(
@@ -107,6 +149,12 @@ class LLMSignalAssistant {
       };
     }
 
+    const cooldownFallback = this.getCooldownFallback();
+    if (cooldownFallback) {
+      this.stats.cooldownSkips++;
+      return cooldownFallback;
+    }
+
     try {
       const cacheKey = this.getCacheKey(snapshot);
       const now = Date.now();
@@ -126,15 +174,19 @@ class LLMSignalAssistant {
       this.recordMarketMemory(snapshot, normalized);
       this.contextCache.set(cacheKey, { ts: now, value: normalized });
       this.stats.successes++;
+      this.clearRateLimitState();
       return normalized;
     } catch (err) {
       this.stats.failures++;
-      console.error("[LLMSignalAssistant] Analysis failed:", err.message);
+      const rateLimited = this.handleRateLimitError(err);
+      if (!rateLimited) {
+        console.error("[LLMSignalAssistant] Analysis failed:", err.message);
+      }
       return {
         regime: "unknown",
         confidence: 0,
         suggestions: {},
-        warnings: [`LLM error: ${err.message}`],
+        warnings: [rateLimited ? this.formatCooldownWarning() : `LLM error: ${err.message}`],
       };
     }
   }
@@ -327,6 +379,88 @@ Use this recall only as context, and prioritize current market snapshot data if 
     return JSON.parse(json);
   }
 
+  getCooldownFallback() {
+    const remainingMs = this.getCooldownRemainingMs();
+    if (remainingMs <= 0) return null;
+    return {
+      regime: "unknown",
+      confidence: 0,
+      suggestions: {
+        notes: `LLM cooldown active for ${Math.ceil(remainingMs / 1000)}s due to provider rate limits`,
+      },
+      warnings: [this.formatCooldownWarning(remainingMs)],
+    };
+  }
+
+  getCooldownRemainingMs() {
+    const until = Number(this.rateLimitState?.cooldownUntilTs || 0);
+    return Math.max(0, until - Date.now());
+  }
+
+  clearRateLimitState() {
+    this.rateLimitState.consecutiveFailures = 0;
+    this.rateLimitState.lastReason = null;
+    this.rateLimitState.lastRetryAfterMs = 0;
+    this.rateLimitState.cooldownUntilTs = 0;
+  }
+
+  formatCooldownWarning(remainingMs = this.getCooldownRemainingMs()) {
+    const secs = Math.max(1, Math.ceil(Number(remainingMs || 0) / 1000));
+    const reason = this.rateLimitState?.lastReason || 'provider rate limit';
+    return `LLM cooldown active (${secs}s remaining): ${reason}`;
+  }
+
+  extractRetryAfterMs(err) {
+    const retryInfo = err?.error?.details?.find?.((detail) => String(detail?.['@type'] || '').includes('RetryInfo'));
+    const retryDelay = retryInfo?.retryDelay;
+    if (typeof retryDelay === 'string') {
+      const secs = Number.parseFloat(retryDelay.replace(/s$/i, ''));
+      if (Number.isFinite(secs) && secs > 0) return secs * 1000;
+    }
+
+    const msg = String(err?.message || err || '');
+    const match = msg.match(/retry in\s+([\d.]+)s/i);
+    if (match) {
+      const secs = Number.parseFloat(match[1]);
+      if (Number.isFinite(secs) && secs > 0) return secs * 1000;
+    }
+
+    return 0;
+  }
+
+  isRateLimitError(err) {
+    const msg = String(err?.message || err || '').toLowerCase();
+    return /429|quota|resource_exhausted|resource exhausted|rate limit|too many requests/.test(msg);
+  }
+
+  handleRateLimitError(err) {
+    if (!this.isRateLimitError(err)) return false;
+
+    const retryAfterMs = this.extractRetryAfterMs(err);
+    const nextFailureCount = Number(this.rateLimitState.consecutiveFailures || 0) + 1;
+    const backoffMs = LLM_RATE_LIMIT_BASE_COOLDOWN_MS * Math.max(1, nextFailureCount);
+    const cooldownMs = Math.min(
+      LLM_RATE_LIMIT_MAX_COOLDOWN_MS,
+      Math.max(LLM_RATE_LIMIT_BASE_COOLDOWN_MS, retryAfterMs, backoffMs)
+    );
+
+    this.rateLimitState.consecutiveFailures = nextFailureCount;
+    this.rateLimitState.lastRetryAfterMs = retryAfterMs;
+    this.rateLimitState.lastReason = String(err?.message || 'rate limit');
+    this.rateLimitState.cooldownUntilTs = Date.now() + cooldownMs;
+
+    const now = Date.now();
+    if ((now - Number(this.rateLimitState.lastRateLimitLogTs || 0)) >= LLM_RATE_LIMIT_LOG_DEBOUNCE_MS) {
+      this.rateLimitState.lastRateLimitLogTs = now;
+      console.warn(
+        `[LLMSignalAssistant] Rate limit detected; cooling down for ${Math.ceil(cooldownMs / 1000)}s ` +
+        `(retryAfter=${Math.ceil((retryAfterMs || 0) / 1000)}s, failures=${nextFailureCount})`
+      );
+    }
+
+    return true;
+  }
+
   /**
    * Normalize and validate LLM response
    */
@@ -487,6 +621,14 @@ Use this recall only as context, and prioritize current market snapshot data if 
         success_rate: `${rate}%`,
         influence_count: this.stats.influenceCount,
         cache_hits: this.stats.cacheHits,
+        cooldown_skips: this.stats.cooldownSkips,
+      },
+      cooldown: {
+        active: this.getCooldownRemainingMs() > 0,
+        remaining_ms: this.getCooldownRemainingMs(),
+        last_reason: this.rateLimitState.lastReason,
+        retry_after_ms: this.rateLimitState.lastRetryAfterMs,
+        consecutive_failures: this.rateLimitState.consecutiveFailures,
       },
       env: this.envDiagnostics,
     };

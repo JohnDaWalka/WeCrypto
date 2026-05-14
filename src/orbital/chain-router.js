@@ -18,6 +18,18 @@
 
   const POLL_MS = 30000;  // 30s polling interval
   const TIMEOUT = 12000;  // 12s — extra headroom for Tailscale/IPv6 routing
+  const ERROR_LOG_COOLDOWN_MS = 60000;
+  const ERROR_LOG_STATE = {}; // sym -> { msg, ts }
+
+  function shouldLogRouteError(sym, msg) {
+    const now = Date.now();
+    const prev = ERROR_LOG_STATE[sym];
+    if (!prev || prev.msg !== msg || (now - prev.ts) > ERROR_LOG_COOLDOWN_MS) {
+      ERROR_LOG_STATE[sym] = { msg, ts: now };
+      return true;
+    }
+    return false;
+  }
 
   // ── Utility helpers ──────────────────────────────────────────────
 
@@ -549,6 +561,7 @@
       sym: 'SOL', handlers: [
         () => solRpc('https://api.mainnet-beta.solana.com'),
         () => solRpc('https://rpc.ankr.com/solana'),
+        () => solRpc(`https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY || 'free'}`),
       ]
     },
     {
@@ -590,7 +603,8 @@
         }
       } catch (e) {
         lastErr = e;
-        console.warn(`[ChainRouter] ${route.sym} handler failed: ${e.message}`);
+        // Per-handler failures are expected during transient endpoint outages.
+        // Aggregate failure logging is handled in fetchAll() with cooldown.
       }
     }
     throw lastErr || new Error(`All handlers failed for ${route.sym}`);
@@ -619,7 +633,9 @@
             ts: Date.now(),
           };
         }
-        console.warn(`[ChainRouter] ${sym} all routes failed: ${msg}`);
+        if (shouldLogRouteError(sym, msg)) {
+          console.warn(`[ChainRouter] ${sym} all routes failed: ${msg}`);
+        }
       }
     });
     // Notify listeners

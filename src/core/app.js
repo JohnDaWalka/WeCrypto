@@ -311,11 +311,13 @@
         return;
       }
 
-      // Create global ProxyOrchestrator instance with production config
-      window._proxyOrchestrator = new window.ProxyOrchestrator({
-        backoff_start: 2000,
-        backoff_max: 32000,
-      });
+      // Reuse the instance created by proxy-orchestrator.js IIFE; only create if missing
+      if (typeof window._proxyOrchestrator === 'undefined') {
+        window._proxyOrchestrator = new window.ProxyOrchestrator({
+          backoff_start: 2000,
+          backoff_max: 32000,
+        });
+      }
 
       // Register known sources for fallback routing
       window._proxyOrchestrator.fallback.registerSource('kalshi', {
@@ -339,6 +341,37 @@
     } catch (e) {
       console.warn('[ProxyOrchestrator] Initialization failed:', e.message);
       // Graceful degradation — app continues to work with direct fetch
+    }
+  })();
+
+  // ── Initialize Signal Scheduler Agent ────────────────────────────────────
+  // Prioritizes price → momentum → validation work so refreshes do not blast
+  // all HTTP sources simultaneously when the app is under load.
+  (function initSignalScheduler() {
+    try {
+      if (typeof window.SignalSchedulerAgent === 'undefined') {
+        console.warn('[SignalScheduler] Not loaded yet — skipping initialization');
+        return;
+      }
+
+      window._signalScheduler = new window.SignalSchedulerAgent({
+        lanes: {
+          price: { concurrency: 3, gapMs: 20 },
+          momentum: { concurrency: 4, gapMs: 65 },
+          validation: { concurrency: 1, gapMs: 350 },
+          background: { concurrency: 2, gapMs: 180 },
+        },
+        providers: {
+          gecko: { cooldownMs: 3500, cooldownMaxMs: 120000, circuitThreshold: 5, circuitMs: 180000 },
+          llm: { cooldownMs: 15000, cooldownMaxMs: 300000, circuitThreshold: 2, circuitMs: 300000 },
+          'pyth-lazer': { cooldownMs: 750, cooldownMaxMs: 8000, circuitThreshold: 3, circuitMs: 12000 },
+          cdc: { cooldownMs: 1500, cooldownMaxMs: 45000, circuitThreshold: 4, circuitMs: 60000 },
+        },
+      });
+
+      console.info('[SignalScheduler] ✓ Initialized');
+    } catch (e) {
+      console.warn('[SignalScheduler] Initialization failed:', e.message);
     }
   })();
 
@@ -1900,12 +1933,56 @@
   }
 
   function fetchWithTimeout(url, timeoutMs = 15000, options = {}) {
-    const ctrl = new AbortController();
-    const tid = setTimeout(
-      () => ctrl.abort(new DOMException(`Timed out after ${timeoutMs}ms — ${url}`, 'TimeoutError')),
-      timeoutMs
-    );
-    return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(tid));
+    const {
+      schedulerLane = null,
+      schedulerProvider = null,
+      schedulerDelayMs = 0,
+      schedulerDedupeKey = null,
+      schedulerPriorityBoost = 0,
+      ...fetchOptions
+    } = options || {};
+
+    const runFetch = () => {
+      const ctrl = new AbortController();
+      const tid = setTimeout(
+        () => ctrl.abort(new DOMException(`Timed out after ${timeoutMs}ms — ${url}`, 'TimeoutError')),
+        timeoutMs
+      );
+      return fetch(url, { ...fetchOptions, signal: ctrl.signal }).finally(() => clearTimeout(tid));
+    };
+
+    const scheduler = window._signalScheduler;
+    if (!scheduler) return runFetch();
+
+    return scheduler.schedule(runFetch, {
+      lane: schedulerLane || scheduler.inferLaneFromUrl?.(url, 'price') || 'price',
+      provider: schedulerProvider || scheduler.inferProviderFromUrl?.(url) || 'default',
+      delayMs: schedulerDelayMs,
+      priorityBoost: schedulerPriorityBoost,
+      dedupeKey: schedulerDedupeKey || `${String(fetchOptions.method || 'GET').toUpperCase()}:${url}`,
+      tag: `app:${url}`,
+    });
+  }
+
+  function mapPythLazerPricesToTickers(prices) {
+    const result = [];
+    for (const [instr, data] of Object.entries(prices || {})) {
+      if (!data || typeof data !== 'object') continue;
+      result.push({
+        instrument_name: instr,
+        last: data.last,
+        best_bid: data.best_bid,
+        best_ask: data.best_ask,
+        high: data.last,
+        low: data.last,
+        change: 0,
+        volume: 0,
+        volume_value: 0,
+        timestamp: data.timestamp || Date.now(),
+        source: 'pyth-lazer',
+      });
+    }
+    return result;
   }
 
   async function fetchTickers() {
@@ -2257,35 +2334,50 @@
 
   // ---- Pyth Network — decentralized oracle, 33 coins, sub-second, no geo-block ----
   async function fetchPythTickers() {
+    const pythWsTimeoutMs = Number(
+      (window.__WECRYPTO_CONFIG__ && window.__WECRYPTO_CONFIG__.pythWsTimeoutMs) ||
+      localStorage.getItem('pyth.ws.timeout.ms') ||
+      2500
+    );
+
+    const freshPyth = window._signalScheduler?.getFreshSourceSnapshot('pyth-lazer', 3500);
+    if (freshPyth && typeof freshPyth === 'object') {
+      const mapped = mapPythLazerPricesToTickers(freshPyth);
+      if (mapped.length) {
+        if (window.NetworkHealth) {
+          window.NetworkHealth.update('Pyth', {
+            status: 'healthy',
+            lastFetch: Date.now(),
+            fallback: false,
+            reason: '',
+          });
+        }
+        return mapped;
+      }
+    }
+
     // ★ NEW: Try Pyth Lazer WS stream first (sub-100ms, from IPC)
     if (window.pythLazer?.onTickers) {
       try {
         let received = false;
         return await new Promise((resolve, reject) => {
           const timeout = setTimeout(() => {
-            if (!received) reject(new Error('Pyth Lazer WS timeout (1000ms)'));
-          }, 1000);
+            if (!received) reject(new Error(`Pyth Lazer WS timeout (${pythWsTimeoutMs}ms)`));
+          }, pythWsTimeoutMs);
 
           window.pythLazer.onTickers((prices) => {
             clearTimeout(timeout);
             received = true;
-            const result = [];
-            for (const [instr, data] of Object.entries(prices)) {
-              result.push({
-                instrument_name: instr,
-                last: data.last,
-                best_bid: data.best_bid,
-                best_ask: data.best_ask,
-                high: data.last,
-                low: data.last,
-                change: 0,
-                volume: 0,
-                volume_value: 0,
-                timestamp: data.timestamp || Date.now(),
-                source: 'pyth-lazer',
+            window._signalScheduler?.markSourceFresh('pyth-lazer', prices, Date.now());
+            if (window.NetworkHealth) {
+              window.NetworkHealth.update('Pyth', {
+                status: 'healthy',
+                lastFetch: Date.now(),
+                fallback: false,
+                reason: '',
               });
             }
-            resolve(result);
+            resolve(mapPythLazerPricesToTickers(prices));
           });
         });
       } catch (e) {
@@ -2295,7 +2387,16 @@
 
     // ★ FALLBACK 1: Try Lazer proxy REST (no-auth, faster than Hermes)
     try {
-      return await fetchPythLazerProxyTickers();
+      const result = await fetchPythLazerProxyTickers();
+      if (window.NetworkHealth) {
+        window.NetworkHealth.update('Pyth', {
+          status: 'degraded',
+          lastFetch: Date.now(),
+          fallback: true,
+          reason: 'Using Lazer proxy fallback',
+        });
+      }
+      return result;
     } catch (e) {
       console.warn('[PythTickers] Lazer proxy failed:', e.message);
     }
@@ -2330,6 +2431,14 @@
       });
     }
     if (!result.length) throw new Error('Pyth returned no usable feeds');
+    if (window.NetworkHealth) {
+      window.NetworkHealth.update('Pyth', {
+        status: 'degraded',
+        lastFetch: Date.now(),
+        fallback: true,
+        reason: 'Using Hermes fallback',
+      });
+    }
     return result;
   }
 
@@ -2723,6 +2832,10 @@
     if (window.WalletCache) {
       const result = await window.WalletCache.getTokens(address);
       window._walletDataSource = result.source;
+      window._walletDataDiagnostics = {
+        ...(window._walletDataDiagnostics || {}),
+        tokens: result.diagnostics || null,
+      };
       return result.data;
     }
     // Fallback: original inline logic if WalletCache not loaded
@@ -2749,6 +2862,10 @@
   async function fetchWalletTxs(address) {
     if (window.WalletCache) {
       const result = await window.WalletCache.getTxs(address);
+      window._walletDataDiagnostics = {
+        ...(window._walletDataDiagnostics || {}),
+        txs: result.diagnostics || null,
+      };
       return result.data;
     }
     // Fallback: Use resilientFetch for automatic retry + fallback to Etherscan
@@ -2888,8 +3005,25 @@
   // ---- Pyth Lazer live ticker stream — IPC-pushed prices from main process ----
   function startPythLazerStream() {
     if (!window.pythLazer?.onTickers) return;
+    if (window.NetworkHealth) {
+      window.NetworkHealth.update('Pyth', {
+        status: 'degraded',
+        lastFetch: Date.now(),
+        fallback: true,
+        reason: 'Waiting for first Pyth tick',
+      });
+    }
     window.pythLazer.onTickers((prices) => {
       if (!prices || typeof prices !== 'object') return;
+      window._signalScheduler?.markSourceFresh('pyth-lazer', prices, Date.now());
+      if (window.NetworkHealth) {
+        window.NetworkHealth.update('Pyth', {
+          status: 'healthy',
+          lastFetch: Date.now(),
+          fallback: false,
+          reason: '',
+        });
+      }
       let updated = false;
       for (const [instr, data] of Object.entries(prices)) {
         if (!tickers[instr]) continue;    // only overlay known instruments
@@ -2909,9 +3043,56 @@
         startPythLazerStream._debounce = setTimeout(() => {
           startPythLazerStream._debounce = null;
           if (['cfm', 'predictions', 'universe'].includes(currentView)) refreshActiveView();
+          scheduleWebStatePublish('pyth-lazer-tick', 150);
         }, 500);
       }
     });
+    if (!startPythLazerStream._statusWired) {
+      startPythLazerStream._statusWired = true;
+
+      window.pythLazer?.onStatus?.((status) => {
+        if (!window.NetworkHealth) return;
+        const now = Date.now();
+        const ageMs = status?.lastDataTs ? (now - status.lastDataTs) : Number.POSITIVE_INFINITY;
+        const healthy = !!status?.connected && ageMs < 6000;
+        window.NetworkHealth.update('Pyth', {
+          status: healthy ? 'healthy' : 'degraded',
+          lastFetch: status?.lastDataTs || now,
+          fallback: !healthy,
+          reason: healthy ? '' : `Stale stream (${Math.max(0, Math.round(ageMs))}ms)`,
+        });
+      });
+
+      window.pythLazer?.onTimeout?.((data) => {
+        if (!window.NetworkHealth) return;
+        window.NetworkHealth.update('Pyth', {
+          status: 'degraded',
+          lastFetch: Date.now(),
+          fallback: true,
+          reason: data?.reason || 'Pyth timeout',
+        });
+      });
+
+      window.pythLazer?.onConnectionLost?.((data) => {
+        if (!window.NetworkHealth) return;
+        window.NetworkHealth.update('Pyth', {
+          status: 'down',
+          lastFetch: Date.now(),
+          fallback: true,
+          reason: data?.reason || 'Pyth connection lost',
+        });
+      });
+
+      window.pythLazer?.onConnectionFailed?.((data) => {
+        if (!window.NetworkHealth) return;
+        window.NetworkHealth.update('Pyth', {
+          status: 'down',
+          lastFetch: Date.now(),
+          fallback: true,
+          reason: data?.error || 'Pyth connection failed',
+        });
+      });
+    }
     console.info('[PythLazer] ✓ Live ticker stream active');
   }
 
@@ -3045,6 +3226,7 @@
       setFeedStatus('live', dataSource);
       updateLastUpdateLabel();
       refreshActiveView(manual);
+      scheduleWebStatePublish('fetchAll-success', 120);
 
     } catch (err) {
       console.error('Fetch error:', err);
@@ -3058,6 +3240,7 @@
       }
     } finally {
       _fetchAttempted = true;
+      scheduleWebStatePublish('fetchAll-finally', 120);
 
       // ── ACTIVATE CMC POLLING ON FIRST APP STARTUP ────────────────
       if (window._cmcProFeed && typeof window._cmcProFeed.startPolling === 'function' && !window._cmcPollingStarted) {
@@ -3176,16 +3359,19 @@
 
     window._asyncRefreshEngine.on('predictions:updated', () => {
       if (['predictions', 'cfm', 'universe'].includes(currentView)) refreshActiveView();
+      scheduleWebStatePublish('async-predictions', 100);
     });
 
     window._asyncRefreshEngine.on('market:data-updated', () => {
       if (['cfm', 'predictions', 'universe', 'markets5m', 'charts'].includes(currentView)) {
         refreshActiveView();
       }
+      scheduleWebStatePublish('async-market', 100);
     });
 
     window._asyncRefreshEngine.on('settlement:pulse', () => {
       refreshActiveView();
+      scheduleWebStatePublish('async-settlement', 100);
     });
 
     void window._asyncRefreshEngine.start().catch(err => {
@@ -3372,6 +3558,20 @@
   function syncPredictionRefresh() {
     const shouldRun = (['predictions', 'cfm', 'universe'].includes(currentView)) && window.PredictionEngine;
     if (shouldRun && !predictionRefreshHandle) {
+      if (window.CFMEngine && !cfmStarted && !_cfmStarting) {
+        _cfmStarting = true;
+        CFMEngine.start()
+          .then(() => {
+            cfmStarted = true;
+            _cfmStarting = false;
+            window._cfmAll = CFMEngine.getAll ? CFMEngine.getAll() : {};
+            if (['predictions', 'cfm', 'universe'].includes(currentView)) render();
+          })
+          .catch(e => {
+            _cfmStarting = false;
+            console.error('[CFM] engine start failed:', e);
+          });
+      }
       const PREFETCH_LEAD_MS = 60000; // warm cache 60s before each boundary
 
       // ── Prefetch: fires 60s before each :00/:15/:30/:45 ─────────────────
@@ -3437,6 +3637,14 @@
 
   // Inference overlay complete — capture latest LLM context and refresh cards
   window.addEventListener('predictioninference', () => {
+    scheduleWebStatePublish('predictioninference', 75);
+    if (!predsLoaded || predictionRunInFlight) return;
+    if (currentView === 'universe') renderUniverse();
+    else if (['predictions', 'cfm'].includes(currentView)) renderPredictions();
+  });
+
+  window.addEventListener('predictiontide', () => {
+    scheduleWebStatePublish('predictiontide', 75);
     if (!predsLoaded || predictionRunInFlight) return;
     if (currentView === 'universe') renderUniverse();
     else if (['predictions', 'cfm'].includes(currentView)) renderPredictions();
@@ -3456,6 +3664,9 @@
   if (!window._predLock) window._predLock = {};
   const _BUCKET_MS = 15 * 60 * 1000;
   const MIN_FLIP_STREAK = 5; // 5 × 15s refresh = 75s of sustained opposing signal required (no fast-path)
+  let _webStatePublishTimer = null;
+  let _webStateHeartbeat = null;
+  let _lastWebStateSig = '';
 
   // Call after every PredictionEngine.runAll() to capture the current signal per coin
   function snapshotPredictions() {
@@ -3706,6 +3917,294 @@
     }
     saveLastPred();
     saveLastKalshi();
+    scheduleWebStatePublish('prediction-snapshot');
+  }
+
+  function _webStateConfiguredCoins() {
+    const list = Array.isArray(window.PREDICTION_COINS)
+      ? window.PREDICTION_COINS
+      : ((typeof PREDICTION_COINS !== 'undefined' && Array.isArray(PREDICTION_COINS)) ? PREDICTION_COINS : []);
+    return Array.isArray(list) ? list : [];
+  }
+
+  const WEB_STATE_SCHEMA_VERSION = 'wecrypto.web.v2';
+  let _webStateRevision = 0;
+
+  function _webNum(value, digits = null) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return digits == null ? n : Number(n.toFixed(digits));
+  }
+
+  function _deriveWebDirection(pred, lockedDir = null) {
+    if (lockedDir && lockedDir !== 'FLAT') return lockedDir;
+    const score = Number(pred?.score || 0);
+    if (score > 0.08) return 'UP';
+    if (score < -0.08) return 'DOWN';
+    const signal = String(pred?.signal || '').toLowerCase();
+    if (signal.includes('bull')) return 'UP';
+    if (signal.includes('bear')) return 'DOWN';
+    return null;
+  }
+
+  function _webDirectionOrWait(direction) {
+    return direction === 'UP' || direction === 'DOWN' ? direction : 'WAIT';
+  }
+
+  function _deriveDecisionStatus(intent, summary) {
+    if (!intent || typeof intent !== 'object') return 'model-only';
+    if (intent.signalLocked) return 'locked';
+    if (intent.crowdFade) return 'crowd-fade';
+    if (intent.crowdFadeSuggested) return 'candidate';
+    const text = `${intent.humanReason || ''} ${intent.reason || ''} ${summary || ''}`.toLowerCase();
+    if (/veto/.test(text)) return 'vetoed';
+    if (intent.action === 'earlyExit') return 'early-exit';
+    if (intent.action === 'skip') return 'skip';
+    if (intent.action === 'trade') return 'trade';
+    if (intent.action === 'watch') return 'watch';
+    return intent.action || 'model-only';
+  }
+
+  function buildWebStateSnapshot() {
+    const configuredCoins = _webStateConfiguredCoins();
+    const activeCoins = configuredCoins.map(c => c?.sym).filter(Boolean);
+    const predAll = window.PredictionEngine?.getAll?.() || window._predictions || {};
+    const chainAll = window.BlockchainScan?.getAll?.() || {};
+    const congestionAll = window.NetworkCongestion?.getAll?.() || {};
+    const predictions = {};
+    const signals = {};
+    const kalshiMarkets = {};
+    const stats = {};
+
+    configuredCoins.forEach((coin) => {
+      const sym = coin?.sym;
+      if (!sym) return;
+
+      const pred = predAll?.[sym] || null;
+      const locked = window._lastPrediction?.[sym] || null;
+      const rawModelDirection = _deriveWebDirection(pred, null);
+      const pm = window.PredictionMarkets?.getCoin?.(sym) || null;
+      const kalshi15m = pm?.kalshi15m || null;
+      const intent = window.KalshiOrchestrator?.getIntent?.(sym) || null;
+      const align = pred?.projections?.p15?.kalshiAlign || null;
+      const operatorSummary = intent?.humanReason ?? intent?.reason ?? null;
+      const decisionStatus = _deriveDecisionStatus(intent, operatorSummary);
+      const biasDirection = _webDirectionOrWait(intent?.direction || rawModelDirection);
+      const finalDirection = (decisionStatus === 'vetoed' || intent?.action === 'skip' || intent?.action === 'earlyExit')
+        ? 'WAIT'
+        : _webDirectionOrWait(intent?.direction || _deriveWebDirection(pred, locked?.direction || null));
+      const machineDirection = _webDirectionOrWait(finalDirection);
+      const publishedSourceTs = locked?.ts || window._lastTickerFetchTs || null;
+      const confidencePct = Number.isFinite(Number(pred?.confidence))
+        ? Math.round(Number(pred.confidence) * 100)
+        : 0;
+      const llmState = (pred?.llm && typeof pred.llm === 'object') ? pred.llm : null;
+      const tideState = (pred?.tide && typeof pred.tide === 'object') ? pred.tide : null;
+
+      if (pred) {
+        predictions[sym] = {
+          direction: machineDirection,
+          finalDirection: machineDirection,
+          biasDirection,
+          rawModelDirection: _webDirectionOrWait(rawModelDirection),
+          directionSource: machineDirection !== 'WAIT' && intent?.direction
+            ? 'decision'
+            : rawModelDirection ? 'model' : 'none',
+          decisionStatus,
+          action: intent?.action || null,
+          side: intent?.side || null,
+          score: _webNum(pred.score, 4),
+          confidence: _webNum(pred.confidence, 3),
+          confidencePct,
+          signal: pred.signal || null,
+          price: _webNum(pred.price, 8),
+          probability: _webNum(kalshi15m?.probability ?? pm?.kalshi, 4),
+          combinedProb: _webNum(pm?.combinedProb, 4),
+          mispricingPp: _webNum(align?.divergence, 2),
+          edgeCents: _webNum(intent?.edgeCents, 2),
+          summary: operatorSummary,
+          ts: publishedSourceTs,
+          model: {
+            direction: _webDirectionOrWait(rawModelDirection),
+            score: _webNum(pred.score, 4),
+            confidence: _webNum(pred.confidence, 3),
+            confidencePct,
+            signal: pred.signal || null,
+            price: _webNum(pred.price, 8),
+            ts: publishedSourceTs,
+          },
+          decision: {
+            status: decisionStatus,
+            action: intent?.action || null,
+            direction: machineDirection,
+            biasDirection,
+            side: intent?.side || null,
+            alignment: intent?.alignment || null,
+            confidence: _webNum(intent?.confidence, 3),
+            finalModelConfidence: _webNum(intent?.finalModelConfidence, 3),
+            crowdFade: !!intent?.crowdFade,
+            crowdFadeSuggested: !!intent?.crowdFadeSuggested,
+            signalLocked: !!intent?.signalLocked,
+            reason: intent?.reason || null,
+            humanReason: intent?.humanReason || null,
+          },
+          operator: {
+            summary: operatorSummary,
+            reason: intent?.reason || null,
+            humanReason: intent?.humanReason || null,
+          },
+          llm: llmState ? {
+            regime: llmState.regime || 'unknown',
+            confidence: Number.isFinite(Number(llmState.confidence)) ? Number(llmState.confidence) : 0,
+            degraded: !!llmState.degraded,
+            cooldownRemainingMs: Number.isFinite(Number(llmState.cooldownRemainingMs))
+              ? Number(llmState.cooldownRemainingMs)
+              : 0,
+            provider: llmState.provider || null,
+            warnings: Array.isArray(llmState.warnings) ? llmState.warnings.slice(0, 3) : [],
+            notes: llmState.notes || null,
+          } : null,
+          tide: tideState ? {
+            direction: _webDirectionOrWait(tideState.direction || null),
+            confidence: Number.isFinite(Number(tideState.confidence)) ? Number(tideState.confidence) : 0,
+            forecastPrice: _webNum(tideState.forecastPrice, 8),
+            mode: tideState.mode || null,
+            queued: !!tideState.queued,
+            error: tideState.error || null,
+            asOfTs: tideState.asOfTs || null,
+          } : null,
+          market: {
+            probability: _webNum(kalshi15m?.probability ?? pm?.kalshi, 4),
+            combinedProb: _webNum(pm?.combinedProb, 4),
+            mispricingPp: _webNum(align?.divergence, 2),
+            edgeCents: _webNum(intent?.edgeCents, 2),
+            ticker: kalshi15m?.ticker ?? align?.ticker ?? null,
+            strikeDir: kalshi15m?.strikeDir ?? align?.strikeDir ?? null,
+            targetPriceNum: _webNum(kalshi15m?.targetPriceNum ?? align?.floorPrice ?? align?.ref, 8),
+            closeTime: kalshi15m?.closeTime ?? null,
+          },
+          meta: {
+            schemaVersion: WEB_STATE_SCHEMA_VERSION,
+            sourceTs: publishedSourceTs,
+            currentView,
+          },
+        };
+
+        signals[sym] = {
+          direction: machineDirection,
+          finalDirection: machineDirection,
+          biasDirection,
+          rawModelDirection: _webDirectionOrWait(rawModelDirection),
+          decisionStatus,
+          confidence: confidencePct,
+          signal: pred.signal || null,
+          score: _webNum(pred.score, 4),
+          action: intent?.action || null,
+          summary: operatorSummary,
+          tideDirection: tideState ? _webDirectionOrWait(tideState.direction || null) : null,
+          tideConfidence: tideState && Number.isFinite(Number(tideState.confidence)) ? Number(tideState.confidence) : 0,
+          tideMode: tideState?.mode || null,
+          tideQueued: !!tideState?.queued,
+        };
+      }
+
+      if (pm || intent || align) {
+        kalshiMarkets[sym] = {
+          ticker: kalshi15m?.ticker ?? align?.ticker ?? null,
+          probability: _webNum(kalshi15m?.probability ?? pm?.kalshi, 4),
+          combinedProb: _webNum(pm?.combinedProb, 4),
+          closeTime: kalshi15m?.closeTime ?? null,
+          strikeDir: kalshi15m?.strikeDir ?? align?.strikeDir ?? null,
+          targetPriceNum: _webNum(kalshi15m?.targetPriceNum ?? align?.floorPrice ?? align?.ref, 8),
+          action: intent?.action ?? null,
+          mispricingPp: _webNum(align?.divergence, 2),
+          edgeCents: _webNum(intent?.edgeCents, 2),
+        };
+      }
+    });
+
+    const blockchain = Object.fromEntries(
+      Object.entries(chainAll).map(([sym, item]) => [sym, {
+        signal: item?.signal || null,
+        congestion: item?.congestion || null,
+        source: item?.source || null,
+        ts: item?.ts || null,
+      }])
+    );
+
+    const congestion = Object.fromEntries(
+      Object.entries(congestionAll).map(([sym, item]) => [sym, {
+        networkLoad: _webNum(item?.networkLoad, 4),
+        lastUpdate: item?.lastUpdate || null,
+      }])
+    );
+
+    const networkStatus = {};
+    if (Object.keys(blockchain).length) networkStatus.blockchain = blockchain;
+    if (Object.keys(congestion).length) networkStatus.congestion = congestion;
+
+    const validatorStats = window.Validator15m?.getStats?.() || null;
+    if (validatorStats && typeof validatorStats === 'object') {
+      stats.validator = validatorStats;
+    }
+
+    stats.export = {
+      predictionCount: Object.keys(predictions).length,
+      signalCount: Object.keys(signals).length,
+      marketCount: Object.keys(kalshiMarkets).length,
+      activeCoinCount: activeCoins.length,
+    };
+
+    return {
+      schemaVersion: WEB_STATE_SCHEMA_VERSION,
+      running: true,
+      rendererReady: true,
+      currentView,
+      activeCoins,
+      tickerTimestamp: window._lastTickerFetchTs || null,
+      predictions,
+      signals,
+      kalshiMarkets,
+      networkStatus,
+      stats,
+    };
+  }
+
+  function publishWebState(reason = 'update', force = false) {
+    if (typeof window.electron?.web?.updateState !== 'function') return false;
+    try {
+      const payload = buildWebStateSnapshot();
+      const signature = JSON.stringify(payload);
+      if (!force && reason !== 'heartbeat' && signature === _lastWebStateSig) return false;
+      _lastWebStateSig = signature;
+      _webStateRevision += 1;
+      window.electron.web.updateState({
+        ...payload,
+        revision: _webStateRevision,
+        publishedAt: new Date().toISOString(),
+        publishReason: reason,
+      });
+      return true;
+    } catch (e) {
+      console.warn('[WebState] Publish failed:', e.message);
+      return false;
+    }
+  }
+
+  function scheduleWebStatePublish(reason = 'update', delayMs = 300) {
+    if (typeof window.electron?.web?.updateState !== 'function') return;
+    if (_webStatePublishTimer) clearTimeout(_webStatePublishTimer);
+    _webStatePublishTimer = setTimeout(() => {
+      _webStatePublishTimer = null;
+      publishWebState(reason);
+    }, Math.max(0, delayMs));
+  }
+
+  function startWebStateHeartbeat() {
+    if (_webStateHeartbeat) return;
+    _webStateHeartbeat = setInterval(() => {
+      publishWebState('heartbeat', true);
+    }, 10000);
   }
 
   // ── Market Divergence ─────────────────────────────────────────────────────
@@ -6604,6 +7103,7 @@
       const doLookup = async () => {
         const addr = walletInput.value.trim();
         if (!addr) return;
+        window._walletDataDiagnostics = {};
         lookupBtn.textContent = 'Loading...';
         lookupBtn.disabled = true;
         try {
@@ -6652,6 +7152,17 @@
   function renderWalletResult(addr, tokenData, txData) {
     const src = window._walletDataSource || 'blockscout';
     const srcLabel = { blockscout: 'Blockscout', ethplorer: 'Ethplorer', etherscan: 'Etherscan' }[src] || src;
+    const diagnostics = window._walletDataDiagnostics || {};
+    const tokenDiag = diagnostics.tokens;
+    const txDiag = diagnostics.txs;
+    const reasonItems = [tokenDiag, txDiag]
+      .filter(d => d && d.reasonCode && d.reasonCode !== 'ok')
+      .map(d => `<span class="wallet-source-badge" style="background:var(--color-surface-3);border-color:var(--color-warning);color:var(--color-warning)">${escapeHtml(d.type)}:${escapeHtml(d.reasonCode)}</span>`)
+      .join('');
+    const reasonDetails = [tokenDiag, txDiag]
+      .filter(d => d && d.reasonCode && d.reasonCode !== 'ok' && d.reasonDetail)
+      .map(d => `<div style="font-size:10px;color:var(--color-text-muted)">${escapeHtml(d.type)} → ${escapeHtml(d.reasonDetail)}</div>`)
+      .join('');
     // Wallet summary
     const wResult = document.getElementById('walletResult');
     if (wResult) {
@@ -6659,9 +7170,11 @@
         <div style="font-size:12px;color:var(--color-text-muted);margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span>Address: <span style="font-family:var(--font-mono);color:var(--color-primary)">${escapeHtml(formatAddress(addr))}</span></span>
           <span class="wallet-source-badge ${src}">${srcLabel}</span>
+          ${reasonItems}
           <a href="https://eth.blockscout.com/address/${encodeURIComponent(addr)}" target="_blank" style="font-size:10px;color:var(--color-primary)">Blockscout ↗</a>
           <a href="https://etherscan.io/address/${encodeURIComponent(addr)}" target="_blank" style="font-size:10px;color:var(--color-primary)">Etherscan ↗</a>
         </div>
+        ${reasonDetails ? `<div style="margin:-2px 0 8px 0">${reasonDetails}</div>` : ''}
         <div style="font-size:13px">
           Found <strong>${Array.isArray(tokenData) ? tokenData.length : 0}</strong> ERC-20 tokens
           and <strong>${txData?.items?.length || 0}</strong> recent transactions
@@ -7547,7 +8060,7 @@
       tone = 'var(--color-orange)';
     } else if (ki.crowdFadeSuggested && !ki.crowdFade) {
       title = 'Stalk fade';
-      detail = `Wait ${ki.crowdFadeConfirmLeftSec ?? '?'}s for persistent mispricing confirmation before entering ${side}.`;
+      detail = `Wait ${ki.crowdFadeConfirmLeftSec ?? '?'}s for ${ki.crowdFadeTimingLabel || 'adaptive'} mispricing confirmation before entering ${side}${ki.crowdFadeWindowLabel ? ` (${ki.crowdFadeWindowLabel})` : ''}.`;
       tone = '#ffb74d';
     } else if (phase === 'OPENING') {
       title = isTrade ? `Prepare ${side}` : 'Observe open';
@@ -7565,7 +8078,7 @@
       title = isTrade ? `Execute ${side}` : 'Prime window';
       detail = isTrade
         ? (isCrowdFade
-          ? 'Confirmed mispricing fade in 3m–7m window; execute with disciplined sizing.'
+          ? `Confirmed ${ki.crowdFadeTimingLabel || 'adaptive'} mispricing fade${ki.crowdFadeWindowLabel ? ` (${ki.crowdFadeWindowLabel})` : ''}; execute with disciplined sizing.`
           : 'Best 15m entry window (3m–7m left); execute if edge remains stable.')
         : 'Window is ideal but setup is not confirmed yet.';
       tone = isTrade ? (isCrowdFade ? '#e040fb' : 'var(--color-green)') : '#ffd700';
@@ -10162,8 +10675,8 @@
               ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:5px;line-height:1.4;font-family:var(--font-sans)">${ki.humanReason}</div>` : ''}
               ${renderFifteenMinuteMovePlan(ki)}
               ${ki.sweetSpot ? `<div style="font-size:12px;color:#ffd700;font-weight:800;margin-top:5px;letter-spacing:.4px">⭐ SWEET SPOT — <span id="kalshi-ss-${p.sym}" data-close-ms="${ki.closeTimeMs ?? ''}">${minsStr ?? '?'}</span> until close · ${ki.payoutMult?.toFixed(2)}x payout · best entry window (3–6 min)</div>` : ''}
-              ${ki.crowdFade ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — blockchain momentum leads · going ${ki.direction}</div>` : ''}
-              ${ki.crowdFadeSuggested && !ki.crowdFade ? `<div style="font-size:11px;color:#ffb74d;font-weight:700;margin-top:4px">⏳ CROWD FADE SETUP — mispricing persisting (${ki.crowdFadeMispricingPp ?? '?'}pp), confirm in ${ki.crowdFadeConfirmLeftSec ?? '?'}s</div>` : ''}
+              ${ki.crowdFade ? `<div style="font-size:12px;color:#ff9800;font-weight:800;margin-top:5px;letter-spacing:.4px">🔄 CROWD FADE — ${ki.crowdFadeTimingLabel || 'adaptive'} timing${ki.crowdFadeWindowLabel ? ` · ${ki.crowdFadeWindowLabel}` : ''} · going ${ki.direction}</div>` : ''}
+              ${ki.crowdFadeSuggested && !ki.crowdFade ? `<div style="font-size:11px;color:#ffb74d;font-weight:700;margin-top:4px">⏳ CROWD FADE SETUP — mispricing persisting (${ki.crowdFadeMispricingPp ?? '?'}pp), confirm in ${ki.crowdFadeConfirmLeftSec ?? '?'}s${ki.crowdFadeTimingLabel ? ` · ${ki.crowdFadeTimingLabel}` : ''}${ki.crowdFadeWindowLabel ? ` · ${ki.crowdFadeWindowLabel}` : ''}</div>` : ''}
               ${ki.signalLocked ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">🔒 Signal locked (${ki.humanReason?.match(/\d+s/)?.[0] || '?'} ago) — holding position</div>` : ''}
               ${ki.illiquid ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Low liquidity ($${ki.liquidity?.toFixed(0)}) — size carefully</div>` : ''}
               ${!isTrade && isDivergent ? `<div style="font-size:11px;color:var(--color-orange);margin-top:4px">⚠ Kalshi vs model disagree — watch only, do not trade</div>` : ''}
@@ -11736,6 +12249,7 @@
   // ── Blockchain scan live updates ──────────────────────────────────
   window.addEventListener('blockchain-scan-update', () => {
     if (currentView === 'onchain') refreshChainScanUI();
+    scheduleWebStatePublish('blockchain-scan', 150);
   });
 
   window.addEventListener('cex-flow-update', () => {
@@ -11781,6 +12295,8 @@
   // Panels render with empty state first; refreshActiveView() fills them as each
   // source resolves.
   _fetchAttempted = true;
+  startWebStateHeartbeat();
+  scheduleWebStatePublish('boot', 0);
   render(); // skeleton — nav is live before any network call completes
 
   // Fire data fetch after a single paint frame so the skeleton renders first
@@ -11821,6 +12337,7 @@
     if (['predictions', 'cfm', 'universe'].includes(currentView) && predsLoaded && !predictionRunInFlight) {
       try { renderPredictions(); } catch (_) { }
     }
+    scheduleWebStatePublish('predictionmarkets', 100);
   });
 
   // Prediction live-stream watchdog — keeps cards updated between manual refreshes.
@@ -12065,5 +12582,3 @@
   console.log('[ContractCacheDebug] API ready — ContractCacheDebug.status() .accuracy() .byCoins() .recent(minutes)');
 
 })();
-
-

@@ -1,6 +1,13 @@
 {
     "emmet.triggerExpansionOnTab": true,
     "intelephense.codeLens.usages.enable": true,
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "explicit"
+    },
+    "files.associations": {
+        "*.rules": "firestore-security-rules"
+    },
     "geminicodeassist.agentDebugMode": true,
     "geminicodeassist.agentYoloMode": true,
     "geminicodeassist.chat.changeView": "Default diff view",
@@ -14,5 +21,8 @@
     "github.copilot.chat.copilotMemory.enabled": true,
     "[html]": {
         "editor.defaultFormatter": "vscode.html-language-features"
-    }
+    },
+    "markdown.validate.enabled": true,
+    "files.autoSave": "afterDelay",
+    "editor.codeActions.triggerOnFocusChange": true
 }

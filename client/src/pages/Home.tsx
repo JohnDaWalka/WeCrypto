@@ -19,6 +19,8 @@ import {
   RefreshCw,
   AlertTriangle,
   ChevronRight,
+  Database,
+  HardDriveDownload,
 } from "lucide-react";
 import {
   Bar,
@@ -35,6 +37,15 @@ import {
 import { liveEvidence } from "@/data/liveEvidence";
 import { reportData } from "@/data/reportData";
 import { useLiveMetrics } from "@/hooks/useLiveMetrics";
+import {
+  getInferenceHistory,
+  runInference,
+  type InferenceRecord,
+} from "@/services/aiService";
+import {
+  exportInferenceLogsToDrive,
+  recoverInferenceLogsFromDrive,
+} from "@/services/driveService";
 
 const pct = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
@@ -198,10 +209,10 @@ function TableSection({
               return (
                 <tr key={row.label}>
                   <td>
-                    <Link href={`/coin/${coin}`} style={{ textDecoration: "none" }}>
-                      <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "inherit", cursor: "pointer" }}>
+                    <Link href={`/coin/${coin}`} className="audit-link-reset">
+                      <span className="audit-coin-link">
                         {row.label}
-                        <ChevronRight size={14} style={{ opacity: 0.5 }} />
+                        <ChevronRight size={14} className="audit-coin-link-icon" />
                       </span>
                     </Link>
                   </td>
@@ -229,27 +240,187 @@ export default function Home() {
   const displayHitRate = stats ? stats.hitRate : reportData.summary.overallDirectionalHitRate;
   const displayCompleted = stats ? stats.total : reportData.summary.totalActiveSignals;
 
+  const [inferencePrompt, setInferencePrompt] = useState(
+    "Summarize current WECRYPTO risk posture and key directional bias in 3 bullets."
+  );
+  const [inferenceLogs, setInferenceLogs] = useState<InferenceRecord[]>([]);
+  const [inferenceRunning, setInferenceRunning] = useState(false);
+  const [backupRunning, setBackupRunning] = useState(false);
+  const [inferenceMessage, setInferenceMessage] = useState<string | null>(null);
+
+  const liveStatusClass = error
+    ? "live-status-banner live-status-banner--error"
+    : loading
+      ? "live-status-banner live-status-banner--loading"
+      : "live-status-banner live-status-banner--ok";
+
+  useEffect(() => {
+    let mounted = true;
+    getInferenceHistory(25)
+      .then((rows) => {
+        if (mounted) setInferenceLogs(rows);
+      })
+      .catch(() => {
+        if (mounted) setInferenceMessage("Could not load AI inference history");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleRunInference = async () => {
+    setInferenceRunning(true);
+    setInferenceMessage(null);
+    try {
+      const entry = await runInference(inferencePrompt, {
+        coin: "BTC",
+        horizon: 15,
+        hitRate: displayHitRate,
+        completed: displayCompleted,
+      });
+      setInferenceLogs((prev) => [entry, ...prev].slice(0, 30));
+      setInferenceMessage("AI analysis complete and logged.");
+    } catch (err) {
+      setInferenceMessage(err instanceof Error ? err.message : "Inference failed");
+    } finally {
+      setInferenceRunning(false);
+    }
+  };
+
+  const handleBackupLogs = async () => {
+    setBackupRunning(true);
+    setInferenceMessage(null);
+    try {
+      const result = await exportInferenceLogsToDrive(inferenceLogs);
+      if (!result.success) {
+        setInferenceMessage(result.error || "Backup failed");
+      } else {
+        setInferenceMessage(
+          `Backup created${result.backupName ? `: ${result.backupName}` : ""}`
+        );
+      }
+    } catch (err) {
+      setInferenceMessage(err instanceof Error ? err.message : "Backup failed");
+    } finally {
+      setBackupRunning(false);
+    }
+  };
+
+  const handleDriveRecover = async () => {
+    setBackupRunning(true);
+    setInferenceMessage(null);
+    try {
+      const result = await recoverInferenceLogsFromDrive();
+      if (!result.success) {
+        setInferenceMessage(result.error || "Recovery failed");
+        return;
+      }
+
+      const payload = result.latestPayload as { inferences?: InferenceRecord[] } | null;
+      const recoveredRows = Array.isArray(payload?.inferences)
+        ? payload!.inferences!.map((row) => ({
+          id: String(row.id || crypto.randomUUID()),
+          prompt: String(row.prompt || ""),
+          context: row.context && typeof row.context === "object" ? row.context : {},
+          result: row.result ?? null,
+          createdAt: String(row.createdAt || new Date().toISOString()),
+          source: row.source === "electron-ipc" ? "electron-ipc" : "local-fallback",
+        }))
+        : [];
+
+      if (recoveredRows.length) {
+        setInferenceLogs((prev) => [...recoveredRows, ...prev].slice(0, 30));
+      }
+
+      setInferenceMessage(
+        `Recovered ${result.recovered ?? 0} backup file(s)${recoveredRows.length ? `, restored ${recoveredRows.length} entries from latest` : ""}.`
+      );
+    } catch (err) {
+      setInferenceMessage(err instanceof Error ? err.message : "Recovery failed");
+    } finally {
+      setBackupRunning(false);
+    }
+  };
+
   return (
     <main className="audit-page">
       {/* Live status indicator */}
       {(stats || loading || error) && (
-        <div className="live-status-banner" style={{
-          background: error ? '#3d2424' : loading ? '#2d3a2d' : '#1a3a2d',
-          padding: '12px 16px',
-          borderBottom: error ? '1px solid #8b4d4d' : loading ? '1px solid #6b8b6b' : '1px solid #4d8b7d',
-          color: error ? '#ff9999' : loading ? '#99ff99' : '#66ffcc',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          fontSize: '13px',
-        }}>
+        <div className={liveStatusClass}>
           {loading ? <RefreshCw size={16} className="animate-spin" /> : error ? <AlertTriangle size={16} /> : <Orbit size={16} />}
           <span>
-            {error ? `Live metrics: ${error}` : loading ? 'Connecting to model...' : `Live: ${completedCount} validations, ${pct.format(hitRate)}% hit rate`}
+            {error ? `Live metrics: ${error}` : loading ? "Connecting to model..." : `Live: ${completedCount} validations, ${pct.format(hitRate)}% hit rate`}
           </span>
         </div>
       )}
-      
+
+      <section className="audit-card ai-bigdata-panel">
+        <div className="audit-card__header ai-bigdata-header">
+          <div className="ai-bigdata-title">
+            <Database size={18} />
+            <p className="audit-label">AI Big Data Logs</p>
+          </div>
+          <div className="ai-bigdata-actions">
+            <button
+              type="button"
+              onClick={handleRunInference}
+              disabled={inferenceRunning}
+              className="ai-bigdata-btn ai-bigdata-btn--run"
+            >
+              {inferenceRunning ? "Running…" : "Run TIDE Analysis"}
+            </button>
+            <button
+              type="button"
+              onClick={handleBackupLogs}
+              disabled={backupRunning}
+              className="ai-bigdata-btn ai-bigdata-btn--backup"
+            >
+              <HardDriveDownload size={14} />
+              {backupRunning ? "Backing up…" : "Backup Logs"}
+            </button>
+            <button
+              type="button"
+              onClick={handleDriveRecover}
+              disabled={backupRunning}
+              className="ai-bigdata-btn ai-bigdata-btn--backup"
+            >
+              <RefreshCw size={14} />
+              {backupRunning ? "Recovering…" : "Recover Backups"}
+            </button>
+          </div>
+        </div>
+
+        <label htmlFor="ai-inference-prompt" className="audit-label ai-bigdata-prompt-label">
+          Inference prompt
+        </label>
+        <textarea
+          id="ai-inference-prompt"
+          value={inferencePrompt}
+          onChange={(e) => setInferencePrompt(e.target.value)}
+          rows={3}
+          className="ai-bigdata-textarea"
+          placeholder="Describe the analysis you want for current market telemetry..."
+        />
+
+        {inferenceMessage && <p className="audit-note">{inferenceMessage}</p>}
+
+        <div className="ai-bigdata-log-list">
+          {inferenceLogs.slice(0, 5).map((item) => (
+            <article key={item.id} className="ai-bigdata-log-item">
+              <p className="audit-label ai-bigdata-log-meta">{new Date(item.createdAt).toLocaleString()} • {item.source}</p>
+              <p className="ai-bigdata-log-prompt">{item.prompt}</p>
+              <p className="audit-note ai-bigdata-log-result">
+                {typeof item.result === "string"
+                  ? item.result
+                  : JSON.stringify(item.result ?? {}, null, 2)}
+              </p>
+            </article>
+          ))}
+          {!inferenceLogs.length && <p className="audit-note">No inference logs yet.</p>}
+        </div>
+      </section>
+
       <section className="audit-hero">
         <div className="audit-hero__rail">
           <p className="audit-rail-label">Proof gradient</p>

@@ -41,22 +41,22 @@
 
   // Source configs with rate budgets (calls per 60s)
   const SRC = {
-    CDC:  { budget: 80, used: 0, resetAt: 0, label: 'Crypto.com',   color: '#1a2c5a' },
-    CB:   { budget: 60, used: 0, resetAt: 0, label: 'Coinbase',     color: '#0052ff' },
-    GKO:  { budget: 25, used: 0, resetAt: 0, label: 'CoinGecko',    color: '#8dc63f' },
-    DEX:  { budget: 20, used: 0, resetAt: 0, label: 'DexScreener',  color: '#a259ff' },
-    BIN:  { budget: 120, used: 0, resetAt: 0, label: 'Binance',     color: '#f3ba2f' },
-    OKX:  { budget: 60, used: 0, resetAt: 0, label: 'OKX',          color: '#ffffff' },
-    KRK:  { budget: 30, used: 0, resetAt: 0, label: 'Kraken',        color: '#5741d9' },
-    HYP:  { budget: 20, used: 0, resetAt: 0, label: 'Hyperliquid',   color: '#5ee7b0' },
-    BIF:  { budget: 60, used: 0, resetAt: 0, label: 'Binance Futures', color: '#f0b90b' },
-    BYB:  { budget: 30, used: 0, resetAt: 0, label: 'Bybit',          color: '#f7a600' },
+    CDC: { budget: 80, used: 0, resetAt: 0, label: 'Crypto.com', color: '#1a2c5a' },
+    CB: { budget: 60, used: 0, resetAt: 0, label: 'Coinbase', color: '#0052ff' },
+    GKO: { budget: 25, used: 0, resetAt: 0, label: 'CoinGecko', color: '#8dc63f' },
+    DEX: { budget: 20, used: 0, resetAt: 0, label: 'DexScreener', color: '#a259ff' },
+    BIN: { budget: 120, used: 0, resetAt: 0, label: 'Binance', color: '#f3ba2f' },
+    OKX: { budget: 60, used: 0, resetAt: 0, label: 'OKX', color: '#ffffff' },
+    KRK: { budget: 30, used: 0, resetAt: 0, label: 'Kraken', color: '#5741d9' },
+    HYP: { budget: 20, used: 0, resetAt: 0, label: 'Hyperliquid', color: '#5ee7b0' },
+    BIF: { budget: 60, used: 0, resetAt: 0, label: 'Binance Futures', color: '#f0b90b' },
+    BYB: { budget: 30, used: 0, resetAt: 0, label: 'Bybit', color: '#f7a600' },
   };
 
   // DexScreener search queries per coin
   const DEX_QUERIES = {
-    BTC:  'WBTC USDC',   ETH:  'WETH USDC',   SOL:  'SOL USDC',
-    XRP:  'XRP USDT',    HYPE: 'HYPE USDC',   DOGE: 'DOGE USDT',   BNB:  'WBNB',
+    BTC: 'WBTC USDC', ETH: 'WETH USDC', SOL: 'SOL USDC',
+    XRP: 'XRP USDT', HYPE: 'HYPE USDC', DOGE: 'DOGE USDT', BNB: 'WBNB',
   };
   const DEX_BASE_SYMS = {
     BTC: ['BTC', 'WBTC'],
@@ -71,13 +71,13 @@
 
   // Coinbase symbols
   // BNB removed — Coinbase does not list BNB; calling spot/buy/sell for it burns 3 CB credits for 404s.
-  const CB_SYMS  = { BTC:'BTC', ETH:'ETH', SOL:'SOL', XRP:'XRP', HYPE:'HYPE', DOGE:'DOGE' };
-  const BIN_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
-  const OKX_SYMS = { BTC:'BTC-USDT', ETH:'ETH-USDT', SOL:'SOL-USDT', XRP:'XRP-USDT', HYPE:'HYPE-USDT', DOGE:'DOGE-USDT', BNB:'BNB-USDT' };
-  const KRK_SYMS = { BTC:'XBTUSD', ETH:'ETHUSD', SOL:'SOLUSD', XRP:'XRPUSD', DOGE:'XDGUSD', BNB:'BNBUSD' }; // HYPE not listed on Kraken
+  const CB_SYMS = { BTC: 'BTC', ETH: 'ETH', SOL: 'SOL', XRP: 'XRP', HYPE: 'HYPE', DOGE: 'DOGE' };
+  const BIN_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
+  const OKX_SYMS = { BTC: 'BTC-USDT', ETH: 'ETH-USDT', SOL: 'SOL-USDT', XRP: 'XRP-USDT', HYPE: 'HYPE-USDT', DOGE: 'DOGE-USDT', BNB: 'BNB-USDT' };
+  const KRK_SYMS = { BTC: 'XBTUSD', ETH: 'ETHUSD', SOL: 'SOLUSD', XRP: 'XRPUSD', DOGE: 'XDGUSD', BNB: 'BNBUSD' }; // HYPE not listed on Kraken
 
   const CDC_BASE = 'https://api.crypto.com/exchange/v1/public';
-  const CB_BASE  = 'https://api.coinbase.com/v2/prices';
+  const CB_BASE = 'https://api.coinbase.com/v2/prices';
   const GKO_BASE = 'https://api.coingecko.com/api/v3';
   const DEX_BASE = 'https://api.dexscreener.com/latest/dex';
   const BIN_BASE = 'https://api.binance.com/api/v3';
@@ -291,7 +291,8 @@
   }
 
   // DexScreener
-  async function fetchDEX(sym) {if (!can('DEX')) return null;
+  async function fetchDEX(sym) {
+    if (!can('DEX')) return null;
     const q = DEX_QUERIES[sym];
     if (!q) return null;
     try {
@@ -355,7 +356,7 @@
         const sym = MAP[info.name];
         if (!sym) return;
         const ctx = assetCtxs[i];
-        const price   = parseFloat(ctx.markPx);
+        const price = parseFloat(ctx.markPx);
         const funding = parseFloat(ctx.funding);
         if (!isFinite(price)) return;
         if (!_fundingRates[sym]) _fundingRates[sym] = {};
@@ -381,7 +382,7 @@
       Object.entries(SYMS).forEach(([sym, fsym]) => {
         const item = lookup[fsym];
         if (!item) return; // HYPE may not exist on Binance futures — skip gracefully
-        const price   = parseFloat(item.markPrice);
+        const price = parseFloat(item.markPrice);
         const funding = parseFloat(item.lastFundingRate);
         if (!isFinite(price)) return;
         if (!_fundingRates[sym]) _fundingRates[sym] = {};
@@ -408,7 +409,7 @@
       Object.entries(SYMS).forEach(([sym, bsym]) => {
         const item = lookup[bsym];
         if (!item) return; // symbol absent on Bybit — skip gracefully
-        const price   = parseFloat(item.lastPrice);
+        const price = parseFloat(item.lastPrice);
         const funding = parseFloat(item.fundingRate);
         if (!isFinite(price)) return;
         if (!_fundingRates[sym]) _fundingRates[sym] = {};
@@ -428,17 +429,26 @@
     // Throttle on attempt to avoid hammering Alternative.me when it is down.
     _fngLastFetch = now;
     try {
-      const res = await fetchWithTimeout('https://api.alternative.me/fng/?limit=1', 8000);
-      if (!res.ok) return;
+      // Reduced timeout to 2s (fail fast for non-critical indicator)
+      // If timeout occurs, fall back to cached value
+      const res = await fetchWithTimeout('https://api.alternative.me/fng/?limit=1', 2000);
+      if (!res.ok) {
+        console.warn(`[FNG] HTTP ${res.status} - using cached value`);
+        return;  // Use cached value
+      }
       const data = await res.json();
       const entry = data?.data?.[0];
       if (!entry) return;
       window._cfm._fng = {
         value: parseInt(entry.value, 10),
         label: entry.value_classification,
-        ts:    parseInt(entry.timestamp, 10),
+        ts: parseInt(entry.timestamp, 10),
       };
-    } catch (e) { /* silent fail — non-critical indicator */ }
+      console.info(`[FNG] Updated: ${window._cfm._fng.value} (${window._cfm._fng.label})`);
+    } catch (e) {
+      console.warn(`[FNG] Timeout/error after 2s: ${e.message} - using cached value`);
+      /* silent fail — non-critical indicator, cached value still available */
+    }
   }
 
   // Aggregate funding rates from HYP / BIF / BYB into a per-coin bias signal.
@@ -454,8 +464,8 @@
       const c = _fundingRates[sym] || {};
       const rates = [c.hypFunding, c.binFunding, c.bybFunding].filter(r => r != null && isFinite(r));
       if (!rates.length) return;
-      const avg      = rates.reduce((a, b) => a + b, 0) / rates.length;
-      const bias     = avg > 0.0003 ? 'bearish' : avg < -0.0001 ? 'bullish' : 'neutral';
+      const avg = rates.reduce((a, b) => a + b, 0) / rates.length;
+      const bias = avg > 0.0003 ? 'bearish' : avg < -0.0001 ? 'bullish' : 'neutral';
       const strength = Math.min(1, Math.abs(avg) / 0.001); // 0–1 normalised against 0.1 % threshold
       // window._cfm[sym] was just written by computeCFM — safe to annotate it now
       if (window._cfm[sym]) {
@@ -515,7 +525,7 @@
               if (j[c.geckoId]) gkoResults[c.sym] = { price: j[c.geckoId].usd, vol: j[c.geckoId].usd_24h_vol || 0 };
             });
           }
-        } catch {}
+        } catch { }
       }
     }
 
@@ -755,7 +765,7 @@
   window.CFMEngine = {
     async start() {
       if (window.ExchangeWS?.start) {
-        try { window.ExchangeWS.start(); } catch (_) {}
+        try { window.ExchangeWS.start(); } catch (_) { }
       }
       await runCycle();
       timer = setInterval(runCycle, POLL_MS);

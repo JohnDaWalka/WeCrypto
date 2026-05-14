@@ -12,9 +12,24 @@
 
   const MAX_RETRIES = 3;
   const RETRY_DELAY_MS = 500;
+  const TIMEOUT_MS = 5000;  // 5s default timeout
 
   // Fallback URLs for APIs that fail frequently
   const FALLBACK_URLS = {
+    // Kraken → fallback to Binance for ticker data
+    'api.kraken.com/0/public/Ticker': [
+      url => url,
+      // Fallback 1: Try Binance spot
+      url => url.replace(/api\.kraken\.com\/0\/public\/Ticker\?pair=(.+)/,
+        'api.binance.us/api/v3/ticker?symbols=$1'),
+    ],
+    // Coinbase → fallback to Kraken
+    'api.exchange.coinbase.com/products': [
+      url => url,
+      // Fallback 1: Try Kraken
+      url => url.replace(/api\.exchange\.coinbase\.com\/products\/(.+?)(-USD)/,
+        'api.kraken.com/0/public/Ticker?pair=$1USD'),
+    ],
     // Bybit → fallback to Binance for spot trades
     'api.bybit.com/v5/market/recent-trade': [
       // Original
@@ -33,12 +48,29 @@
       url => url,
       () => 'https://api.blockchain.info/mempool/fees',
     ],
+    // Ankr RPC → fallback to Helius
+    'rpc.ankr.com': [
+      url => url,
+      () => {
+        const heliusKey = globalThis?.process?.env?.HELIUS_API_KEY || 'free';
+        return `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+      },
+    ],
   };
 
   function getFallbackUrls(url) {
+    if (typeof url !== 'string' || !url) return [];
     for (const [pattern, fallbacks] of Object.entries(FALLBACK_URLS)) {
       if (url.includes(pattern)) {
-        return fallbacks;
+        return fallbacks
+          .map((entry) => {
+            try {
+              return typeof entry === 'function' ? entry(url) : entry;
+            } catch (_) {
+              return null;
+            }
+          })
+          .filter((u) => typeof u === 'string' && /^https?:\/\//.test(u));
       }
     }
     return [url]; // No fallback — just return original
@@ -48,40 +80,61 @@
     return new Promise(r => setTimeout(r, ms));
   }
 
-  // Try a single URL with one retry loop
-  async function tryUrl(url, attemptNum = 0) {
+  // Try a single URL with one retry loop + timeout
+  async function tryUrl(url, options = {}, attemptNum = 0) {
+    if (typeof url !== 'string' || !url) {
+      throw new Error('Invalid URL passed to tryUrl');
+    }
     try {
-      const res = await window.throttledFetch(url);
+      // Create abort controller for timeout (default 5s)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const requestOptions = { ...options, signal: controller.signal };
+
+      const fetchImpl = typeof window.throttledFetch === 'function'
+        ? window.throttledFetch.bind(window)
+        : window.fetch.bind(window);
+      const res = await fetchImpl(url, requestOptions);
+      clearTimeout(timeoutId);
+
       if (res.ok || res.status < 500) return res; // Accept 2xx, 3xx, 4xx; retry on 5xx
 
       // 5xx → retry
       if (attemptNum < MAX_RETRIES) {
         const delay = RETRY_DELAY_MS * Math.pow(2, attemptNum);
         await sleep(delay);
-        return tryUrl(url, attemptNum + 1);
+        return tryUrl(url, options, attemptNum + 1);
       }
       return res; // Return error response after all retries exhausted
     } catch (err) {
-      if (attemptNum < MAX_RETRIES) {
+      // Check for timeout
+      const isTimeout = err.name === 'AbortError';
+      const isNetwork = err.message.includes('fetch') || err.message.includes('ERR_');
+
+      if ((isTimeout || isNetwork) && attemptNum < MAX_RETRIES) {
         const delay = RETRY_DELAY_MS * Math.pow(2, attemptNum);
-        console.warn(`[ResilientFetch] Retry attempt ${attemptNum + 1} for ${url.slice(0, 60)}`);
+        const reason = isTimeout ? '(timeout)' : `(${err.message})`;
+        console.warn(`[ResilientFetch] Retry attempt ${attemptNum + 1}/${MAX_RETRIES + 1} for ${url.slice(0, 60)} ${reason}`);
         await sleep(delay);
-        return tryUrl(url, attemptNum + 1);
+        return tryUrl(url, options, attemptNum + 1);
       }
       throw err; // Throw after all retries
     }
   }
 
   // Try all fallback URLs in sequence until one works
-  async function tryFallbacks(fallbackUrls) {
+  async function tryFallbacks(fallbackUrls, options = {}) {
     let lastError = null;
 
     for (let i = 0; i < fallbackUrls.length; i++) {
-      const getUrl = fallbackUrls[i];
-      const url = typeof getUrl === 'function' ? getUrl() : getUrl;
+      const url = fallbackUrls[i];
+      if (typeof url !== 'string' || !url) {
+        lastError = 'invalid fallback url';
+        continue;
+      }
 
       try {
-        const res = await tryUrl(url);
+        const res = await tryUrl(url, options);
         if (res.ok) {
           if (i > 0) {
             console.info(`[ResilientFetch] Fallback #${i} succeeded: ${url.slice(0, 60)}`);
@@ -102,10 +155,16 @@
 
   // Main resilient fetch
   async function resilientFetch(url, options = {}) {
+    if (typeof url !== 'string' || !url) {
+      throw new Error('resilientFetch requires a valid URL string');
+    }
     const fallbackUrls = getFallbackUrls(url);
+    if (!fallbackUrls.length) {
+      throw new Error('No valid fallback URLs generated');
+    }
 
     try {
-      return await tryFallbacks(fallbackUrls);
+      return await tryFallbacks(fallbackUrls, options);
     } catch (err) {
       console.error(
         `[ResilientFetch] FAILED: ${url.slice(0, 80)} → ${err.message}`

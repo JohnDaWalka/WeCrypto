@@ -62,3 +62,5 @@ data/
 
 # Config
 config.toml
+
+.fake

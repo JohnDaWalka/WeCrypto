@@ -7,15 +7,15 @@
 class PythSettlementValidator {
   constructor(pythHermesBaseUrl = 'https://hermes.pyth.network') {
     this.pythBase = pythHermesBaseUrl;
-    
+
     // Pyth feed IDs for our 7 main coins
     this.feedIds = {
-      BTC:  'e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
-      ETH:  'ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
-      SOL:  'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
-      XRP:  'ec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8',
+      BTC: 'e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
+      ETH: 'ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
+      SOL: 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+      XRP: 'ec5d399846a9209f3fe5881d70aae9268c94339ff9817e8d18ff19fa05eea1c8',
       DOGE: 'dcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c',
-      BNB:  '2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f',
+      BNB: '2f95862b045670cd22bee3114c39763a4a08beeb663b145d283c31d7d1101c4f',
     };
 
     // Price cache (avoid redundant API calls)
@@ -56,7 +56,7 @@ class PythSettlementValidator {
     try {
       const url = `${this.pythBase}/api/latest_price_feeds?ids[]=${feedId}`;
       const response = await fetch(url, { timeout: 5000 });
-      
+
       if (!response.ok) {
         throw new Error(`Pyth API error: ${response.status}`);
       }
@@ -83,7 +83,7 @@ class PythSettlementValidator {
 
       // Cache result
       this.priceCache[sym] = { data: result, fetchTime: Date.now() };
-      
+
       // Update window timestamp for adaptive tuner's staleness check
       if (typeof window !== 'undefined') {
         window.PYTH_HERMES_LAST_UPDATE = Date.now();
@@ -122,14 +122,18 @@ class PythSettlementValidator {
    * @returns {Promise<object>} { valid, pythPrice, kalshiOutcome, match, deviation }
    */
   async validateSettlement(trade) {
-    const { coin, startPrice, endTime, kalshiOutcome } = trade;
+    const { coin, startPrice, endTime, kalshiOutcome, strikeType, strikeDir } = trade;
 
     try {
       const pythPrice = await this.getCurrentPrice(coin);
 
       // Price movement direction
       const pythDir = pythPrice.price > startPrice ? 'UP' : 'DOWN';
-      const kalshiDir = kalshiOutcome === 'YES' ? 'UP' : 'DOWN';
+      const strike = String(strikeDir ?? strikeType ?? 'above').toLowerCase();
+      const yesDir = strike === 'below' ? 'DOWN' : 'UP';
+      const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+      const isYes = String(kalshiOutcome || '').toUpperCase() === 'YES';
+      const kalshiDir = isYes ? yesDir : noDir;
 
       const match = pythDir === kalshiDir;
       const deviation = Math.abs(pythPrice.price - startPrice) / startPrice;
@@ -224,7 +228,7 @@ class PythSettlementValidator {
    */
   getVolatility(sym, windowSize = 20) {
     const history = this.volatilityHistory[sym] || [];
-    
+
     if (history.length < 2) {
       return {
         volatility: 0.5,

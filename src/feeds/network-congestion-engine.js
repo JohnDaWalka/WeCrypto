@@ -19,6 +19,7 @@
   const CACHE = {};
   const CACHE_TTL_MS = 30000;  // Cache for 30s
   let _updateTimer = null;
+  let _btcFeeWarnTs = 0;
 
   // ── Network Congestion Metrics (raw values) ──
   const CONGESTION_METRICS = {
@@ -116,27 +117,39 @@
   // ── Fetch BTC mempool with failover ──
   async function fetchBTCMempool() {
     try {
-      // Primary: mempool.space (v1 deprecated, use /api/mempool)
-      const mempool = await Promise.race([
-        fetch('https://mempool.space/api/mempool', { signal: AbortSignal.timeout(8000) })
-          .then(r => r.json()),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
-      ]).catch(() => null);
+      // Primary: mempool.space with resilientFetch (adds fallback to blockchain.info)
+      const mempoolRes = window.resilientFetch
+        ? await window.resilientFetch('https://mempool.space/api/mempool').catch(() => null)
+        : await fetch('https://mempool.space/api/mempool', { signal: AbortSignal.timeout(8000) })
+          .then(r => r.json())
+          .catch(() => null);
+
+      const mempool = mempoolRes?.ok
+        ? await mempoolRes.json()
+        : mempoolRes instanceof Object && mempoolRes.vsize
+          ? mempoolRes
+          : null;
 
       if (mempool?.vsize && mempool?.count) {
-        // Fetch fees - try multiple endpoints
+        // Fetch fees - try multiple endpoints with resilientFetch fallback
         let fees = null;
 
-        // Try: mempool.space/api/v1/fees/recommended (may be available)
+        // Try: mempool.space/api/v1/fees/recommended (with resilientFetch fallback)
         try {
-          const feeRes = await fetch('https://mempool.space/api/v1/fees/recommended',
-            { signal: AbortSignal.timeout(5000) });
-          if (feeRes.ok) fees = await feeRes.json();
+          const feeRes = window.resilientFetch
+            ? await window.resilientFetch('https://mempool.space/api/fees/recommended')
+            : await fetch('https://mempool.space/api/v1/fees/recommended',
+              { signal: AbortSignal.timeout(5000) });
+          if (feeRes?.ok) fees = await feeRes.json();
         } catch (e) { /* fall through */ }
 
         // Fallback: use default BTC fees (will adjust with market data elsewhere)
         if (!fees?.fastestFee) {
-          console.warn('[NetCongestion] mempool.space fees endpoint unavailable, using defaults');
+          const now = Date.now();
+          if ((now - _btcFeeWarnTs) > 120000) {
+            console.warn('[NetCongestion] mempool.space fees endpoint unavailable, using defaults');
+            _btcFeeWarnTs = now;
+          }
           fees = { fastestFee: 20, halfHourFee: 15, minimumFee: 5 };
         }
 

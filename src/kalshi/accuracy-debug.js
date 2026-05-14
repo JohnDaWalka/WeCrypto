@@ -7,7 +7,7 @@
  * ================================================================
  */
 
-(function() {
+(function () {
   'use strict';
 
   window.KalshiAccuracyDebug = {
@@ -207,7 +207,7 @@
      */
     async syncDriveCacheToMemory() {
       console.log('[KalshiAccuracyDebug] Syncing drive cache to memory...');
-      
+
       // If running in Electron, call IPC to read contract cache files
       if (typeof window !== 'undefined' && window.electron && window.electron.invoke) {
         try {
@@ -222,13 +222,37 @@
               `(source: ${contractData?.source || 'unknown'})`
             );
 
+            // Normalize drive-cache records to runtime resolution-log schema
+            const normalizedSettlements = settlements
+              .map((c) => {
+                const sym = String(c.sym || c.symbol || c.coin || '').toUpperCase();
+                const settledTs = c.settledTs ?? c.timestamp ?? c.ts ?? null;
+                const actualOutcomeRaw = c.actualOutcome ?? c.outcome ?? c.kalshiResult ?? null;
+                const actualOutcome = actualOutcomeRaw === 'YES'
+                  ? 'UP'
+                  : actualOutcomeRaw === 'NO'
+                    ? 'DOWN'
+                    : actualOutcomeRaw;
+                return {
+                  ...c,
+                  sym,
+                  settledTs,
+                  ts: c.ts ?? settledTs,
+                  actualOutcome,
+                  modelDir: c.modelDir ?? c.direction ?? null,
+                  modelCorrect: c.modelCorrect ?? null,
+                  _source: c._source || 'drive-cache-sync',
+                };
+              })
+              .filter((c) => !!c.sym && !!c.settledTs);
+
             const existing = new Set(
               (window._15mResolutionLog || []).map((e) => (
                 e.id ||
                 `${e.sym || e.symbol || e.coin || 'UNK'}-${e.ts || e.timestamp || e.settledTs || 0}`
               ))
             );
-            const newContracts = settlements.filter((c) => {
+            const newContracts = normalizedSettlements.filter((c) => {
               const key = c.id || `${c.sym || c.symbol || c.coin || 'UNK'}-${c.ts || c.timestamp || c.settledTs || 0}`;
               return !existing.has(key);
             });
@@ -239,7 +263,7 @@
 
               try {
                 localStorage.setItem('beta1_15m_resolution_log', JSON.stringify(window._15mResolutionLog.slice(-300)));
-              } catch (_) {}
+              } catch (_) { }
             } else {
               console.log('[KalshiAccuracyDebug] No new contracts to sync');
             }

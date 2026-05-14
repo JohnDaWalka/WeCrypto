@@ -129,10 +129,10 @@ class ContractWinRateCalculator {
           noPrice: trade.noPrice,
           profit: trade.profit,
           // From resolution log
-          modelCorrect: resMatch?.modelCorrect || null,
-          outcome: resMatch?.outcome || null,
-          kalshiResult: resMatch?.outcome || null,
-          settledTs: resMatch?.settledTs || trade.timestamp,
+          modelCorrect: resMatch?.modelCorrect ?? null,
+          outcome: resMatch?.outcome ?? null,
+          kalshiResult: resMatch?.outcome ?? null,
+          settledTs: resMatch?.settledTs ?? trade.timestamp,
         };
       });
 
@@ -332,7 +332,10 @@ class ContractWinRateCalculator {
       );
 
       if (result.success) {
-        console.log(`[WinRateCalc] Persisted to Electron cache (${result.drive}: drive, ${result.count} contracts)`);
+        console.log(
+          `[WinRateCalc] Persisted to Electron cache ` +
+          `(writes=${result.writeCount || 1}, path=${result.path || 'unknown'}, contracts=${result.count})`
+        );
         this.cacheDirty = false;
         return true;
       }

@@ -95,23 +95,7 @@
                         return Date.UTC(year, month - 1, day, hour, minute, second, milli);
                     }
                 },
-                {
-                    name: 'worldtimeapi/america-new_york',
-                    url: 'https://worldtimeapi.org/api/timezone/America/New_York',
-                    parse: (json) => {
-                        if (!json) return null;
-                        if (Number.isFinite(Number(json.unixtime))) return Number(json.unixtime) * 1000;
-                        if (json.datetime) {
-                            const parsed = Date.parse(json.datetime);
-                            return Number.isFinite(parsed) ? parsed : null;
-                        }
-                        if (json.utc_datetime) {
-                            const parsed = Date.parse(json.utc_datetime);
-                            return Number.isFinite(parsed) ? parsed : null;
-                        }
-                        return null;
-                    }
-                },
+                // worldtimeapi endpoints removed (now returning HTTP 410).
                 {
                     name: 'timeapi.io/utc',
                     url: 'https://timeapi.io/api/Time/current/zone?timeZone=UTC',
@@ -127,25 +111,9 @@
                         if (![year, month, day, hour, minute, second, milli].every(Number.isFinite)) return null;
                         return Date.UTC(year, month - 1, day, hour, minute, second, milli);
                     }
-                },
-                {
-                    name: 'worldtimeapi/utc',
-                    url: 'https://worldtimeapi.org/api/timezone/Etc/UTC',
-                    parse: (json) => {
-                        if (!json) return null;
-                        if (Number.isFinite(Number(json.unixtime))) return Number(json.unixtime) * 1000;
-                        if (json.datetime) {
-                            const parsed = Date.parse(json.datetime);
-                            return Number.isFinite(parsed) ? parsed : null;
-                        }
-                        if (json.utc_datetime) {
-                            const parsed = Date.parse(json.utc_datetime);
-                            return Number.isFinite(parsed) ? parsed : null;
-                        }
-                        return null;
-                    }
                 }
             ];
+
             this.metrics = {
                 totalUpdates: 0,
                 lastUpdateTs: 0,

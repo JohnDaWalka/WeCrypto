@@ -23,9 +23,9 @@
 (function () {
   'use strict';
 
-  const KALSHI_BASE    = 'https://api.elections.kalshi.com/trade-api/v2';
-  const POLY_GAMMA     = 'https://gamma-api.polymarket.com';
-  const CB_BASE        = 'https://api.exchange.coinbase.com';
+  const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+  const POLY_GAMMA = 'https://gamma-api.polymarket.com';
+  const CB_BASE = 'https://api.exchange.coinbase.com';
 
   // Coinbase product IDs — CF Benchmarks uses Coinbase prices for Kalshi settlement
   const CB_PRODUCTS = {
@@ -33,27 +33,27 @@
     XRP: 'XRP-USD', DOGE: 'DOGE-USD', BNB: 'BNB-USD', HYPE: 'HYPE-USD',
   };
 
-  const LOG_MAX        = 300;   // max entries in _15mResolutionLog
-  const SETTLE_GRACE   = 120_000; // 2 min after close_time before we poll
-  const POLL_INTERVAL  = 60_000;  // poll for settlements every 60s
-  const MAX_PENDING    = 50;      // max pending snapshots queued at once
-  const PERSIST_KEY    = 'beta1_15m_resolution_log';
+  const LOG_MAX = 300;   // max entries in _15mResolutionLog
+  const SETTLE_GRACE = 120_000; // 2 min after close_time before we poll
+  const POLL_INTERVAL = 60_000;  // poll for settlements every 60s
+  const MAX_PENDING = 50;      // max pending snapshots queued at once
+  const PERSIST_KEY = 'beta1_15m_resolution_log';
 
   // ── State ────────────────────────────────────────────────────────
   // Pending: markets we've snapshotted and are waiting to settle
   // Structure: { sym, ticker, type, snapshotTs, closeTimeMs, entryProb, modelDir }
-  const _pending   = new Map();   // ticker → pending entry
-  let   _pollTimer = null;
+  const _pending = new Map();   // ticker → pending entry
+  let _pollTimer = null;
 
   // Initialise global stores
   window._15mResolutionLog = window._15mResolutionLog || [];
-  window._resolutionMap    = window._resolutionMap    || {};
+  window._resolutionMap = window._resolutionMap || {};
 
   // Restore persisted log
   try {
     const saved = localStorage.getItem(PERSIST_KEY);
     if (saved) window._15mResolutionLog = JSON.parse(saved);
-  } catch (_) {}
+  } catch (_) { }
 
   function saveLog() {
     try {
@@ -61,13 +61,13 @@
         PERSIST_KEY,
         JSON.stringify(window._15mResolutionLog.slice(-LOG_MAX))
       );
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // ── Fetch helpers ────────────────────────────────────────────────
   function fetchWithTimeout(url, ms = 7000) {
     const ctrl = new AbortController();
-    const tid  = setTimeout(() => ctrl.abort(), ms);
+    const tid = setTimeout(() => ctrl.abort(), ms);
     return fetch(url, { signal: ctrl.signal })
       .then(r => { clearTimeout(tid); return r; })
       .catch(e => { clearTimeout(tid); throw e; });
@@ -89,11 +89,11 @@
     const product = CB_PRODUCTS[sym];
     if (!product) return null;
     // Fetch a 2-candle window centred on close_time
-    const endSec   = Math.ceil(closeTimeMs / 1000) + 5;
+    const endSec = Math.ceil(closeTimeMs / 1000) + 5;
     const startSec = endSec - 180;
     try {
       const url = `${CB_BASE}/products/${product}/candles?start=${startSec}&end=${endSec}&granularity=60`;
-      const r   = await fetchWithTimeout(url, 8000);
+      const r = await fetchWithTimeout(url, 8000);
       if (!r.ok) return null;
       const candles = await r.json();
       if (!Array.isArray(candles) || !candles.length) return null;
@@ -132,24 +132,24 @@
       }
 
       // Capture what the model currently predicts for this coin
-      const pred      = window._lastPrediction?.[sym];
-      const modelDir  = pred?.direction ?? null;
+      const pred = window._lastPrediction?.[sym];
+      const modelDir = pred?.direction ?? null;
       const entryProb = k15.probability ?? null;
 
       _pending.set(k15.ticker, {
         sym,
-        ticker:      k15.ticker,
-        type:        '15m',
-        snapshotTs:  now,
+        ticker: k15.ticker,
+        type: '15m',
+        snapshotTs: now,
         closeTimeMs: closeMs,
         entryProb,
         modelDir,
-        title:       k15.title ?? null,
+        title: k15.title ?? null,
         targetPrice: k15.targetPriceNum ?? null,
         // Snapshot EV data from orchestrator at the moment of prediction
-        edgeCents:   window.KalshiOrchestrator?.getIntent?.(sym)?.edgeCents  ?? null,
-        entryPrice:  window.KalshiOrchestrator?.getIntent?.(sym)?.entryPrice ?? null,
-        side:        window.KalshiOrchestrator?.getIntent?.(sym)?.side       ?? null,
+        edgeCents: window.KalshiOrchestrator?.getIntent?.(sym)?.edgeCents ?? null,
+        entryPrice: window.KalshiOrchestrator?.getIntent?.(sym)?.entryPrice ?? null,
+        side: window.KalshiOrchestrator?.getIntent?.(sym)?.side ?? null,
         modelProbUp: window.KalshiOrchestrator?.getIntent?.(sym)?.modelProbUp ?? null,
       });
     }
@@ -190,14 +190,18 @@
     // Only process settled markets with a definitive result
     if (m.status !== 'settled' || !m.result) return null;
 
-    // result: 'yes' → price closed ABOVE reference → UP
-    // result: 'no'  → price closed BELOW reference → DOWN
-    const actualOutcome = m.result === 'yes' ? 'UP' : 'DOWN';
-    const entryProb     = entry.entryProb ?? 0.5;
-    const marketDir     = entryProb >= 0.50 ? 'UP' : 'DOWN';
-    const modelDir      = entry.modelDir;
+    // YES-side direction depends on strike_type:
+    // - above/at_least/greater_or_equal: YES = UP
+    // - below/under:                    YES = DOWN
+    const strike = String(m.strike_type ?? 'above').toLowerCase();
+    const yesDir = strike === 'below' || strike === 'under' ? 'DOWN' : 'UP';
+    const noDir = yesDir === 'UP' ? 'DOWN' : 'UP';
+    const actualOutcome = String(m.result || '').toLowerCase() === 'yes' ? yesDir : noDir;
+    const entryProb = entry.entryProb ?? 0.5;
+    const marketDir = entryProb >= 0.50 ? 'UP' : 'DOWN';
+    const modelDir = entry.modelDir;
 
-    const modelCorrect  = modelDir && modelDir !== 'FLAT'
+    const modelCorrect = modelDir && modelDir !== 'FLAT'
       ? modelDir === actualOutcome
       : null;
     const marketCorrect = marketDir === actualOutcome;
@@ -206,26 +210,26 @@
     const cbSettlePrice = await fetchCoinbaseSettlement(entry.sym, entry.closeTimeMs);
 
     return {
-      sym:           entry.sym,
-      ticker:        entry.ticker,
-      type:          '15m',
-      snapshotTs:    entry.snapshotTs,
-      closeTimeMs:   entry.closeTimeMs,
-      settledTs:     Date.now(),
+      sym: entry.sym,
+      ticker: entry.ticker,
+      type: '15m',
+      snapshotTs: entry.snapshotTs,
+      closeTimeMs: entry.closeTimeMs,
+      settledTs: Date.now(),
       entryProb,
       marketDir,
       actualOutcome,
-      refPrice:        entry.targetPrice ?? null,
+      refPrice: entry.targetPrice ?? null,
       cbSettlePrice,                          // actual Coinbase price at settlement
-      modelDir:        modelDir ?? null,
+      modelDir: modelDir ?? null,
       modelCorrect,
       marketCorrect,
-      correct:         modelCorrect,
+      correct: modelCorrect,
       // EV data captured at snapshot time — used by equity curve
-      edgeCents:       entry.edgeCents   ?? null,
-      entryPrice:      entry.entryPrice  ?? null,
-      side:            entry.side        ?? null,
-      modelProbUp:     entry.modelProbUp ?? null,
+      edgeCents: entry.edgeCents ?? null,
+      entryPrice: entry.entryPrice ?? null,
+      side: entry.side ?? null,
+      modelProbUp: entry.modelProbUp ?? null,
     };
   }
 
@@ -244,19 +248,19 @@
     try {
       window.dispatchEvent(new CustomEvent('market15m:resolved', {
         detail: {
-          sym:           res.sym,
-          outcome:       res.actualOutcome,
-          modelCorrect:  res.modelCorrect,
+          sym: res.sym,
+          outcome: res.actualOutcome,
+          modelCorrect: res.modelCorrect,
           marketCorrect: res.marketCorrect,
-          prob:          res.entryProb,
-          ticker:        res.ticker,
+          prob: res.entryProb,
+          ticker: res.ticker,
         },
       }));
-    } catch (_) {}
+    } catch (_) { }
 
-    const icon = res.modelCorrect === true  ? '\u2705'
-               : res.modelCorrect === false ? '\u274c'
-               : '\u2753';
+    const icon = res.modelCorrect === true ? '\u2705'
+      : res.modelCorrect === false ? '\u274c'
+        : '\u2753';
     console.log(
       `[Resolver] ${res.sym} 15M settled ${res.actualOutcome} ` +
       `| model:${res.modelDir ?? 'N/A'} ${icon} ` +
@@ -279,10 +283,10 @@
     const accuracy = correct / recent.length;
 
     // Trend: last 8 vs prior 8
-    const last8  = recent.slice(-8);
+    const last8 = recent.slice(-8);
     const prior8 = recent.slice(-16, -8);
-    const l8acc  = last8.length  ? last8.filter(e => e.modelCorrect).length  / last8.length  : accuracy;
-    const p8acc  = prior8.length ? prior8.filter(e => e.modelCorrect).length / prior8.length : accuracy;
+    const l8acc = last8.length ? last8.filter(e => e.modelCorrect).length / last8.length : accuracy;
+    const p8acc = prior8.length ? prior8.filter(e => e.modelCorrect).length / prior8.length : accuracy;
 
     // Streak
     let streak = 0;
@@ -328,10 +332,10 @@
   // ── PUBLIC API ───────────────────────────────────────────────────
   window.MarketResolver = {
     start,
-    getPending:           () => [..._pending.values()],
-    getLog:               () => window._15mResolutionLog,
+    getPending: () => [..._pending.values()],
+    getLog: () => window._15mResolutionLog,
     getResolutionAccuracy,
-    getLatest:            sym => window._resolutionMap[sym] ?? null,
+    getLatest: sym => window._resolutionMap[sym] ?? null,
     // Called by signal-router-cfm.js for CFM calibration
     buildCalibration(sym, n = 30) {
       return getResolutionAccuracy(sym, n);

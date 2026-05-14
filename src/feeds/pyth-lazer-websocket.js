@@ -46,6 +46,16 @@ class PythLazerWebSocketHandler {
 
       console.log("[PythLazerWS] ✅ Client created, subscribing to price feeds...");
 
+      // --- Network Health Reporting ---
+      if (typeof window !== 'undefined' && window.NetworkHealth) {
+        window.NetworkHealth.update('Pyth', {
+          status: 'healthy',
+          lastFetch: Date.now(),
+          fallback: false,
+          reason: '',
+        });
+      }
+
       // Subscribe to all price feeds with enhanced properties
       this.client.subscribe({
         type: "subscribe",
@@ -86,6 +96,14 @@ class PythLazerWebSocketHandler {
         console.error("[PythLazerWS] ⚠️ All WebSocket connections down, reconnecting...");
         this.connected = false;
         // SDK handles reconnection automatically
+        if (typeof window !== 'undefined' && window.NetworkHealth) {
+          window.NetworkHealth.update('Pyth', {
+            status: 'down',
+            lastFetch: Date.now(),
+            fallback: true,
+            reason: 'All connections down',
+          });
+        }
       });
 
       this.connected = true;

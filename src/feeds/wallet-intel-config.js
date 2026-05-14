@@ -54,15 +54,19 @@ const WalletIntelConfig = {
    * Start monitoring all systems.
    */
   startMonitoring(opts = {}) {
-    const chains = opts.chains || ['BTC', 'ETH', 'BNB'];
-    const callback = opts.callback || (() => {});
+    const DEFAULT_CHAINS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE'];
+    const chains = (opts.chains && opts.chains.length ? opts.chains : DEFAULT_CHAINS)
+      .map(c => String(c || '').toUpperCase())
+      .filter(Boolean);
+    const callback = opts.callback || (() => { });
 
     if (window.WhaleAlertMonitor) {
       window.WhaleAlertMonitor.startMonitoring(chains, callback);
     }
 
     if (window.DexActivityMonitor) {
-      const dexChains = chains.filter(c => c !== 'BTC'); // BTC not on DEX
+      // BTC, XRP, DOGE are commonly not represented in EVM DEX monitors.
+      const dexChains = chains.filter(c => !['BTC', 'XRP', 'DOGE'].includes(c));
       window.DexActivityMonitor.startMonitoring(dexChains, callback);
     }
 
@@ -100,13 +104,16 @@ const WalletIntelConfig = {
   /**
    * Quick helper: Add a wallet to track across all sources.
    */
-  trackWallet(addr, callback) {
+  trackWallet(addr, callback, chains = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'HYPE']) {
     if (!window.PortfolioIntel) {
       console.error('[WalletIntel] PortfolioIntel not loaded');
       return;
     }
-    window.PortfolioIntel.trackWallet(addr, callback, ['BTC', 'ETH', 'BNB']);
-    console.log('[WalletIntel] Now tracking:', addr);
+    const normalizedChains = (chains || [])
+      .map(c => String(c || '').toUpperCase())
+      .filter(Boolean);
+    window.PortfolioIntel.trackWallet(addr, callback, normalizedChains);
+    console.log('[WalletIntel] Now tracking:', addr, 'across', normalizedChains.join(', '));
   },
 
   /**

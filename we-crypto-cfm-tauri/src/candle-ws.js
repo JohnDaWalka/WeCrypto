@@ -7,9 +7,9 @@
 (function () {
   'use strict';
 
-  const WS_URL       = 'wss://advanced-trade-ws.coinbase.com';
-  const BUCKET_MS    = 15 * 60 * 1000;   // 15-minute window
-  const MAX_BUCKETS  = 200;               // ~50 hours of history per coin
+  const WS_URL = 'wss://advanced-trade-ws.coinbase.com';
+  const BUCKET_MS = 15 * 60 * 1000;   // 15-minute window
+  const MAX_BUCKETS = 200;               // ~50 hours of history per coin
 
   // Map Coinbase product_id → internal symbol
   const PRODUCTS = [
@@ -17,12 +17,12 @@
     'XRP-USD', 'DOGE-USD', 'BNB-USD', 'HYPE-USD'
   ];
   const SYM_MAP = {
-    'BTC-USD':  'BTC',
-    'ETH-USD':  'ETH',
-    'SOL-USD':  'SOL',
-    'XRP-USD':  'XRP',
+    'BTC-USD': 'BTC',
+    'ETH-USD': 'ETH',
+    'SOL-USD': 'SOL',
+    'XRP-USD': 'XRP',
     'DOGE-USD': 'DOGE',
-    'BNB-USD':  'BNB',
+    'BNB-USD': 'BNB',
     'HYPE-USD': 'HYPE'
   };
 
@@ -31,15 +31,16 @@
   for (const sym of Object.values(SYM_MAP)) {
     store[sym] = {
       buckets15m: [],   // [{t, o, h, l, c, v, closed}] newest last
-      live1m:     null, // latest 1-min candle from WS
-      ticker:     null  // latest ticker snapshot
+      live1m: null, // latest 1-min candle from WS
+      ticker: null  // latest ticker snapshot
     };
   }
 
-  let ws              = null;
-  let connected       = false;
-  let reconnectTimer  = null;
-  let reconnectDelay  = 3000;
+  let ws = null;
+  let connected = false;
+  let reconnectTimer = null;
+  let reconnectDelay = 500;    // Start at 500ms
+  let reconnectCount = 0;      // Track attempt count
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@
   // Merge a 1-min candle into the appropriate 15-min bucket
   function upsertCandle(sym, c) {
     const buckets = store[sym].buckets15m;
-    const bStart  = bucket15mStart(c.t);
+    const bStart = bucket15mStart(c.t);
 
     let bucket = buckets.length ? buckets[buckets.length - 1] : null;
 
@@ -72,9 +73,9 @@
       if (buckets.length > MAX_BUCKETS) buckets.shift();
     } else {
       // Update live bucket — high-water mark H/L, roll close
-      bucket.h  = Math.max(bucket.h, c.h);
-      bucket.l  = Math.min(bucket.l, c.l);
-      bucket.c  = c.c;
+      bucket.h = Math.max(bucket.h, c.h);
+      bucket.l = Math.min(bucket.l, c.l);
+      bucket.c = c.c;
       bucket.v += c.v;
     }
 
@@ -111,11 +112,11 @@
           const sym = SYM_MAP[t.product_id];
           if (!sym) continue;
           store[sym].ticker = {
-            price:     Number(t.price),
-            bestBid:   Number(t.best_bid),
-            bestAsk:   Number(t.best_ask),
-            vol24h:    Number(t.volume_24_h),
-            ts:        Date.now()
+            price: Number(t.price),
+            bestBid: Number(t.best_bid),
+            bestAsk: Number(t.best_ask),
+            vol24h: Number(t.volume_24_h),
+            ts: Date.now()
           };
         }
       }
@@ -128,7 +129,7 @@
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     // Filter to products that Coinbase actually supports (HYPE may not be listed)
     const sub = (channel) => ws.send(JSON.stringify({
-      type:        'subscribe',
+      type: 'subscribe',
       product_ids: PRODUCTS,
       channel
     }));
@@ -150,8 +151,9 @@
     }
 
     ws.onopen = () => {
-      connected      = true;
-      reconnectDelay = 3000;
+      connected = true;
+      reconnectCount = 0;  // Reset on successful connection
+      reconnectDelay = 500;
       subscribe();
       dispatchEvent(new CustomEvent('candleWS:connected'));
     };
@@ -160,7 +162,7 @@
 
     ws.onclose = () => {
       connected = false;
-      ws        = null;
+      ws = null;
       dispatchEvent(new CustomEvent('candleWS:disconnected'));
       scheduleReconnect();
     };
@@ -171,10 +173,13 @@
   }
 
   function scheduleReconnect() {
+    // Exponential backoff: 500ms * 2^n, capped at 64 seconds
+    reconnectCount++;
+    const delayMs = Math.min(500 * Math.pow(2, reconnectCount), 64000);
+    console.warn(`[CandleWS] Reconnecting in ${delayMs}ms (attempt ${reconnectCount})`);
     reconnectTimer = setTimeout(() => {
-      reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
       connect();
-    }, reconnectDelay);
+    }, delayMs);
   }
 
   // ─── Public API ─────────────────────────────────────────────────────────────
@@ -229,7 +234,7 @@
      * 1.0 = bucket just closed, 0.0 = just opened.
      */
     getBucketProgress() {
-      const now   = Date.now();
+      const now = Date.now();
       const start = bucket15mStart(now);
       return (now - start) / BUCKET_MS;
     },
@@ -238,7 +243,7 @@
      * ms until the current 15-minute bucket closes.
      */
     getMsUntilClose() {
-      const now   = Date.now();
+      const now = Date.now();
       const start = bucket15mStart(now);
       return (start + BUCKET_MS) - now;
     },
@@ -250,20 +255,20 @@
     evalLastPrediction(sym, predictedDirection, predictedAtPrice) {
       const closed = (store[sym]?.buckets15m || []).filter(b => b.closed);
       if (closed.length < 1) return null;
-      const last   = closed[closed.length - 1];
+      const last = closed[closed.length - 1];
       const actual = last.c > last.o ? 'UP' : last.c < last.o ? 'DOWN' : 'FLAT';
       const pctMove = predictedAtPrice
         ? ((last.c - predictedAtPrice) / predictedAtPrice) * 100
         : ((last.c - last.o) / last.o) * 100;
       return {
         sym,
-        predDir:   predictedDirection,
+        predDir: predictedDirection,
         actual,
-        correct:   predictedDirection === actual,
-        pctMove:   +pctMove.toFixed(4),
+        correct: predictedDirection === actual,
+        pctMove: +pctMove.toFixed(4),
         bucketOpen: last.o,
         bucketClose: last.c,
-        bucketT:    last.t
+        bucketT: last.t
       };
     }
   };

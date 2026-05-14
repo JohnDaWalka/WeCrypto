@@ -14,10 +14,10 @@
 (function () {
   'use strict';
 
-  const COINS   = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
+  const COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
   const POLL_MS = 15000;
   const TIMEOUT = 9000;
-  const CACHE   = {};        // sym → { exchanges[], aggregate, ts }
+  const CACHE = {};        // sym → { exchanges[], aggregate, ts }
   const VOL_HISTORY = {};    // `${exchange}_${sym}` → [vol24h, ...]  (rolling 8)
   let _timer = null;
 
@@ -93,15 +93,15 @@
 
   // ── signal computation ────────────────────────────────────────────
   function computeSignal(buyPct, sellPct, volMult, fundingPct) {
-    const fundBear = fundingPct != null && fundingPct >  0.02;
+    const fundBear = fundingPct != null && fundingPct > 0.02;
     const fundBull = fundingPct != null && fundingPct < -0.02;
-    const bigVol   = volMult   != null && volMult   >  1.8;
-    const smallVol = volMult   != null && volMult   <  0.5;
+    const bigVol = volMult != null && volMult > 1.8;
+    const smallVol = volMult != null && volMult < 0.5;
 
-    if (sellPct > 58 || (sellPct > 52 && fundBear)) return { signal: 'DISTRIBUTING', color: 'red'    };
-    if (buyPct  > 58 || (buyPct  > 52 && fundBull)) return { signal: 'ACCUMULATING', color: 'green'  };
-    if (bigVol  && Math.abs(buyPct - sellPct) < 6)  return { signal: 'VOLATILE',     color: 'orange' };
-    if (smallVol)                                   return { signal: 'QUIET',        color: 'faint'  };
+    if (sellPct > 58 || (sellPct > 52 && fundBear)) return { signal: 'DISTRIBUTING', color: 'red' };
+    if (buyPct > 58 || (buyPct > 52 && fundBull)) return { signal: 'ACCUMULATING', color: 'green' };
+    if (bigVol && Math.abs(buyPct - sellPct) < 6) return { signal: 'VOLATILE', color: 'orange' };
+    if (smallVol) return { signal: 'QUIET', color: 'faint' };
     return { signal: 'NEUTRAL', color: 'muted' };
   }
 
@@ -124,12 +124,12 @@
       let buyQty = 0, sellQty = 0;
       for (const t of trades) {
         const qty = parseFloat(t.q || t.qty || 0);
-        if (t.m === false) buyQty  += qty; // taker is buyer
-        else               sellQty += qty;
+        if (t.m === false) buyQty += qty; // taker is buyer
+        else sellQty += qty;
       }
       const totalQty = buyQty + sellQty;
-      const buyPct   = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
-      const sellPct  = 100 - buyPct;
+      const buyPct = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
+      const sellPct = 100 - buyPct;
 
       let vol24h = null;
       if (tickerRes.status === 'fulfilled') {
@@ -175,12 +175,12 @@
       let buyQty = 0, sellQty = 0;
       for (const t of trades) {
         const qty = parseFloat(t.size || 0);
-        if (t.side === 'buy') buyQty  += qty;
-        else                  sellQty += qty;
+        if (t.side === 'buy') buyQty += qty;
+        else sellQty += qty;
       }
       const totalQty = buyQty + sellQty;
-      const buyPct   = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
-      const sellPct  = 100 - buyPct;
+      const buyPct = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
+      const sellPct = 100 - buyPct;
 
       let vol24h = null;
       if (tickerRes.status === 'fulfilled') {
@@ -198,11 +198,11 @@
   }
 
   const KRAKEN_PAIRS = {
-    BTC:  'XBTUSDT',
-    ETH:  'ETHUSDT',
-    SOL:  'SOLUSDT',
-    XRP:  'XRPUSDT',
-    BNB:  null,
+    BTC: 'XBTUSDT',
+    ETH: 'ETHUSDT',
+    SOL: 'SOLUSDT',
+    XRP: 'XRPUSDT',
+    BNB: null,
     DOGE: 'DOGEUSDT',
     HYPE: null,
   };
@@ -219,20 +219,20 @@
       const data = await getJson(`https://api.kraken.com/0/public/Trades?pair=${krakenPair}&count=200`);
       if (data.error && data.error.length) throw new Error(data.error[0]);
       const result = data.result || {};
-      const key    = Object.keys(result).find(k => k !== 'last');
+      const key = Object.keys(result).find(k => k !== 'last');
       const trades = key ? result[key] : [];
 
       let buyQty = 0, sellQty = 0;
       for (const t of trades) {
         // array: [price, volume, time, side, ...]
-        const qty  = parseFloat(t[1] || 0);
+        const qty = parseFloat(t[1] || 0);
         const side = t[3]; // 'b' or 's'
-        if (side === 'b') buyQty  += qty;
-        else              sellQty += qty;
+        if (side === 'b') buyQty += qty;
+        else sellQty += qty;
       }
       const totalQty = buyQty + sellQty;
-      const buyPct   = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
-      const sellPct  = 100 - buyPct;
+      const buyPct = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
+      const sellPct = 100 - buyPct;
 
       const { signal, color } = computeSignal(buyPct, sellPct, null, null);
       return { exchange, buyPct, sellPct, volMult: null, fundingPct: null, signal, color, available: true };
@@ -266,12 +266,12 @@
       let buyQty = 0, sellQty = 0;
       for (const t of list) {
         const qty = parseFloat(t.size || 0);
-        if (t.side === 'Buy') buyQty  += qty;
-        else                  sellQty += qty;
+        if (t.side === 'Buy') buyQty += qty;
+        else sellQty += qty;
       }
       const totalQty = buyQty + sellQty;
-      const buyPct   = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
-      const sellPct  = 100 - buyPct;
+      const buyPct = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
+      const sellPct = 100 - buyPct;
 
       let fundingPct = null;
       if (fundRes.status === 'fulfilled') {
@@ -305,12 +305,12 @@
       for (const t of list) {
         const qty = parseFloat(t.qty || 0);
         // isBuyerMaker=false → taker was buyer (aggressive buy)
-        if (!t.isBuyerMaker) buyQty  += qty;
-        else                 sellQty += qty;
+        if (!t.isBuyerMaker) buyQty += qty;
+        else sellQty += qty;
       }
       const totalQty = buyQty + sellQty;
-      const buyPct   = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
-      const sellPct  = 100 - buyPct;
+      const buyPct = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
+      const sellPct = 100 - buyPct;
 
       let fundingPct = null;
       if (fundRes.status === 'fulfilled') {
@@ -342,12 +342,12 @@
       let buyQty = 0, sellQty = 0;
       for (const t of list) {
         const qty = parseFloat(t.sz || 0);
-        if (t.side === 'buy') buyQty  += qty;
-        else                  sellQty += qty;
+        if (t.side === 'buy') buyQty += qty;
+        else sellQty += qty;
       }
       const totalQty = buyQty + sellQty;
-      const buyPct   = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
-      const sellPct  = 100 - buyPct;
+      const buyPct = totalQty > 0 ? (buyQty / totalQty) * 100 : 50;
+      const sellPct = 100 - buyPct;
 
       const { signal, color } = computeSignal(buyPct, sellPct, null, null);
       return { exchange, buyPct, sellPct, volMult: null, fundingPct: null, signal, color, available: true };
@@ -374,9 +374,9 @@
   const WEIGHTS = { Binance: 0.25, Bybit: 0.20, OKX: 0.15, Coinbase: 0.12, Kraken: 0.10, KuCoin: 0.10, 'Gate.io': 0.08 };
 
   function computeAggregate(exchanges) {
-    let score       = 0;
+    let score = 0;
     let distributing = 0, accumulating = 0, volatile = 0;
-    let maxFunding  = null;
+    let maxFunding = null;
 
     for (const ex of exchanges) {
       if (!ex.available) continue;
@@ -394,13 +394,42 @@
     }
 
     let label;
-    if      (score < -0.3) label = 'STRONG SELL PRESSURE';
+    if (score < -0.3) label = 'STRONG SELL PRESSURE';
     else if (score < -0.1) label = 'SELL PRESSURE';
-    else if (score >  0.3) label = 'STRONG BUY PRESSURE';
-    else if (score >  0.1) label = 'BUY PRESSURE';
-    else                   label = 'NEUTRAL';
+    else if (score > 0.3) label = 'STRONG BUY PRESSURE';
+    else if (score > 0.1) label = 'BUY PRESSURE';
+    else label = 'NEUTRAL';
 
     return { score, label, distributing, accumulating, volatile, maxFunding, leadingScore: score };
+  }
+
+  function emitMarketEnvelope(sym, ex, aggregate, ts) {
+    const envelope = {
+      envelope_id: `cex:${sym}:${ex.exchange}:${ts}:${Math.floor(Math.random() * 1e6)}`,
+      source: `cex-${String(ex.exchange || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      received_ts: new Date(ts).toISOString(),
+      chain_ts: null,
+      type: 'trade_flow_snapshot',
+      raw: ex,
+      parsed: {
+        symbol: sym,
+        exchange: ex.exchange,
+        buyPct: ex.buyPct ?? null,
+        sellPct: ex.sellPct ?? null,
+        signal: ex.signal ?? null,
+        fundingPct: ex.fundingPct ?? null,
+        volMult: ex.volMult ?? null,
+        aggregateLabel: aggregate?.label || null,
+        aggregateScore: aggregate?.score ?? null,
+      },
+      provenance: {
+        module: 'cex-flow',
+        via: ex.via || 'rest',
+      },
+      schema_version: 'v1',
+    };
+
+    window.dispatchEvent(new CustomEvent('market-data-envelope', { detail: envelope }));
   }
 
   // ── per-coin fetch ────────────────────────────────────────────────
@@ -422,15 +451,21 @@
     );
 
     const aggregate = computeAggregate(exchanges);
-    const entry = { exchanges, aggregate, ts: Date.now() };
+    const ts = Date.now();
+    const entry = { exchanges, aggregate, ts };
     CACHE[sym] = entry;
+
+    exchanges
+      .filter(ex => ex && ex.available)
+      .forEach(ex => emitMarketEnvelope(sym, ex, aggregate, ts));
+
     return entry;
   }
 
   // ── fetchAll ──────────────────────────────────────────────────────
   async function fetchAll() {
     const results = await Promise.allSettled(COINS.map(sym => fetchCoin(sym)));
-    const detail  = {};
+    const detail = {};
     for (let i = 0; i < COINS.length; i++) {
       if (results[i].status === 'fulfilled') detail[COINS[i]] = results[i].value;
     }
@@ -441,13 +476,13 @@
   // ── public API ────────────────────────────────────────────────────
   const CexFlow = {
     POLL_MS,
-    get(sym)  { return CACHE[sym] || null; },
-    getAll()  { return { ...CACHE }; },
+    get(sym) { return CACHE[sym] || null; },
+    getAll() { return { ...CACHE }; },
     fetchAll,
     start() {
       if (_timer) return;
       if (window.ExchangeWS?.start) {
-        try { window.ExchangeWS.start(); } catch (_) {}
+        try { window.ExchangeWS.start(); } catch (_) { }
       }
       fetchAll();
       _timer = setInterval(fetchAll, POLL_MS);

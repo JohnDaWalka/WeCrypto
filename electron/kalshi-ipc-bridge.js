@@ -57,14 +57,20 @@ async function startKalshiWorker(options = {}) {
     kalshiWorkerState.readyLatencyMs = null;
     kalshiWorkerState.lastHealthError = null;
 
-    kalshiWorker = spawn('node', [
+    const nodeExec = process.execPath || 'node';
+
+    kalshiWorker = spawn(nodeExec, [
       path.join(__dirname, 'kalshi-worker.js'),
       '--port', '3050',
       '--env', 'production'
     ], {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: __dirname
+      cwd: __dirname,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+      }
     });
 
     // Log worker output
@@ -310,6 +316,22 @@ ipcMain.handle('kalshi:getTrades', async (event, marketId, filters = {}) => {
     command: 'getTrades',
     params: { marketId, filters }
   });
+});
+
+// ──────────────────────────────────────────────────────────────
+// Export for use in main.js
+ipcMain.handle('ipc:fetch', async (event, url, opts = {}) => {
+  try {
+    const res = await fetch(url, {
+      method: opts.method || 'GET',
+      headers: { Accept: 'application/json', ...(opts.headers || {}) },
+      signal: AbortSignal.timeout(10000),
+    });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, text };
+  } catch (err) {
+    return { ok: false, status: 0, error: err.message };
+  }
 });
 
 // ──────────────────────────────────────────────────────────────

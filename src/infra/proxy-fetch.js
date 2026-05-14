@@ -25,11 +25,11 @@
 
   const PORT_CASCADE = [3010, 3011, 3012, 3013, 3014];
 
-  // Optimistic default — corrected async by discoverProxyPort()
-  let PROXY_ORIGIN = `http://127.0.0.1:${PORT_CASCADE[0]}`;
-  let proxyReady   = false;
+  // Start in direct mode; enable proxy only after positive health discovery.
+  let PROXY_ORIGIN = null;
+  let proxyReady = false;
 
-  const IS_ELECTRON  = window.location.protocol === 'file:';
+  const IS_ELECTRON = window.location.protocol === 'file:';
 
   // ── Bucket A: Cloudflare Bot Mgmt — always needs the proxy ──────────────
   const CF_PROTECTED = new Set([
@@ -63,40 +63,40 @@
 
   // hostname → proxy exchange prefix (config.toml keys)
   const HOST_MAP = {
-    'api.binance.us':               'binance',
-    'api.binance.com':              'binance',  // Binance spot geoblocked (451)
-    'fapi.binance.com':             'binance-f',
-    'api.coingecko.com':            'coingecko',
-    'api.coinbase.com':             'coinbase',
-    'api.exchange.coinbase.com':    'coinbase-ex',
-    'api.kraken.com':               'kraken',
-    'api.bybit.com':                'bybit',
-    'api.bytick.com':               'bybit',   // EU mirror — same proxy route
-    'www.okx.com':                  'okx',
-    'api.elections.kalshi.com':     'kalshi',
-    'gamma-api.polymarket.com':     'polymarket',
-    'clob.polymarket.com':          'polymarket-clob',
-    'api-pub.bitfinex.com':         'bitfinex',
-    'api.kucoin.com':               'kucoin',
-    'api.mexc.com':                 'mexc',
-    'hypurrscan.io':                'hypurrscan',
-    'api.dexscreener.com':          'dexscreener',
-    'mempool.space':                'mempool',
-    'api.blockchair.com':           'blockchair',
-    'api.etherscan.io':             'etherscan',
-    'api.bscscan.com':              'bscscan',
-    'eth.blockscout.com':           'blockscout-eth',
-    'bsc.blockscout.com':           'blockscout-bsc',
-    'api.hyperliquid.xyz':          'hyperliquid',
-    'api.blockcypher.com':          'blockcypher',
-    's2.ripple.com':                'ripple',
-    'xrplcluster.com':              'xrpl',
-    'api.mainnet-beta.solana.com':  'solana',
-    'api.crypto.com':               'crypto-com',
+    'api.binance.us': 'binance',
+    'api.binance.com': 'binance',  // Binance spot geoblocked (451)
+    'fapi.binance.com': 'binance-f',
+    'api.coingecko.com': 'coingecko',
+    'api.coinbase.com': 'coinbase',
+    'api.exchange.coinbase.com': 'coinbase-ex',
+    'api.kraken.com': 'kraken',
+    'api.bybit.com': 'bybit',
+    'api.bytick.com': 'bybit',   // EU mirror — same proxy route
+    'www.okx.com': 'okx',
+    'api.elections.kalshi.com': 'kalshi',
+    'gamma-api.polymarket.com': 'polymarket',
+    'clob.polymarket.com': 'polymarket-clob',
+    'api-pub.bitfinex.com': 'bitfinex',
+    'api.kucoin.com': 'kucoin',
+    'api.mexc.com': 'mexc',
+    'hypurrscan.io': 'hypurrscan',
+    'api.dexscreener.com': 'dexscreener',
+    'mempool.space': 'mempool',
+    'api.blockchair.com': 'blockchair',
+    'api.etherscan.io': 'etherscan',
+    'api.bscscan.com': 'bscscan',
+    'eth.blockscout.com': 'blockscout-eth',
+    'bsc.blockscout.com': 'blockscout-bsc',
+    'api.hyperliquid.xyz': 'hyperliquid',
+    'api.blockcypher.com': 'blockcypher',
+    's2.ripple.com': 'ripple',
+    'xrplcluster.com': 'xrpl',
+    'api.mainnet-beta.solana.com': 'solana',
+    'api.crypto.com': 'crypto-com',
   };
 
   const _origFetch = window.fetch.bind(window);
-  const EXTERNAL   = /^https?:\/\//;
+  const EXTERNAL = /^https?:\/\//;
 
   function needsProxy(hostname) {
     if (!IS_ELECTRON) return true;           // browser: CORS bouncer is live → proxy everything
@@ -143,7 +143,7 @@
     // First: honour port injected by main.js after proxy binds (fastest path)
     if (typeof window.__PROXY_PORT__ === 'number') {
       PROXY_ORIGIN = `http://127.0.0.1:${window.__PROXY_PORT__}`;
-      proxyReady   = true;
+      proxyReady = true;
       console.info(`[WE] proxy-fetch — port from main.js: ${window.__PROXY_PORT__}`);
       return;
     }
@@ -155,12 +155,12 @@
         return;
       }
       const port = PORT_CASCADE[idx++];
-      const xhr  = new XMLHttpRequest();
+      const xhr = new XMLHttpRequest();
       xhr.timeout = 500;
       xhr.onload = function () {
         if (xhr.status === 200) {
           PROXY_ORIGIN = `http://127.0.0.1:${port}`;
-          proxyReady   = true;
+          proxyReady = true;
           console.info(`[WE] proxy-fetch v1.4 — live on port ${port}`);
           // Also let the IPC confirm (in case main.js finishes parsing stdout later)
           if (window.desktopApp?.proxyPort) {
@@ -169,13 +169,13 @@
                 PROXY_ORIGIN = `http://127.0.0.1:${p}`;
                 console.info(`[WE] proxy-fetch — IPC corrected port to ${p}`);
               }
-            }).catch(() => {});
+            }).catch(() => { });
           }
         } else {
           tryNext();
         }
       };
-      xhr.onerror   = tryNext;
+      xhr.onerror = tryNext;
       xhr.ontimeout = tryNext;
       xhr.open('GET', `http://127.0.0.1:${port}/health`, true);
       xhr.send();

@@ -29,31 +29,31 @@
   // BUG FIX: original snippet compared `TTLs` (the object) instead of
   // `TTLs[chain]` — object reference is always truthy → cache never expired.
   const CHAIN_TTL = {
-    solana:   15_000,   // ~0.4s blocks — refresh aggressively
+    solana: 15_000,   // ~0.4s blocks — refresh aggressively
     ethereum: 30_000,   // ~12s blocks
-    base:     25_000,   // L2 on ETH, slightly faster
+    base: 25_000,   // L2 on ETH, slightly faster
     arbitrum: 25_000,
-    polygon:  20_000,   // ~2s blocks
-    bsc:      20_000,   // ~3s blocks
-    bitcoin:  60_000,   // ~10min blocks — no rush
-    xrp:      15_000,   // ~3-5s ledgers
-    doge:     60_000,   // ~1min blocks
-    hype:     15_000,   // Hyperliquid L1 ~1s finality
-    default:  30_000,   // fallback for unknown chains
+    polygon: 20_000,   // ~2s blocks
+    bsc: 20_000,   // ~3s blocks
+    bitcoin: 60_000,   // ~10min blocks — no rush
+    xrp: 15_000,   // ~3-5s ledgers
+    doge: 60_000,   // ~1min blocks
+    hype: 15_000,   // Hyperliquid L1 ~1s finality
+    default: 30_000,   // fallback for unknown chains
   };
 
   // ── Wallet-data TTL config (ms) ──────────────────────────────────
   const TTL = {
-    tokens:  5 * 60 * 1000,      // 5m  — balances stable
-    txs:     2 * 60 * 1000,      // 2m  — new txs appear quickly
-    stale:  15 * 60 * 1000,      // 15m — serve stale beyond this, show badge
-    ls:     24 * 60 * 60 * 1000, // 24h — localStorage eviction
+    tokens: 5 * 60 * 1000,      // 5m  — balances stable
+    txs: 2 * 60 * 1000,      // 2m  — new txs appear quickly
+    stale: 15 * 60 * 1000,      // 15m — serve stale beyond this, show badge
+    ls: 24 * 60 * 60 * 1000, // 24h — localStorage eviction
   };
 
-  const LS_KEY   = 'wecrypto_wallet_cache_v2';
-  const L1_MAX   = 100;   // max in-memory entries
-  const LS_MAX   = 50;    // max localStorage entries
-  const CONCUR   = 4;     // max simultaneous outbound requests
+  const LS_KEY = 'wecrypto_wallet_cache_v2';
+  const L1_MAX = 100;   // max in-memory entries
+  const LS_MAX = 50;    // max localStorage entries
+  const CONCUR = 4;     // max simultaneous outbound requests
 
   // ── In-memory LRU ────────────────────────────────────────────────
   // Map preserves insertion order; we use it as an LRU by
@@ -93,9 +93,9 @@
   // ── Source health tracker ────────────────────────────────────────
   const _health = {
     blockscout: { fails: 0, lastFail: 0 },
-    ethplorer:  { fails: 0, lastFail: 0 },
-    etherscan:  { fails: 0, lastFail: 0 },
-    bscscan:    { fails: 0, lastFail: 0 },
+    ethplorer: { fails: 0, lastFail: 0 },
+    etherscan: { fails: 0, lastFail: 0 },
+    bscscan: { fails: 0, lastFail: 0 },
     blockcypher: { fails: 0, lastFail: 0 },
     blockchair: { fails: 0, lastFail: 0 },
   };
@@ -147,7 +147,7 @@
         keys.slice(LS_MAX).forEach(k => delete entries[k]);
       }
       localStorage.setItem(LS_KEY, JSON.stringify({ v: 2, entries }));
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function _lsGet(addr) {
@@ -203,7 +203,7 @@
     if (l1?.[type]) {
       const age = Date.now() - l1[type].ts;
       if (age < TTL[type]) { _stats.hits++; return { ...l1[type], stale: false }; }
-      if (age < TTL.stale) { _stats.hits++; return { ...l1[type], stale: true };  }
+      if (age < TTL.stale) { _stats.hits++; return { ...l1[type], stale: true }; }
     }
     // L2
     const l2 = _lsGet(addr);
@@ -224,6 +224,39 @@
     const payload = { data, source, ts: Date.now() };
     _l1Set(addr, type, payload);
     _lsSet(addr, type, payload);
+  }
+
+  function _buildDiagnostics(type, result) {
+    const source = result?.source || 'unknown';
+    const stale = !!result?.stale;
+    const tokens = Array.isArray(result?.data) ? result.data : [];
+    const txs = Array.isArray(result?.data?.items) ? result.data.items : [];
+
+    let reasonCode = 'ok';
+    let reasonDetail = 'Live data available';
+
+    if (source === 'none') {
+      reasonCode = 'source_none';
+      reasonDetail = 'No live provider returned data; using empty fallback';
+    } else if (stale) {
+      reasonCode = 'stale_cache';
+      reasonDetail = 'Serving cached data while source refresh is pending';
+    } else if (type === 'tokens' && tokens.length === 0) {
+      reasonCode = 'empty_tokens';
+      reasonDetail = 'Provider returned no token balances for this address';
+    } else if (type === 'txs' && txs.length === 0) {
+      reasonCode = 'empty_txs';
+      reasonDetail = 'Provider returned no recent transactions for this address';
+    }
+
+    return {
+      type,
+      source,
+      stale,
+      reasonCode,
+      reasonDetail,
+      generatedAt: Date.now(),
+    };
   }
 
   // ── Fetch implementation ──────────────────────────────────────────
@@ -285,7 +318,7 @@
     if (!_isBackedOff('blockscout')) {
       try {
         const r = await _timedFetch(
-          `https://eth.blockscout.com/api/v2/addresses/${addr}/transactions?limit=10`
+          `https://eth.blockscout.com/api/v2/addresses/${addr}/transactions`
         );
         if (r.ok) {
           _markOk('blockscout');
@@ -371,7 +404,18 @@
 
   function _timedFetch(url, opts = {}, ms = 8000) {
     const ctrl = new AbortController();
-    const tid  = setTimeout(() => ctrl.abort(), ms);
+    const tid = setTimeout(() => ctrl.abort(), ms);
+
+    // Try resilientFetch first for GET requests (adds automatic retry + fallback)
+    if ((!opts.method || opts.method === 'GET') && window.resilientFetch) {
+      return window.resilientFetch(url)
+        .catch(err => {
+          // Fall back to standard fetch if resilientFetch fails
+          return fetch(url, { ...opts, signal: ctrl.signal });
+        })
+        .finally(() => clearTimeout(tid));
+    }
+
     return fetch(url, { ...opts, signal: ctrl.signal })
       .finally(() => clearTimeout(tid));
   }
@@ -388,10 +432,10 @@
       if (!t.tokenInfo) return;
       out.push({
         token: {
-          symbol:   t.tokenInfo.symbol  || '?',
-          name:     t.tokenInfo.name    || '?',
+          symbol: t.tokenInfo.symbol || '?',
+          name: t.tokenInfo.name || '?',
           decimals: String(t.tokenInfo.decimals ?? 18),
-          address:  t.tokenInfo.address || '',
+          address: t.tokenInfo.address || '',
         },
         value: String(t.balance ?? 0),
       });
@@ -402,10 +446,10 @@
   function _normalizeEtherscanTokens(data) {
     return (data.result || []).map(t => ({
       token: {
-        symbol:   t.tokenSymbol  || '?',
-        name:     t.tokenName    || '?',
+        symbol: t.tokenSymbol || '?',
+        name: t.tokenName || '?',
         decimals: String(t.tokenDecimal ?? 18),
-        address:  t.contractAddress || '',
+        address: t.contractAddress || '',
       },
       value: t.value || '0',
     }));
@@ -414,13 +458,13 @@
   function _normalizeEtherscanTxs(data, addr) {
     return {
       items: (data.result || []).map(tx => ({
-        hash:      tx.hash,
-        to:        { hash: tx.to },
-        from:      { hash: tx.from },
-        value:     tx.value,
+        hash: tx.hash,
+        to: { hash: tx.to },
+        from: { hash: tx.from },
+        value: tx.value,
         timestamp: new Date(parseInt(tx.timeStamp) * 1000).toISOString(),
-        method:    tx.functionName ? tx.functionName.split('(')[0] : 'transfer',
-        gas_used:  tx.gasUsed,
+        method: tx.functionName ? tx.functionName.split('(')[0] : 'transfer',
+        gas_used: tx.gasUsed,
       })),
     };
   }
@@ -443,10 +487,10 @@
      */
     async get(chain, wallet, fetchFn, opts = {}) {
       const chainLower = (chain || 'default').toLowerCase();
-      const walletKey  = (wallet || 'global').toLowerCase();
-      const key        = `${chainLower}:${walletKey}`;
-      const ttl        = CHAIN_TTL[chainLower] ?? CHAIN_TTL.default;
-      const now        = Date.now();
+      const walletKey = (wallet || 'global').toLowerCase();
+      const key = `${chainLower}:${walletKey}`;
+      const ttl = CHAIN_TTL[chainLower] ?? CHAIN_TTL.default;
+      const now = Date.now();
 
       // Serve from L1 if within TTL (unless forced)
       if (!opts.force) {
@@ -581,7 +625,11 @@
      */
     getTokens(addr, opts = {}) {
       if (!addr) return Promise.reject(new Error('No address'));
-      return _getWithDedup(addr, 'tokens', _fetchTokensRaw);
+      return _getWithDedup(addr, 'tokens', _fetchTokensRaw)
+        .then(result => ({
+          ...result,
+          diagnostics: _buildDiagnostics('tokens', result),
+        }));
     },
 
     /**
@@ -589,7 +637,11 @@
      */
     getTxs(addr, opts = {}) {
       if (!addr) return Promise.reject(new Error('No address'));
-      return _getWithDedup(addr, 'txs', _fetchTxsRaw);
+      return _getWithDedup(addr, 'txs', _fetchTxsRaw)
+        .then(result => ({
+          ...result,
+          diagnostics: _buildDiagnostics('txs', result),
+        }));
     },
 
     /**
@@ -600,9 +652,9 @@
       if (!addr) return;
       const n = addr.toLowerCase().trim();
       const tokenKey = `${n}:tokens`;
-      const txKey    = `${n}:txs`;
+      const txKey = `${n}:txs`;
       if (!_inflight.has(tokenKey)) _backgroundRefresh(n, 'tokens', _fetchTokensRaw, tokenKey);
-      if (!_inflight.has(txKey))    _backgroundRefresh(n, 'txs',    _fetchTxsRaw,    txKey);
+      if (!_inflight.has(txKey)) _backgroundRefresh(n, 'txs', _fetchTxsRaw, txKey);
     },
 
     /**
@@ -627,18 +679,18 @@
      */
     stats() {
       return {
-        hits:      _stats.hits,
-        misses:    _stats.misses,
-        l1Size:    _l1.size,
-        inflight:  _inflight.size,
-        active:    _active,
-        queued:    _queue.length,
-        chainL1:   _chainL1.size,
+        hits: _stats.hits,
+        misses: _stats.misses,
+        l1Size: _l1.size,
+        inflight: _inflight.size,
+        active: _active,
+        queued: _queue.length,
+        chainL1: _chainL1.size,
         chainInFl: _chainInflight.size,
-        sources:   Object.fromEntries(
+        sources: Object.fromEntries(
           Object.entries(_health).map(([k, v]) => [k, {
-            fails:    v.fails,
-            backoff:  _isBackedOff(k),
+            fails: v.fails,
+            backoff: _isBackedOff(k),
             lastFail: v.lastFail ? new Date(v.lastFail).toLocaleTimeString() : null,
           }])
         ),
@@ -651,7 +703,7 @@
     clear() {
       _l1.clear();
       _chainL1.clear();
-      try { localStorage.removeItem(LS_KEY); } catch (_) {}
+      try { localStorage.removeItem(LS_KEY); } catch (_) { }
       console.log('[WalletCache] Cleared all tiers');
     },
 
@@ -683,7 +735,7 @@
         throw new Error('WhaleAlertMonitor not loaded');
       }
       const result = await window.WhaleAlertMonitor.getWhaleTransactions(chain);
-      return result.txs.filter(t => 
+      return result.txs.filter(t =>
         (t.from?.toLowerCase?.() === wallet.toLowerCase()) ||
         (t.to?.toLowerCase?.() === wallet.toLowerCase())
       );

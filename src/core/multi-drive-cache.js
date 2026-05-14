@@ -16,7 +16,7 @@
  * ════════════════════════════════════════════════════════════════════════════
  */
 
-(function() {
+(function () {
   'use strict';
 
   // SafeGuard: Check if in browser (no Node.js requires needed here - it's a browser module)
@@ -39,7 +39,7 @@
 
       // Cloud folders discovered async during _initAsync
       this.onedriveFolders = [];
-      this.onedriveFolder  = null;
+      this.onedriveFolder = null;
       this.googleDriveFolder = null;
 
       // In-memory cache
@@ -317,7 +317,7 @@
       // Fire-and-forget: each write is independent
       allPaths.forEach(dirPath => {
         const filePath = this._join(dirPath, this.cacheFile);
-        window.dataStore.writeFile(filePath, cacheJson).catch(() => {});
+        window.dataStore.writeFile(filePath, cacheJson).catch(() => { });
       });
     }
 
@@ -351,14 +351,14 @@
           const now = Date.now();
           const maxAge = 2 * 60 * 60 * 1000;
 
-          this.data.predictions    = (loaded.predictions    || []).filter(p => now - p.timestamp < maxAge);
-          this.data.settlements    = (loaded.settlements    || []).filter(s => now - s.timestamp < maxAge);
-          this.data.candles        = (loaded.candles        || []).filter(c => now - c.timestamp < maxAge);
-          this.data.orders         = (loaded.orders         || []).filter(o => now - o.timestamp < maxAge);
-          this.data.errors         = (loaded.errors         || []).slice(-500);
-          this.data.correlations   = (loaded.correlations   || []).filter(c => now - c.timestamp < maxAge);
-          this.data.marketContexts = (loaded.marketContexts || loaded.contexts   || []).filter(c => now - c.timestamp < maxAge);
-          this.data.inferences     = (loaded.inferences     || loaded.inference  || []).filter(i => now - i.timestamp < maxAge);
+          this.data.predictions = (loaded.predictions || []).filter(p => now - p.timestamp < maxAge);
+          this.data.settlements = (loaded.settlements || []).filter(s => now - s.timestamp < maxAge);
+          this.data.candles = (loaded.candles || []).filter(c => now - c.timestamp < maxAge);
+          this.data.orders = (loaded.orders || []).filter(o => now - o.timestamp < maxAge);
+          this.data.errors = (loaded.errors || []).slice(-500);
+          this.data.correlations = (loaded.correlations || []).filter(c => now - c.timestamp < maxAge);
+          this.data.marketContexts = (loaded.marketContexts || loaded.contexts || []).filter(c => now - c.timestamp < maxAge);
+          this.data.inferences = (loaded.inferences || loaded.inference || []).filter(i => now - i.timestamp < maxAge);
 
           console.log(`[MultiDriveCache] Loaded from ${dirPath}: ${this.data.predictions.length} predictions`);
           return; // First successful drive wins
