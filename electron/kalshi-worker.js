@@ -18,6 +18,24 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
+function parseCredentialFile(content) {
+  const rawLines = content.split(/\r?\n/);
+  const nonEmpty = rawLines.map(l => l.trim()).filter(Boolean);
+  const apiKeyId = nonEmpty[0] || null;
+
+  const beginIdx = rawLines.findIndex(l => l.includes('-----BEGIN'));
+  const endIdx = rawLines.findIndex(l => l.includes('-----END'));
+  let privateKeyPem = null;
+
+  if (beginIdx !== -1 && endIdx !== -1 && endIdx >= beginIdx) {
+    privateKeyPem = rawLines.slice(beginIdx, endIdx + 1).join('\n').trim();
+  } else if (nonEmpty.length > 1) {
+    privateKeyPem = nonEmpty.slice(1).join('\n').trim();
+  }
+
+  return { apiKeyId, privateKeyPem };
+}
+
 // Parse CLI args
 const args = process.argv.slice(2);
 const config = {
@@ -35,9 +53,9 @@ for (let i = 0; i < args.length; i++) {
     const credFile = args[i + 1];
     if (fs.existsSync(credFile)) {
       const content = fs.readFileSync(credFile, 'utf8');
-      const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
-      config.apiKeyId = lines[0];
-      config.privateKeyPem = lines.slice(4).join('\n');
+      const parsed = parseCredentialFile(content);
+      config.apiKeyId = parsed.apiKeyId;
+      config.privateKeyPem = parsed.privateKeyPem;
     }
   }
 }
@@ -47,20 +65,13 @@ if (!config.apiKeyId) {
   const credPath = path.join(__dirname, '../secrets/KALSHI-API-KEY.txt');
   if (fs.existsSync(credPath)) {
     const content = fs.readFileSync(credPath, 'utf8');
-    const lines = content.split('\n');
-    config.apiKeyId = lines[0].trim();
-    
-    // Find BEGIN marker and extract PEM
-    const beginIdx = lines.findIndex(l => l.includes('-----BEGIN'));
-    if (beginIdx !== -1) {
-      config.privateKeyPem = lines.slice(beginIdx).join('\n').trim();
-    } else {
-      config.privateKeyPem = lines.slice(4).join('\n').trim();
-    }
+    const parsed = parseCredentialFile(content);
+    config.apiKeyId = parsed.apiKeyId;
+    config.privateKeyPem = parsed.privateKeyPem;
   }
 }
 
-if (!config.apiKeyId) {
+if (!config.apiKeyId || !config.privateKeyPem) {
   console.error('[Kalshi Worker] ERROR: No API credentials found');
   console.error('  Provide via --key or --file, or place KALSHI-API-KEY.txt in current directory');
   process.exit(1);
