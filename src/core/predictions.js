@@ -464,6 +464,16 @@
   // _sessMult is hardwired to 1.0 at the score computation line below.
 
   // ================================================================
+  // REGIME-ADAPTIVE CONFIDENCE THRESHOLDS
+  // Applied when market regime is classified via statistical analysis
+  // ================================================================
+  const REGIME_CONFIDENCE_MAP = {
+    'trend': 0.58,           // Trending markets: lower threshold (momentum driving confidence)
+    'mean_reversion': 0.62,  // Mean-reversion zones: higher threshold (need strong mean reversion signal)
+    'chop': 0.72,            // Choppy/indecisive: highest threshold (filter noise)
+  };
+
+  // ================================================================
   // PATCH1.10 — SIGNAL QUALITY GATE
   // Minimum thresholds a live prediction must pass before being
   // considered a conclusive directional call in the UI.
@@ -542,7 +552,7 @@
   };
 
   /**
-   * evaluateSignalGate(pred, coin)
+   * evaluateSignalGate(pred, coin, regime)
    * Returns quality assessment for a live prediction.
    *
    * quality: 'high'    — passes all soft thresholds, strong conviction signal
@@ -552,8 +562,9 @@
    * gated: true when quality === 'blocked' (signal should show HOLD in UI)
    *
    * ★ SAFETY PATCH 2026-05-14: Added close-window guard (skip final 45s of 15m candle)
+   * ★ REGIME-ADAPTIVE THRESHOLDS: Confidence adjusted based on market regime
    */
-  function evaluateSignalGate(pred, coin) {
+  function evaluateSignalGate(pred, coin, regime) {
     if (!pred || pred.signal === 'neutral' || !Number.isFinite(pred.score)) {
       return { passed: true, gated: false, quality: 'medium', label: 'NEUTRAL', reasons: [] };
     }
@@ -575,6 +586,7 @@
     const routedAction = pred.diagnostics?.routedAction ?? '';
     const quantRegime = pred.diagnostics?.quantRegime || null;
     const reasons = [];
+    const confidence_adjustments = {};
 
     // Apply coin-specific gate if available
     // If adaptive tuner is running, use its current gates
@@ -593,6 +605,36 @@
     }
     const gate = Object.assign({}, SIGNAL_GATE, gateOverride);
 
+    // ★ REGIME-ADAPTIVE CONFIDENCE ADJUSTMENT
+    let adaptive_confidence = conf;
+    let regime_state = regime?.regime_state || 'chop';
+    let regime_confidence_floor = REGIME_CONFIDENCE_MAP[regime_state] || 0.58;
+
+    if (regime && regime.regime_state) {
+      regime_state = regime.regime_state;
+      regime_confidence_floor = REGIME_CONFIDENCE_MAP[regime_state];
+      confidence_adjustments.regime_state = regime_state;
+      confidence_adjustments.base_confidence = conf;
+      confidence_adjustments.regime_floor = regime_confidence_floor;
+
+      // Variance ratio reinforcement: if VR > 1.1 && trending signal → reduce confidence (already trending hard)
+      if (regime.variance_ratio > 1.1 && pred.signal === 'up') {
+        adaptive_confidence -= 2;  // -2% adjustment
+        confidence_adjustments.vr_trending_adjustment = -2;
+      } else if (regime.variance_ratio > 1.1 && pred.signal === 'down') {
+        adaptive_confidence -= 2;
+        confidence_adjustments.vr_trending_adjustment = -2;
+      }
+
+      // Entropy penalty: if entropy > 0.65 → add confidence buffer (noise detected, need stronger signal)
+      if (regime.entropy_score > 0.65) {
+        adaptive_confidence += 4;  // +4% adjustment
+        confidence_adjustments.entropy_noise_adjustment = +4;
+      }
+
+      confidence_adjustments.final_adaptive_confidence = Math.max(regime_confidence_floor, adaptive_confidence);
+    }
+
     // ★ REVERSAL-ARM GATE EXCEPTION: Lower confidence floor for high-conviction reversals
     const reversalFlags = pred.diagnostics?.reversalFlags || [];
     const isExhaustedMove = Math.abs(pred.score ?? 0) >= 0.55;
@@ -604,20 +646,38 @@
       gate.minAbsScore = 0.26;
       gate.minAgreement = 0.48;
       gate.maxConflict = 0.46;
+      confidence_adjustments.reversal_arm_applied = true;
+    }
+
+    // Use regime-based confidence floor if applicable
+    let effective_confidence_floor = gate.minConfidence;
+    if (regime && regime.regime_state) {
+      effective_confidence_floor = Math.max(gate.minConfidence, REGIME_CONFIDENCE_MAP[regime.regime_state]);
     }
 
     // Hard-gate failures
     if (routedAction === 'invalidated') {
       return { passed: false, gated: true, quality: 'blocked', label: '⛔ INVALIDATED', reasons: ['Signal invalidated by router'] };
     }
-    if (conf < gate.minConfidence) reasons.push('Low confidence (' + conf + '%)');
+    if (adaptive_confidence < effective_confidence_floor) reasons.push('Low confidence (' + Math.round(adaptive_confidence) + '%, floor: ' + Math.round(effective_confidence_floor) + '%)');
     if (absScore < gate.minAbsScore) reasons.push('Weak score (' + absScore.toFixed(2) + ')');
     if (agreement < gate.minAgreement) reasons.push('Low agreement (' + Math.round(agreement * 100) + '%)');
     if (conflict >= gate.maxConflict) reasons.push('High conflict (' + Math.round(conflict * 100) + '%)');
     if (reliability > 0 && reliability < gate.minReliability) reasons.push('Weak backtest (' + Math.round(reliability * 100) + '%)');
-    if (quantRegime?.state === 'chop' && conf < (gate.medConfidence + 4) && agreement < gate.medAgreement && !qualifiesReversalArm) {
+    if (regime_state === 'chop' && adaptive_confidence < (gate.medConfidence + 4) && agreement < gate.medAgreement && !qualifiesReversalArm) {
       reasons.push('Choppy quant regime guard');
     }
+
+    // Store regime diagnostics in prediction object for telemetry
+    if (!pred.diagnostics) pred.diagnostics = {};
+    pred.diagnostics.regime = {
+      h_exponent: regime?.h_exponent || 0,
+      variance_ratio: regime?.variance_ratio || 1.0,
+      entropy_score: regime?.entropy_score || 0.5,
+      regime_state: regime_state,
+      adaptive_confidence: Math.round(adaptive_confidence),
+      confidence_adjustments: confidence_adjustments
+    };
 
     if (reasons.length > 0) {
       return { passed: false, gated: true, quality: 'blocked', label: '⛔ HOLD', reasons };
@@ -625,7 +685,7 @@
 
     // Soft-gate check (medium conviction)
     const softFails = [];
-    if (conf < gate.medConfidence) softFails.push('Conf ' + conf + '%');
+    if (adaptive_confidence < gate.medConfidence) softFails.push('Conf ' + Math.round(adaptive_confidence) + '%');
     if (agreement < gate.medAgreement) softFails.push('Agr ' + Math.round(agreement * 100) + '%');
     if (absScore < gate.medAbsScore) softFails.push('Score ' + absScore.toFixed(2));
     if (reliability > 0 && reliability < gate.medReliability) softFails.push('Rel ' + Math.round(reliability * 100) + '%');
@@ -6117,8 +6177,24 @@
       candleCount1m: cache.candles1m?.length || 0,
     };
 
-    // PATCH1.10: attach signal quality gate
-    result.gate = evaluateSignalGate(result, coin.sym);
+    // ★ REGIME CLASSIFICATION — Statistical analysis for adaptive thresholds
+    // Classifies market regime using Hurst exponent, Variance Ratio, and Permutation Entropy
+    let regime = null;
+    if (window.RegimeClassifier && cache.candles && cache.candles.length >= 65) {
+      try {
+        const closes = cache.candles.map(c => c.close);
+        const ohlc = cache.candles;
+        regime = window.RegimeClassifier.classifyRegime(closes, ohlc);
+        if (regime) {
+          console.log(`[predictions] ${coin.sym} regime: ${regime.regime_state} (H=${regime.h_exponent.toFixed(2)}, VR=${regime.variance_ratio.toFixed(2)}, Ent=${regime.entropy_score.toFixed(2)}, conf=${regime.confidence})`);
+        }
+      } catch (err) {
+        console.warn(`[predictions] Regime classification error for ${coin.sym}:`, err.message);
+      }
+    }
+
+    // PATCH1.10: attach signal quality gate (regime-adaptive)
+    result.gate = evaluateSignalGate(result, coin.sym, regime);
 
     // PATCH6: Attach entry delay based on volatility
     if (window._adaptiveTuner) {
