@@ -9,6 +9,7 @@
 
 const { ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 
 // Kalshi worker state
@@ -21,6 +22,31 @@ const kalshiWorkerState = {
   readyLatencyMs: null,
   lastHealthError: null,
 };
+
+function resolveWorkerScriptPath() {
+  const packagedScript = process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar', 'electron', 'kalshi-worker.js')
+    : null;
+  if (packagedScript && fs.existsSync(packagedScript)) return packagedScript;
+  return path.join(__dirname, 'kalshi-worker.js');
+}
+
+function resolveRuntimeBaseDir() {
+  const execDir = path.dirname(process.execPath || '');
+  if (execDir && fs.existsSync(execDir)) return execDir;
+  if (fs.existsSync(__dirname)) return __dirname;
+  return process.cwd();
+}
+
+function resolveCredentialFilePath(runtimeBaseDir) {
+  const configured = process.env.KALSHI_API_KEY_FILE || path.join('secrets', 'KALSHI-API-KEY.txt');
+  const candidate = path.isAbsolute(configured)
+    ? configured
+    : path.resolve(runtimeBaseDir, configured);
+  if (fs.existsSync(candidate)) return candidate;
+  const fallback = path.join(runtimeBaseDir, 'secrets', 'KALSHI-API-KEY.txt');
+  return fs.existsSync(fallback) ? fallback : candidate;
+}
 
 async function probeWorkerHealth(timeoutMs = 800) {
   try {
@@ -58,15 +84,26 @@ async function startKalshiWorker(options = {}) {
     kalshiWorkerState.lastHealthError = null;
 
     const nodeExec = process.execPath || 'node';
+    const runtimeBaseDir = resolveRuntimeBaseDir();
+    const workerScript = resolveWorkerScriptPath();
+    const credentialFile = resolveCredentialFilePath(runtimeBaseDir);
+
+    if (!fs.existsSync(workerScript)) {
+      console.error(`[Main] Kalshi worker script not found: ${workerScript}`);
+      resolve(false);
+      return;
+    }
 
     kalshiWorker = spawn(nodeExec, [
-      path.join(__dirname, 'kalshi-worker.js'),
+      workerScript,
       '--port', '3050',
-      '--env', 'production'
+      '--env', 'production',
+      '--file', credentialFile
     ], {
-      detached: true,
+      detached: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: __dirname,
+      cwd: runtimeBaseDir,
+      windowsHide: true,
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
