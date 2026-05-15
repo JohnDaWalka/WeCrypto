@@ -593,6 +593,19 @@
     }
     const gate = Object.assign({}, SIGNAL_GATE, gateOverride);
 
+    // ★ REVERSAL-ARM GATE EXCEPTION: Lower confidence floor for high-conviction reversals
+    const reversalFlags = pred.diagnostics?.reversalFlags || [];
+    const isExhaustedMove = Math.abs(pred.score ?? 0) >= 0.55;
+    const hasMomentumDivergence = (pred.diagnostics?.momentumQuality ?? 0) >= 0.62;
+    const qualifiesReversalArm = reversalFlags.filter(f => f.severity >= 2).length >= 2 && isExhaustedMove && hasMomentumDivergence;
+    
+    if (qualifiesReversalArm) {
+      gate.minConfidence = 58; // Reversal-arm threshold: lower than normal 70% to allow early reversal entries
+      gate.minAbsScore = 0.26;
+      gate.minAgreement = 0.48;
+      gate.maxConflict = 0.46;
+    }
+
     // Hard-gate failures
     if (routedAction === 'invalidated') {
       return { passed: false, gated: true, quality: 'blocked', label: '⛔ INVALIDATED', reasons: ['Signal invalidated by router'] };
@@ -602,7 +615,7 @@
     if (agreement < gate.minAgreement) reasons.push('Low agreement (' + Math.round(agreement * 100) + '%)');
     if (conflict >= gate.maxConflict) reasons.push('High conflict (' + Math.round(conflict * 100) + '%)');
     if (reliability > 0 && reliability < gate.minReliability) reasons.push('Weak backtest (' + Math.round(reliability * 100) + '%)');
-    if (quantRegime?.state === 'chop' && conf < (gate.medConfidence + 4) && agreement < gate.medAgreement) {
+    if (quantRegime?.state === 'chop' && conf < (gate.medConfidence + 4) && agreement < gate.medAgreement && !qualifiesReversalArm) {
       reasons.push('Choppy quant regime guard');
     }
 
@@ -6053,7 +6066,7 @@
       normalizedScore = clamp(normalizedScore * 0.45, -1, 1);
       normalizedConfidence = Math.round(clamp(normalizedConfidence * 0.62, 0, 95));
     }
-    const normalizedSignal = resolvedRouterAction === 'invalidated' || resolvedRouterAction === 'stand-aside'
+    const normalizedSignal = resolvedRouterAction === 'invalidated'
       ? 'neutral'
       : signalFromScore(normalizedScore);
 

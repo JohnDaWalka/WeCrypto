@@ -250,8 +250,14 @@
 
   // Restore persisted logs from localStorage on startup
   (function restorePersistedData() {
-    try { const r = localStorage.getItem(PRED_LOG_STORE); if (r) window._predLog = JSON.parse(r); } catch (e) { }
-    try { const r = localStorage.getItem(KALSHI_LOG_STORE); if (r) window._kalshiLog = JSON.parse(r); } catch (e) { }
+    const LOG_TTL_MS = 24 * 3600 * 1000; // 24h TTL for sticky loss logs
+    const now = Date.now();
+    const shouldClearOldLogs = (logStr) => {
+      try { const parsed = JSON.parse(logStr); const meta = parsed._metadata || {}; return meta.timestamp && (now - meta.timestamp) > LOG_TTL_MS; } catch { return false; }
+    };
+    
+    try { const r = localStorage.getItem(PRED_LOG_STORE); if (r && !shouldClearOldLogs(r)) window._predLog = JSON.parse(r); else localStorage.removeItem(PRED_LOG_STORE); } catch (e) { }
+    try { const r = localStorage.getItem(KALSHI_LOG_STORE); if (r && !shouldClearOldLogs(r)) window._kalshiLog = JSON.parse(r); else localStorage.removeItem(KALSHI_LOG_STORE); } catch (e) { }
     try { const r = localStorage.getItem(LAST_PRED_STORE); if (r) window._lastPrediction = JSON.parse(r); } catch (e) { }
     try { const r = localStorage.getItem(LAST_KALSHI_STORE); if (r) window._lastKalshiSnapshot = JSON.parse(r); } catch (e) { }
     try { const r = localStorage.getItem(KALSHI_ERR_STORE); if (r) window._kalshiErrors = JSON.parse(r); } catch (e) { }

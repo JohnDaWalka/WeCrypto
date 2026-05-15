@@ -584,7 +584,8 @@
         if (!s.vol) s.vol = binResults[coin.sym].vol;
       } else if (sampleBuf[coin.sym]?.length > 0) {
         const last = sampleBuf[coin.sym][sampleBuf[coin.sym].length - 1];
-        if (last.sources.BIN) s.sources.BIN = last.sources.BIN;
+        const ageMs = now - last.t;
+        if (ageMs <= 60000 && last.sources.BIN) s.sources.BIN = last.sources.BIN; // TTL: reject stale carry-forward
       }
 
       // OKX
@@ -595,7 +596,8 @@
         if (!s.vol) s.vol = okxResults[coin.sym].vol;
       } else if (sampleBuf[coin.sym]?.length > 0) {
         const last = sampleBuf[coin.sym][sampleBuf[coin.sym].length - 1];
-        if (last.sources.OKX) s.sources.OKX = last.sources.OKX;
+        const ageMs = now - last.t;
+        if (ageMs <= 60000 && last.sources.OKX) s.sources.OKX = last.sources.OKX; // TTL: reject stale carry-forward
       }
 
       // Kraken
@@ -606,7 +608,8 @@
         if (!s.vol) s.vol = krkResults[coin.sym].vol;
       } else if (sampleBuf[coin.sym]?.length > 0) {
         const last = sampleBuf[coin.sym][sampleBuf[coin.sym].length - 1];
-        if (last.sources.KRK) s.sources.KRK = last.sources.KRK;
+        const ageMs = now - last.t;
+        if (ageMs <= 60000 && last.sources.KRK) s.sources.KRK = last.sources.KRK; // TTL: reject stale carry-forward
       }
 
       // DexScreener
@@ -615,7 +618,8 @@
         s.meta.dex = dexResults[coin.sym];
       } else if (sampleBuf[coin.sym]?.length > 0) {
         const last = sampleBuf[coin.sym][sampleBuf[coin.sym].length - 1];
-        if (last.sources.DEX) { s.sources.DEX = last.sources.DEX; s.meta.dex = last.meta?.dex; }
+        const ageMs = now - last.t;
+        if (ageMs <= 60000 && last.sources.DEX) { s.sources.DEX = last.sources.DEX; s.meta.dex = last.meta?.dex; } // TTL gate
       }
 
       // Drop venue outliers so one bad quote cannot fabricate a fake arb window.
