@@ -5693,6 +5693,16 @@
     return Number.isFinite(v) ? `${(v * 100).toFixed(dp)}%` : '—';
   }
 
+  function _obsEsc(v) {
+    return String(v ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[ch]));
+  }
+
   function _obsLatencyBuckets(valuesMs = []) {
     const labels = ['0-5s', '5-15s', '15-30s', '30-60s', '1-2m', '2-5m', '5-10m', '10m+'];
     const bounds = [5000, 15000, 30000, 60000, 120000, 300000, 600000, Infinity];
@@ -5787,6 +5797,8 @@
     const journalTrades = Array.isArray(journal?.trades) ? journal.trades : [];
     const quantDrift = _obsGetQuantDriftSnapshot();
     const emergencyTools = _obsEmergencyToolsSummary();
+    const networkSummary = window.NetworkLog?.summary?.() || { total: 0, lastTs: null, byProvider: {} };
+    const recentNetwork = window.NetworkLog?.getRecent?.(10) || [];
     const sig = [
       resLog.length,
       resLog.length ? (resLog[resLog.length - 1].settledTs || resLog[resLog.length - 1].ts || 0) : 0,
@@ -5799,6 +5811,8 @@
       quantDrift?.overall_status || 'NO_QUANT_DRIFT',
       emergencyTools.active,
       emergencyTools.total,
+      networkSummary.total,
+      networkSummary.lastTs || 0,
     ].join('|');
 
     if (_observabilityCache.sig === sig && _observabilityCache.data && (Date.now() - _observabilityCache.ts) < 10_000) {
@@ -6111,6 +6125,10 @@
       calibrationRows,
       latency,
       featureDrift,
+      network: {
+        summary: networkSummary,
+        recent: recentNetwork,
+      },
       attributionRows,
       sourceContribution,
       drawdownRows,
@@ -6181,6 +6199,31 @@
       .map(([k, v]) => `<span style="padding:2px 7px;border-radius:999px;background:var(--color-surface-3);font-size:10px;color:var(--color-text-muted)">${k}: ${v}</span>`)
       .join(' ');
 
+    const networkProviderRows = Object.entries(m.network.summary.byProvider || {})
+      .sort((a, b) => b[1].total - a[1].total)
+      .slice(0, 6)
+      .map(([provider, row]) => {
+        const last = row.lastTs ? new Date(row.lastTs).toLocaleTimeString() : '—';
+        return `<tr>
+          <td style="font-weight:700">${_obsEsc(provider)}</td>
+          <td>${row.total}</td>
+          <td>${row.http}</td>
+          <td>${row.network}</td>
+          <td style="font-size:10px;color:var(--color-text-muted)">${last}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="5" style="color:var(--color-text-faint)">No network failures captured.</td></tr>';
+
+    const recentNetworkRows = (m.network.recent || []).slice().reverse().map(e => {
+      const status = e.status || e.type;
+      const col = e.type === 'NETWORK_ERROR' || Number(e.status) >= 500 ? 'var(--color-red)' : 'var(--color-orange)';
+      return `<tr>
+        <td style="font-size:10px;color:var(--color-text-muted)">${new Date(e.ts).toLocaleTimeString()}</td>
+        <td style="font-weight:700">${_obsEsc(e.provider)}</td>
+        <td style="color:${col};font-weight:700">${_obsEsc(status)}</td>
+        <td style="font-size:10px;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_obsEsc(e.url)}">${_obsEsc(e.url)}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="4" style="color:var(--color-text-faint)">No recent network failures.</td></tr>';
+
     const attrRows = m.attributionRows.length
       ? m.attributionRows.map(r => {
         const col = r.score >= 0 ? 'var(--color-green)' : 'var(--color-red)';
@@ -6247,6 +6290,27 @@
           <div class="card-title">Top Drift/Error Flags</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;line-height:1.8">
             ${driftErrRows || '<span style="font-size:10px;color:var(--color-text-faint)">No recent flagged errors.</span>'}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title">Network Log</div>
+        <div style="font-size:11px;color:var(--color-text-muted);margin-bottom:8px">
+          Captured by <code>window.NetworkLog</code>. Console helpers: <code>NetworkLog.report()</code>, <code>NetworkLog.export()</code>, <code>NetworkLog.clear()</code>.
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(260px,0.8fr) minmax(360px,1.2fr);gap:12px">
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Provider</th><th>Total</th><th>HTTP</th><th>Network</th><th>Last</th></tr></thead>
+              <tbody>${networkProviderRows}</tbody>
+            </table>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Time</th><th>Provider</th><th>Status</th><th>URL</th></tr></thead>
+              <tbody>${recentNetworkRows}</tbody>
+            </table>
           </div>
         </div>
       </div>

@@ -51,6 +51,9 @@
   <script defer src="vendors/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script defer src="vendors/lightweight-charts.standalone.production.js"></script>
 
+  <!-- Network Log (must load before any market-data fetches) -->
+  <script src="../src/infra/network-log.js"></script>
+
   <!-- WECRYPTO Startup & Calibration (IMPORTANT: load before app.js) -->
   <script src="../src/kalshi/adaptive-weight-restorer.js"></script>
   <script src="../src/core/h15-tuner.js"></script>
