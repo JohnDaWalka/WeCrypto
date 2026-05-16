@@ -32,8 +32,13 @@
       "electron/**",
       "assets/**",
       "settlement-retune.js",
-      "we-crypto-proxy.exe",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "proxy/target/x86_64-pc-windows-gnu/release/we-crypto-proxy.exe",
+        "to": "we-crypto-proxy.exe"
+      }
     ],
     "asarUnpack": [
       "we-crypto-proxy.exe"
@@ -84,5 +89,8 @@
     "kalshi-typescript": "^3.15.0",
     "selfsigned": "^5.5.0",
     "ws": "^8.18.3"
+  },
+  "bin": {
+    "wecryp": "./wecryp-cli.js"
   }
 }

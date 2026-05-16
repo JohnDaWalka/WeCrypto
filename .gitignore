@@ -1,8 +1,12 @@
 # Dependencies
 node_modules/
+node_modules (1)/
 
 # Build output
 dist/
+dist-patch/
+dist-verify*/
+dist-release*/
 build/
 
 # Electron build artifacts
@@ -11,12 +15,17 @@ build/
 
 # Logs
 *.log
+logs/
+backtest-logs/
 debug-logs/
 
 # Secrets — NEVER COMMIT
 secrets/
 KALSHI-API-KEY.txt
 *-api-key*
+*APIKEY*
+*API-KEY*
+ENDPOINTS_AND_KEYS.md
 *.key
 .env
 .env.*

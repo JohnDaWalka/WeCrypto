@@ -157,6 +157,7 @@
 
       // Capture what the model currently predicts for this coin
       const pred = window._lastPrediction?.[sym];
+      const intent = window.KalshiOrchestrator?.getIntent?.(sym) || null;
       const modelDir = pred?.direction ?? null;
       const entryProb = k15.probability ?? null;
 
@@ -176,19 +177,34 @@
         capPrice: k15.capPrice ?? null,
         strikeDir: k15.strikeDir ?? 'above', // 'above'|'below' — YES direction
         strikeType: k15.strikeType ?? null,    // raw API strike_type
-        edgeCents: window.KalshiOrchestrator?.getIntent?.(sym)?.edgeCents ?? null,
-        entryPrice: window.KalshiOrchestrator?.getIntent?.(sym)?.entryPrice ?? null,
-        side: window.KalshiOrchestrator?.getIntent?.(sym)?.side ?? null,
-        modelProbUp: window.KalshiOrchestrator?.getIntent?.(sym)?.modelProbUp ?? null,
-        orchestratorAction: window.KalshiOrchestrator?.getIntent?.(sym)?.action ?? null,
-        orchestratorAlign: window.KalshiOrchestrator?.getIntent?.(sym)?.alignment ?? null,
+        edgeCents: intent?.edgeCents ?? null,
+        entryPrice: intent?.entryPrice ?? null,
+        side: intent?.side ?? null,
+        modelProbUp: intent?.modelProbUp ?? null,
+        orchestratorAction: intent?.action ?? null,
+        orchestratorAlign: intent?.alignment ?? null,
         // Close-snapshot and orchestrator enrichment
         closeSnapshots: [],
         modelScore: window._lastPrediction?.[sym]?.score ?? null,
-        sweetSpot: window.KalshiOrchestrator?.getIntent?.(sym)?.sweetSpot ?? false,
-        confidence: window.KalshiOrchestrator?.getIntent?.(sym)?.confidence ?? null,
-        crowdFade: window.KalshiOrchestrator?.getIntent?.(sym)?.crowdFade ?? false,
-        crowdFadeDir: window.KalshiOrchestrator?.getIntent?.(sym)?.direction ?? null,
+        sweetSpot: intent?.sweetSpot ?? false,
+        confidence: intent?.confidence ?? null,
+        crowdFade: intent?.crowdFade ?? false,
+        crowdFadeDir: intent?.direction ?? null,
+        timingRegime: intent?.timingRegime ?? null,
+        timingLabel: intent?.timingLabel ?? null,
+        timingScore: intent?.timingScore ?? null,
+        timingReasons: intent?.timingReasons ?? [],
+        timingBlocks: intent?.timingBlocks ?? [],
+        timingAdaptive: intent?.timingAdaptive ?? null,
+        closeValue: intent?.closeValue ?? false,
+        closeValueCandidate: intent?.closeValueCandidate ?? false,
+        scalpFlip: intent?.scalpFlip ?? false,
+        scalpCandidate: intent?.scalpCandidate ?? false,
+        missedOpportunityScore: intent?.missedOpportunityScore ?? 0,
+        microFlowScore: intent?.microFlowScore ?? null,
+        scalpSetupScore: intent?.scalpSetupScore ?? null,
+        microToxicity: intent?.microToxicity ?? null,
+        exitPlan: intent?.exitPlan ?? null,
       });
 
       const secsToClose = Math.round((closeMs - now) / 1000);
@@ -537,6 +553,21 @@
       modelProbUp: entry.modelProbUp ?? null,
       orchestratorAction: entry.orchestratorAction ?? null,
       orchestratorAlign: entry.orchestratorAlign ?? null,
+      timingRegime: entry.timingRegime ?? null,
+      timingLabel: entry.timingLabel ?? null,
+      timingScore: entry.timingScore ?? null,
+      timingReasons: entry.timingReasons ?? [],
+      timingBlocks: entry.timingBlocks ?? [],
+      timingAdaptive: entry.timingAdaptive ?? null,
+      closeValue: entry.closeValue ?? false,
+      closeValueCandidate: entry.closeValueCandidate ?? false,
+      scalpFlip: entry.scalpFlip ?? false,
+      scalpCandidate: entry.scalpCandidate ?? false,
+      missedOpportunityScore: entry.missedOpportunityScore ?? 0,
+      microFlowScore: entry.microFlowScore ?? null,
+      scalpSetupScore: entry.scalpSetupScore ?? null,
+      microToxicity: entry.microToxicity ?? null,
+      exitPlan: entry.exitPlan ?? null,
       missedOpportunity: (
         modelCorrect === true &&
         (entry.orchestratorAction === 'skip' || entry.orchestratorAction === 'watch')
@@ -544,6 +575,10 @@
         action: entry.orchestratorAction,
         alignment: entry.orchestratorAlign ?? null,
         edgeCents: entry.edgeCents ?? null,
+        timingRegime: entry.timingRegime ?? null,
+        timingScore: entry.timingScore ?? null,
+        closeValueCandidate: entry.closeValueCandidate ?? false,
+        scalpCandidate: entry.scalpCandidate ?? false,
       } : null,
       // Enhanced contract analysis fields
       closeSnapshots: entry.closeSnapshots ?? [],

@@ -45,31 +45,57 @@ class HistoricalSettlementFetcher {
     }
 
     try {
-      // Kalshi markets endpoint filters by status
-      const url = `${this.kalshiBase}/markets?status=settled&limit=${limit}`;
-      const response = await fetch(url, { timeout: 8000 });
+      // Prefer per-series settled fetch (more reliable than scanning all markets)
+      // Include all 4-coin focus + DOGE
+      const seriesList = ['KXBTC15M', 'KXETH15M', 'KXSOL15M', 'KXXRP15M', 'KXDOGE15M'];
+      let aggregatedMarkets = [];
 
-      if (!response.ok) {
-        console.error(`[HistoricalFetcher] Kalshi API error: ${response.status}`);
-        return [];
+      for (const series of seriesList) {
+        try {
+          const url = `${this.kalshiBase}/markets?series_ticker=${series}&status=settled&limit=${limit}`;
+          const resp = await fetch(url);
+          if (!resp || !resp.ok) {
+            console.warn(`[HistoricalFetcher] Kalshi per-series ${series} HTTP ${resp && resp.status}`);
+            continue;
+          }
+          const d = await resp.json();
+          if (Array.isArray(d.markets) && d.markets.length) {
+            console.log(`[HistoricalFetcher] ${series}: fetched ${d.markets.length} settled markets`);
+            aggregatedMarkets.push(...d.markets);
+          } else {
+            console.log(`[HistoricalFetcher] ${series}: no settled markets returned`);
+          }
+        } catch (e) {
+          console.warn(`[HistoricalFetcher] Kalshi per-series fetch failed for ${series}: ${e && e.message ? e.message : e}`);
+        }
       }
 
-      const data = await response.json();
-      const markets = data.markets || [];
+      // Fallback: query all settled markets if per-series returned nothing
+      let markets = aggregatedMarkets;
+      if (!markets || markets.length === 0) {
+        const url = `${this.kalshiBase}/markets?status=settled&limit=${limit}`;
+        const response = await fetch(url);
+        if (!response || !response.ok) {
+          console.error(`[HistoricalFetcher] Kalshi API error: ${response && response.status}`);
+          return [];
+        }
+        const data = await response.json();
+        markets = data.markets || [];
+      }
 
       const settled = markets
         .filter(m => {
           // Only 15M crypto markets
           if (!m.ticker) return false;
           if (!m.ticker.includes('15M')) return false;
-          if (!['BTC', 'ETH', 'SOL', 'XRP'].some(sym => m.ticker.includes(sym))) return false;  // 4-coin focus
+          if (!['BTC', 'ETH', 'SOL', 'XRP', 'DOGE'].some(sym => m.ticker.includes(sym))) return false;  // 5-coin focus
           const statusNorm = String(m.status || '').toLowerCase();
           if (statusNorm !== 'settled' && statusNorm !== 'finalized') return false;
           return true;
         })
         .map(m => {
-          // Extract coin symbol from ticker (e.g., "KXBTC15M220430" → "BTC")
-          const symMatch = m.ticker.match(/KX(\w+)15M/);
+          // Extract coin symbol from ticker (e.g., "KXBTC15M-26MAY150115-15" → "BTC")
+          const symMatch = m.ticker.match(/KX([A-Z0-9]+)15M/);
           const symbol = symMatch ? symMatch[1] : null;
 
           return {
@@ -88,16 +114,30 @@ class HistoricalSettlementFetcher {
             // Raw market object for debugging
             raw: m,
           };
-        })
-        .slice(0, 50); // Keep most recent 50
+        });
 
-      this.settledCache.kalshi = settled;
+      // Balance per-coin: distribute evenly rather than first-200-wins
+      const byCoin = {};
+      for (const m of settled) {
+        if (!byCoin[m.symbol]) byCoin[m.symbol] = [];
+        byCoin[m.symbol].push(m);
+      }
+
+      const balanced = [];
+      const maxPerCoin = 50; // up to 50 recent per coin
+      for (const [sym, mktList] of Object.entries(byCoin)) {
+        balanced.push(...mktList.slice(-maxPerCoin)); // keep most recent maxPerCoin per coin
+      }
+      balanced.sort((a, b) => (b.settleTime || 0) - (a.settleTime || 0)); // sort by settle time descending
+
+      const result = balanced.slice(0, 250); // overall cap at 250 to allow multi-coin representation
+      this.settledCache.kalshi = result;
       this.lastFetch.kalshi = now;
 
-      console.log(`[HistoricalFetcher] Fetched ${settled.length} settled Kalshi 15M markets`);
-      return settled;
+      console.log(`[HistoricalFetcher] Fetched ${result.length} settled Kalshi 15M markets (per-series; ${settled.length} eligible)`);
+      return result;
     } catch (err) {
-      console.error('[HistoricalFetcher] Kalshi fetch error:', err.message);
+      console.error('[HistoricalFetcher] Kalshi fetch error:', err && err.message ? err.message : err);
       return this.settledCache.kalshi; // Return cache on error
     }
   }

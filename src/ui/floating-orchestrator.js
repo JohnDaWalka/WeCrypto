@@ -40,9 +40,14 @@
   const LAST_CALL_MS = 60000;
   const MAX_KELLY = 0.25;
   const ENABLE_CROWD_FADE_OVERRIDE = true;
+  const LOG_TUNED_HIGH_EDGE_RISK_CENTS = 20;
+  const LOG_TUNED_DIVERGENT_YES_RISK_MIN = 0.55;
+  const LOG_TUNED_DIVERGENT_YES_RISK_MAX = 0.70;
 
   // Signal stability — prevents flipping in final minutes
-  const LOCK_MS = 45000;   // hold a trade signal for 45s on same contract
+  // Reduce lock hold time to avoid entering on stale signals; locks will also
+  // be invalidated when a fresher model prediction appears for the same sym.
+  const LOCK_MS = 20000;   // hold a trade signal for 20s on same contract
   const CROWD_FADE_NEUTRAL_BAND = 0.03; // treat 47/53 as neutral to avoid noisy fades
   const CROWD_FADE_BASE_MIN_SECS = 180;  // base sweet spot, then adapt live
   const CROWD_FADE_BASE_MAX_SECS = 420;
@@ -61,6 +66,19 @@
   const SWEET_MIN_SECS = 180;     // 3 min left
   const SWEET_MAX_SECS = 360;     // 6 min left
   const SWEET_PAYOUT_MIN = 1.65;    // payout >= 1.65x (entry price <= ~0.61)
+  const CLOSE_VALUE_MIN_SECS = 75;
+  const CLOSE_VALUE_MAX_SECS = 210;
+  const CLOSE_VALUE_CORE_MIN_SECS = 120;
+  const CLOSE_VALUE_CORE_MAX_SECS = 180;
+  const CLOSE_VALUE_EDGE_CENTS = 10;
+  const CLOSE_VALUE_STRONG_EDGE_CENTS = 14;
+  const CLOSE_VALUE_MIN_MISPRICE = 0.12;
+  const CLOSE_VALUE_PAYOUT_MIN = 1.75;
+  const SCALP_MIN_SECS = 420;
+  const SCALP_MAX_SECS = 840;
+  const SCALP_EDGE_CENTS = 6;
+  const FINAL_SNIPE_MIN_SECS = 45;
+  const FINAL_SNIPE_MAX_SECS = 75;
 
   // _locks[sym+closeTimeMs] = { direction, side, ts, closeTimeMs }
   var _locks = {};
@@ -289,6 +307,217 @@
       timingLabel: timingLabel,
       coreWindowLabel: formatCrowdFadeWindowSecs(activeMinSecs) + '→' + formatCrowdFadeWindowSecs(activeMaxSecs),
       windowLabel: formatCrowdFadeWindowSecs(graceMinSecs) + '→' + formatCrowdFadeWindowSecs(graceMaxSecs),
+    };
+  }
+
+  function directionSign(direction) {
+    return direction === 'UP' ? 1 : direction === 'DOWN' ? -1 : 0;
+  }
+
+  function scalpSetupScore(direction, pred) {
+    var setups = Array.isArray(pred && pred.scalpSetups) ? pred.scalpSetups : [];
+    if (!setups.length || !direction) return 0;
+    var sign = directionSign(direction);
+    return setups.reduce(function (score, setup) {
+      if (!setup || setup.type === 'avoid') return score - 1;
+      var dir = setup.direction === 'up' ? 1 : setup.direction === 'down' ? -1 : 0;
+      var strength = setup.strength === 'high' ? 2 : setup.strength === 'medium' ? 1 : 0;
+      if (setup.type === 'scalp_window' && strength) return score + 1;
+      if (!dir || !sign) return score;
+      return score + (dir === sign ? strength : -strength);
+    }, 0);
+  }
+
+  function buildAdaptiveTimingRegime(params) {
+    var sym = params.sym;
+    var secsLeft = params.secsLeft;
+    var entry = params.entry;
+    var pred = params.pred || null;
+    var cfm = params.cfm || null;
+    var direction = params.direction;
+    var modelActive = !!params.modelActive;
+    var modelYesProb = params.modelYesProb;
+    var kalshiYesPrice = params.kalshiYesPrice;
+    var liquidity = params.liquidity;
+    var finalConfidenceWeak = !!params.finalConfidenceWeak;
+    var logTunedDowngradeReason = params.logTunedDowngradeReason || null;
+    var reasons = [];
+    var blocks = [];
+    var phase = 'UNTIMED';
+
+    if (Number.isFinite(secsLeft)) {
+      if (secsLeft < FINAL_SNIPE_MIN_SECS) phase = 'SETTLING';
+      else if (secsLeft < FINAL_SNIPE_MAX_SECS) phase = 'FINAL_SNIPE';
+      else if (secsLeft <= CLOSE_VALUE_MAX_SECS) phase = 'CLOSE_VALUE';
+      else if (secsLeft <= 420) phase = 'PRIME';
+      else if (secsLeft <= SCALP_MAX_SECS) phase = 'SCALP_EARLY';
+      else phase = 'SETUP';
+    }
+
+    var edgeCents = entry && Number.isFinite(entry.edgeCents) ? entry.edgeCents : 0;
+    var payout = entry && Number.isFinite(entry.payoutMult) ? entry.payoutMult : 0;
+    var entryPrice = entry && Number.isFinite(entry.entryPrice) ? entry.entryPrice : null;
+    var modelConfidence = Number.isFinite(modelYesProb) ? Math.abs(modelYesProb - 0.5) : 0;
+    var mispricing = Number.isFinite(modelYesProb) && Number.isFinite(kalshiYesPrice)
+      ? Math.abs(modelYesProb - kalshiYesPrice)
+      : 0;
+    var adaptiveTiming = null;
+    try {
+      if (typeof window !== 'undefined' && window._adaptiveTuner?.getAdaptiveTimingThresholds) {
+        adaptiveTiming = window._adaptiveTuner.getAdaptiveTimingThresholds(sym, {
+          closeEdgeCents: CLOSE_VALUE_EDGE_CENTS,
+          closeStrongEdgeCents: CLOSE_VALUE_STRONG_EDGE_CENTS,
+          closeMinMisprice: CLOSE_VALUE_MIN_MISPRICE,
+          closePayoutMin: CLOSE_VALUE_PAYOUT_MIN,
+          scalpEdgeCents: SCALP_EDGE_CENTS,
+        }, {
+          pred: pred,
+          cfm: cfm,
+          secsLeft: secsLeft,
+          direction: direction,
+          edgeCents: edgeCents,
+          modelYesProb: modelYesProb,
+          kalshiYesPrice: kalshiYesPrice,
+          bookImbalance: pred?.indicators?.book?.imbalance,
+          buyRatio: pred?.indicators?.flow?.buyRatio,
+        });
+      }
+    } catch (_) {}
+    var closeEdgeCents = adaptiveTiming?.closeEdgeCents ?? CLOSE_VALUE_EDGE_CENTS;
+    var closeStrongEdgeCents = adaptiveTiming?.closeStrongEdgeCents ?? CLOSE_VALUE_STRONG_EDGE_CENTS;
+    var closeMinMisprice = adaptiveTiming?.closeMinMisprice ?? CLOSE_VALUE_MIN_MISPRICE;
+    var closePayoutMin = adaptiveTiming?.closePayoutMin ?? CLOSE_VALUE_PAYOUT_MIN;
+    var scalpEdgeCents = adaptiveTiming?.scalpEdgeCents ?? SCALP_EDGE_CENTS;
+    var flowScore = crowdFadeFlowScore(direction, pred, cfm);
+    var toxicity = crowdFadeToxicity(pred, cfm, liquidity, flowScore);
+    var scalpScore = scalpSetupScore(direction, pred);
+    var payoutHeavy = payout >= closePayoutMin || (entryPrice != null && entryPrice <= (1 / closePayoutMin));
+    var coreCloseValueWindow = Number.isFinite(secsLeft)
+      && secsLeft >= CLOSE_VALUE_CORE_MIN_SECS
+      && secsLeft <= CLOSE_VALUE_CORE_MAX_SECS;
+    var requiredCloseEdgeCents = coreCloseValueWindow ? closeEdgeCents : closeStrongEdgeCents;
+    var closeValueFlowOk = flowScore >= 1
+      || (coreCloseValueWindow && edgeCents >= closeEdgeCents + 6 && mispricing >= closeMinMisprice + 0.04)
+      || (coreCloseValueWindow && edgeCents >= closeStrongEdgeCents + 4 && payoutHeavy);
+    if (adaptiveTiming?.reasons?.length) {
+      reasons.push('adaptive tuner: ' + adaptiveTiming.reasons.slice(0, 2).join(', '));
+    }
+
+    if (!modelActive) blocks.push('model inactive');
+    if (!entry) blocks.push('no executable entry');
+    if (finalConfidenceWeak) blocks.push('final model confidence weak');
+    if (logTunedDowngradeReason) blocks.push(logTunedDowngradeReason);
+
+    var closeValueQualified = phase === 'CLOSE_VALUE'
+      && modelActive
+      && !!entry
+      && edgeCents >= requiredCloseEdgeCents
+      && (mispricing >= closeMinMisprice || payoutHeavy)
+      && closeValueFlowOk
+      && toxicity <= 2
+      && !logTunedDowngradeReason
+      && (!finalConfidenceWeak || edgeCents >= closeStrongEdgeCents);
+
+    var finalSnipeQualified = phase === 'FINAL_SNIPE'
+      && modelActive
+      && !!entry
+      && edgeCents >= 16
+      && mispricing >= 0.18
+      && payout >= 2.0
+      && flowScore >= 2
+      && toxicity <= 1
+      && !finalConfidenceWeak
+      && !logTunedDowngradeReason;
+
+    var scalpQualified = phase === 'SCALP_EARLY'
+      && modelActive
+      && !!entry
+      && edgeCents >= scalpEdgeCents
+      && modelConfidence >= 0.08
+      && (flowScore >= 2 || scalpScore >= 2)
+      && toxicity <= 2
+      && !entry.tailRisk
+      && !entry.thinBook
+      && !finalConfidenceWeak
+      && !logTunedDowngradeReason;
+
+    if (phase === 'CLOSE_VALUE') {
+      if (coreCloseValueWindow) reasons.push('core 2-3m value window');
+      if (payoutHeavy) reasons.push('payout skew favorable');
+      if (mispricing >= closeMinMisprice) reasons.push('market/model mispricing');
+      if (flowScore >= 1) reasons.push('book/tape confirms');
+      else if (closeValueFlowOk) reasons.push('large edge overrides neutral book');
+      if (!closeValueQualified) {
+        if (edgeCents < requiredCloseEdgeCents) blocks.push('close-window edge below +' + requiredCloseEdgeCents + 'c');
+        if (!payoutHeavy && mispricing < closeMinMisprice) blocks.push('no payout/mispricing skew');
+        if (!closeValueFlowOk) blocks.push('book/tape not confirming');
+        if (toxicity > 2) blocks.push('microstructure toxicity elevated');
+      }
+    } else if (phase === 'SCALP_EARLY') {
+      if (flowScore >= 2) reasons.push('book/tape impulse');
+      if (scalpScore >= 2) reasons.push('scalp setup aligned');
+      if (edgeCents >= scalpEdgeCents) reasons.push('positive scalp edge');
+      if (!scalpQualified) {
+        if (edgeCents < scalpEdgeCents) blocks.push('scalp edge below +' + scalpEdgeCents + 'c');
+        if (flowScore < 2 && scalpScore < 2) blocks.push('no scalp impulse yet');
+        if (entry && (entry.tailRisk || entry.thinBook)) blocks.push('bad scalp fill profile');
+      }
+    } else if (phase === 'FINAL_SNIPE') {
+      if (!finalSnipeQualified) blocks.push('final snipe requires exceptional edge, payout, and clean tape');
+    } else if (phase === 'SETTLING') {
+      blocks.push('settlement too close for new entry');
+    }
+
+    var score = 0;
+    score += clamp(edgeCents / 24, 0, 1) * 35;
+    score += clamp(mispricing / 0.24, 0, 1) * 25;
+    score += clamp((payout - 1) / 1.5, 0, 1) * 18;
+    score += clamp((flowScore + 2) / 7, 0, 1) * 12;
+    score += clamp((scalpScore + 2) / 6, 0, 1) * 10;
+    score -= toxicity * 8;
+    score = Math.round(clamp(score, 0, 100));
+
+    var timingLabel = {
+      SCALP_EARLY: 'SCALP FLIP',
+      SETUP: 'SETUP',
+      PRIME: 'PRIME',
+      CLOSE_VALUE: coreCloseValueWindow ? '2-3M VALUE' : 'CLOSE VALUE',
+      FINAL_SNIPE: 'FINAL SNIPE',
+      SETTLING: 'SETTLING',
+      UNTIMED: 'LIVE',
+    }[phase] || phase;
+
+    var exitPlan = null;
+    if (phase === 'SCALP_EARLY') {
+      exitPlan = 'Scalp exit: sell into the probability flip; take +8-12c or exit when book imbalance/tape mean-reverts.';
+    } else if (phase === 'CLOSE_VALUE') {
+      exitPlan = 'Close-value plan: hold only while edge stays mispriced; cancel/exit if live book flips or edge compresses under +6c.';
+    } else if (phase === 'FINAL_SNIPE') {
+      exitPlan = 'Final-snipe plan: only fill at price; no chase, no averaging, abandon on first book flip.';
+    } else if (phase === 'PRIME') {
+      exitPlan = 'Prime plan: enter if edge remains stable and manage before the last-minute spread widens.';
+    }
+
+    return {
+      phase: phase,
+      timingLabel: timingLabel,
+      timingScore: score,
+      promoteToTrade: closeValueQualified || finalSnipeQualified || scalpQualified,
+      closeValueQualified: closeValueQualified,
+      finalSnipeQualified: finalSnipeQualified,
+      scalpQualified: scalpQualified,
+      scalpCandidate: phase === 'SCALP_EARLY',
+      closeValueCandidate: phase === 'CLOSE_VALUE',
+      coreCloseValueWindow: coreCloseValueWindow,
+      flowScore: flowScore,
+      scalpScore: scalpScore,
+      toxicity: toxicity,
+      mispricing: mispricing,
+      payoutHeavy: payoutHeavy,
+      adaptiveTiming: adaptiveTiming,
+      reasons: reasons,
+      blocks: blocks.filter(Boolean),
+      exitPlan: exitPlan,
     };
   }
 
@@ -580,6 +809,47 @@
     var finalConfidenceWeak = calibratedConfidence != null && calibratedConfidence < finalConfidenceFloor;
     if (action === 'trade' && finalConfidenceWeak) action = 'watch';
     if (tooEarly && action === 'trade') action = 'watch';
+    var symNorm = String(sym || '').toUpperCase();
+    var logTunedDowngradeReason = null;
+    if (
+      action === 'trade'
+      && symNorm !== 'BTC'
+      && alignment !== 'ALIGNED'
+      && entry
+      && Number.isFinite(entry.edgeCents)
+      && entry.edgeCents >= LOG_TUNED_HIGH_EDGE_RISK_CENTS
+    ) {
+      logTunedDowngradeReason = 'non-BTC non-aligned high-edge segment';
+    } else if (
+      action === 'trade'
+      && symNorm !== 'BTC'
+      && alignment === 'DIVERGENT'
+      && Number.isFinite(kalshiYesPrice)
+      && kalshiYesPrice >= LOG_TUNED_DIVERGENT_YES_RISK_MIN
+      && kalshiYesPrice < LOG_TUNED_DIVERGENT_YES_RISK_MAX
+    ) {
+      logTunedDowngradeReason = 'non-BTC divergent 55-69% YES segment';
+    }
+    if (logTunedDowngradeReason) action = 'watch';
+    var timingProfile = buildAdaptiveTimingRegime({
+      sym: sym,
+      secsLeft: secsLeft,
+      entry: entry,
+      pred: pred,
+      cfm: cfm,
+      direction: direction,
+      modelActive: modelActive,
+      modelYesProb: modelYesProb,
+      kalshiYesPrice: kalshiYesPrice,
+      liquidity: k15 ? k15.liquidity : null,
+      finalConfidenceWeak: finalConfidenceWeak,
+      logTunedDowngradeReason: logTunedDowngradeReason,
+    });
+    if (action !== 'skip' && timingProfile.promoteToTrade) {
+      action = 'trade';
+    } else if (action === 'trade' && timingProfile.phase === 'SETTLING') {
+      action = 'watch';
+    }
     if (action === 'skip')
       return _skip(sym, 'Negative EV — edge ' + (entry ? entry.edgeCents : 0) + 'c (need >=' + EDGE_MIN_CENTS + 'c)');
 
@@ -594,6 +864,14 @@
     var confidenceTail = finalConfidenceWeak
       ? ' · downgraded to watch: final model confidence ' + calibratedConfidence + '% < ' + finalConfidenceFloor + '%'
       : '';
+    var logTunedTail = logTunedDowngradeReason
+      ? ' · downgraded to watch: ' + logTunedDowngradeReason
+      : '';
+    var timingTail = timingProfile && timingProfile.promoteToTrade
+      ? ' · timing regime: ' + timingProfile.timingLabel + ' (' + timingProfile.reasons.join(', ') + ')'
+      : (timingProfile && timingProfile.blocks.length && action !== 'trade'
+        ? ' · timing watch: ' + timingProfile.blocks.slice(0, 2).join(', ')
+        : '');
     var reasonMap = {
       ALIGNED: sym + ' ' + direction + ': ' + kPct + ' + ' + mPct + ' -> ' + edgeStr,
       DIVERGENT: sym + ': ' + mPct + ' vs ' + kPct + ' -> INVERSION — buy ' + side + ' cheap, house is wrong — ' + edgeStr,
@@ -605,6 +883,8 @@
     };
     Object.keys(reasonMap).forEach(function (key) {
       if (key !== 'KALSHI_ONLY' && confidenceTail) reasonMap[key] += confidenceTail;
+      if (key !== 'KALSHI_ONLY' && logTunedTail) reasonMap[key] += logTunedTail;
+      if (key !== 'KALSHI_ONLY' && timingTail) reasonMap[key] += timingTail;
     });
     var strikeStr = null;
     if (k15 && k15.ticker) {
@@ -628,6 +908,24 @@
       liquidity: k15 ? k15.liquidity : 0, closeTime: k15 ? k15.closeTime : null,
       humanReason: reasonMap[alignment] || (sym + ' ' + direction),
       sweetSpot: sweetSpot,
+      timingRegime: timingProfile.phase,
+      timingLabel: timingProfile.timingLabel,
+      timingScore: timingProfile.timingScore,
+      timingReasons: timingProfile.reasons,
+      timingBlocks: timingProfile.blocks,
+      closeValue: !!timingProfile.closeValueQualified,
+      closeValueCandidate: !!timingProfile.closeValueCandidate,
+      scalpFlip: !!timingProfile.scalpQualified,
+      scalpCandidate: !!timingProfile.scalpCandidate,
+      coreCloseValueWindow: !!timingProfile.coreCloseValueWindow,
+      exitPlan: timingProfile.exitPlan,
+      microFlowScore: timingProfile.flowScore,
+      scalpSetupScore: timingProfile.scalpScore,
+      microToxicity: timingProfile.toxicity,
+      timingAdaptive: timingProfile.adaptiveTiming,
+      missedOpportunityScore: action === 'watch' ? timingProfile.timingScore : 0,
+      logTunedDowngrade: !!logTunedDowngradeReason,
+      logTunedDowngradeReason: logTunedDowngradeReason,
     };
     if (entry) Object.assign(result, entry);
 
@@ -663,11 +961,15 @@
       result.crowdFadeMispricingPp = Math.round((fadeEval.mispricing || 0) * 100);
       result.crowdFadeTimingLabel = fadeEval.timingLabel || 'adaptive';
       result.crowdFadeWindowLabel = fadeEval.windowLabel || null;
+      result.timingRegime = result.timingRegime || 'CROWD_FADE';
+      result.timingLabel = 'CROWD FADE';
+      result.exitPlan = 'Crowd-fade plan: sell when market reprices toward model or when book/tape stops confirming the fade.';
       if (fadeEval.entry) Object.assign(result, fadeEval.entry);
       result.humanReason = sym + ' CROWD FADE (' + (fadeEval.timingLabel || 'adaptive') +
         (fadeEval.windowLabel ? ', ' + fadeEval.windowLabel : '') + ') → ' + fadeEval.direction +
         ': model-vs-market gap ' + result.crowdFadeMispricingPp + 'pp, edge ' + (result.edgeCents || 0) + 'c';
-      _locks[lockKey] = { direction: fadeEval.direction, side: result.side, ts: nowTs, closeTimeMs: closeTimeMs };
+      // include predTs to allow invalidation when a newer model prediction arrives
+      _locks[lockKey] = { direction: fadeEval.direction, side: result.side, ts: nowTs, closeTimeMs: closeTimeMs, predTs: (pred && (pred.ts || pred.timestamp)) || nowTs };
     } else if (fadeEval && fadeEval.suggested) {
       // Candidate mispricing is building but not persistent enough yet.
       result.crowdFadeSuggested = true;
@@ -683,18 +985,25 @@
         (fadeEval.timingLabel || 'adaptive') + ', confirm ' + confirmLeft + 's)';
     } else if (result.action === 'trade') {
       // New trade signal — lock it
-      _locks[lockKey] = { direction: result.direction, side: result.side, ts: nowTs, closeTimeMs: closeTimeMs };
+      _locks[lockKey] = { direction: result.direction, side: result.side, ts: nowTs, closeTimeMs: closeTimeMs, predTs: (pred && (pred.ts || pred.timestamp)) || nowTs };
     } else if (lock && lock.closeTimeMs === closeTimeMs && (nowTs - lock.ts) < LOCK_MS) {
       // Signal drifted off trade but lock is still fresh — hold it
-      var lockConflict = modelActive && modelDir && lock.direction && modelDir !== lock.direction;
-      if (lockConflict) {
+      // However, invalidate the lock when a newer model prediction is present
+      var latestPredTs = pred && (pred.ts || pred.timestamp) ? Number(pred.ts || pred.timestamp) : null;
+      if (latestPredTs && lock.predTs && latestPredTs > lock.predTs) {
+        // Newer prediction arrived — drop stale lock
         delete _locks[lockKey];
       } else {
-        result.direction = lock.direction;
-        result.side = lock.side;
-        result.action = 'trade';
-        result.signalLocked = true;
-        result.humanReason = sym + ' [LOCKED ' + Math.round((nowTs - lock.ts) / 1000) + 's ago] ' + lock.direction;
+        var lockConflict = modelActive && modelDir && lock.direction && modelDir !== lock.direction;
+        if (lockConflict) {
+          delete _locks[lockKey];
+        } else {
+          result.direction = lock.direction;
+          result.side = lock.side;
+          result.action = 'trade';
+          result.signalLocked = true;
+          result.humanReason = sym + ' [LOCKED ' + Math.round((nowTs - lock.ts) / 1000) + 's ago] ' + lock.direction;
+        }
       }
     }
 

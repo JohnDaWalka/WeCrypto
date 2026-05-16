@@ -372,7 +372,7 @@
         regime_score_composition: {
           h_weight: weights[regime_state] || 0,
           vr_weight: weights[regime_state] || 0,
-          ent_weight: entropy.structure_quality === structure_quality ? 0.3 : 0
+          ent_weight: entropy.structure_quality === 'strong' ? 0.3 : 0
         }
       }
     };

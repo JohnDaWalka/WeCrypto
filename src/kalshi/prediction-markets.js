@@ -61,8 +61,18 @@
     SOL: ['solana', 'sol'],
     XRP: ['xrp', 'ripple'],
     DOGE: ['dogecoin', 'doge'],
-    BNB: ['binance', 'bnb'],
+    BNB: ['bnb'],
     HYPE: ['hyperliquid', 'hype'],
+  };
+
+  const COIN_PATTERNS = {
+    BTC: [/\bbitcoin\b/i, /\bbtc\b/i],
+    ETH: [/\bethereum\b/i, /\beth\b/i],
+    SOL: [/\bsolana\b/i, /\bsol\b/i],
+    XRP: [/\bxrp\b/i, /\bripple\b/i],
+    DOGE: [/\bdogecoin\b/i, /\bdoge\b/i],
+    BNB: [/\bbnb\b/i, /\bbinance\s+coin\b/i, /\bbinancecoin\b/i],
+    HYPE: [/\bhyperliquid\b/i, /\bhype\b/i],
   };
 
   // Keywords that identify short-duration (≤5 min) Polymarket markets
@@ -86,19 +96,37 @@
   const PROB_HIST_MAX = 12;
 
   // ---- Route through Tauri suppFetch to bypass WebView2 CORS / geo-blocks ----
+  async function readJsonPayload(payload) {
+    if (!payload) return null;
+    if (typeof Response !== 'undefined' && payload instanceof Response) {
+      if (!payload.ok) throw new Error(`HTTP ${payload.status}`);
+      return payload.json();
+    }
+    if (typeof payload.json === 'function' && typeof payload.ok === 'boolean') {
+      if (!payload.ok) throw new Error(`HTTP ${payload.status}`);
+      return payload.json();
+    }
+    if (typeof payload === 'string') return JSON.parse(payload);
+    return payload;
+  }
+
   async function apiFetch(url, opts = {}) {
     if (typeof window.suppFetch === 'function') {
       try {
-        const txt = await window.suppFetch(url, opts);
-        return typeof txt === 'string' ? JSON.parse(txt) : txt;
-      } catch { }
+        return await readJsonPayload(await window.suppFetch(url, opts));
+      } catch (err) {
+        console.warn(`[PredictionMarkets] suppFetch failed for ${url}:`, err?.message || err);
+      }
     }
     // Try IPC fetch (main process, no CORS) when running in Electron
     if (window.electron?.ipcFetch) {
       try {
         const r = await window.electron.ipcFetch(url, opts);
         if (r.ok) return typeof r.text === 'string' ? JSON.parse(r.text) : r.text;
-      } catch { }
+        throw new Error(`HTTP ${r.status || 0}${r.error ? ` ${r.error}` : ''}`);
+      } catch (err) {
+        console.warn(`[PredictionMarkets] ipcFetch failed for ${url}:`, err?.message || err);
+      }
     }
     const res = await fetch(url, { headers: { Accept: 'application/json' }, ...opts });
     if (!res.ok) throw new Error(res.status);
@@ -393,14 +421,18 @@
   }
 
   // ---- Polymarket — paginated, all crypto markets, suppFetch-routed ----
-  // Fetches up to 3 pages (1500 markets) from Gamma API sorted by 24h volume.
+  // Fetches active Gamma pages sorted by 24h volume. Gamma currently caps pages
+  // at 100 rows even when a larger limit is requested, so offsets must step by
+  // 100 or the app skips most of the market list.
   // Falls back to CLOB API if Gamma is unreachable.
 
   async function fetchPolymarket() {
     // ---- Tier 1: Gamma API (paginated, sort by volume) ----
     try {
-      const pages = await Promise.all([0, 500, 1000].map(offset =>
-        apiFetch(`${POLY_GAMMA}/markets?active=true&closed=false&limit=500&offset=${offset}&order=volume24hr&ascending=false`)
+      const pageSize = 100;
+      const offsets = Array.from({ length: 16 }, (_, i) => i * pageSize);
+      const pages = await Promise.all(offsets.map(offset =>
+        apiFetch(`${POLY_GAMMA}/markets?active=true&closed=false&limit=${pageSize}&offset=${offset}&order=volume24hr&ascending=false`)
           .catch(() => null)
       ));
       const all = [];
@@ -409,8 +441,19 @@
         const batch = Array.isArray(d) ? d : Array.isArray(d.results) ? d.results : [];
         all.push(...batch);
       }
-      if (all.length) return all;
-    } catch { }
+      if (all.length) {
+        const seen = new Set();
+        return all.filter(m => {
+          const key = m.id || m.conditionId || m.question || m.slug;
+          if (!key) return true;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+    } catch (err) {
+      console.warn('[PredictionMarkets] Gamma fetch failed:', err?.message || err);
+    }
 
     // ---- Tier 2: CLOB API fallback ----
     try {
@@ -429,17 +472,27 @@
     let prices = m.outcomePrices;
     if (typeof prices === 'string') { try { prices = JSON.parse(prices); } catch { return null; } }
     if (!Array.isArray(prices) || !prices[0]) return null;
-    const yes = parseFloat(prices[0]);
+    let yesIndex = 0;
+    let outcomes = m.outcomes;
+    if (typeof outcomes === 'string') { try { outcomes = JSON.parse(outcomes); } catch { outcomes = null; } }
+    if (Array.isArray(outcomes)) {
+      const idx = outcomes.findIndex(o => String(o || '').trim().toLowerCase() === 'yes');
+      if (idx >= 0) yesIndex = idx;
+    }
+    const yes = parseFloat(prices[yesIndex]);
     return Number.isFinite(yes) && yes >= 0.01 && yes <= 0.99 ? yes : null;
   }
 
+  function matchesPolymarketCoin(m, sym) {
+    const text = `${m.question || m.title || ''} ${m.description || ''}`;
+    const q = text.toLowerCase();
+    if (POLY_BAD_KW.some(b => q.includes(b))) return false;
+    const patterns = COIN_PATTERNS[sym] || [new RegExp(`\\b${String(sym).toLowerCase()}\\b`, 'i')];
+    return patterns.some(re => re.test(text));
+  }
+
   function polymarketSentiment(markets, sym) {
-    const kw = COIN_KEYWORDS[sym] || [sym.toLowerCase()];
-    const hits = markets.filter(m => {
-      const q = ((m.question || '') + ' ' + (m.description || '')).toLowerCase();
-      if (POLY_BAD_KW.some(b => q.includes(b))) return false;
-      return kw.some(k => q.includes(k));
-    });
+    const hits = markets.filter(m => matchesPolymarketCoin(m, sym));
     if (!hits.length) return null;
 
     let totalVol = 0, weighted = 0;
@@ -469,14 +522,12 @@
   }
 
   function polymarket5mSentiment(markets, sym) {
-    const kw = COIN_KEYWORDS[sym] || [sym.toLowerCase()];
     const now = Date.now();
 
     // First try: markets genuinely closing within 6 hours or tagged 5M
     let hits = markets.filter(m => {
       const q = ((m.question || '') + ' ' + (m.description || '')).toLowerCase();
-      if (POLY_BAD_KW.some(b => q.includes(b))) return false;
-      if (!kw.some(k => q.includes(k))) return false;
+      if (!matchesPolymarketCoin(m, sym)) return false;
       const endRaw = m.end_date_iso || m.end_date || m.endDate || null;
       if (endRaw) {
         const endMs = new Date(endRaw).getTime();
@@ -489,9 +540,7 @@
     const _noShortTerm = hits.length === 0;
     if (_noShortTerm) {
       hits = markets.filter(m => {
-        const q = ((m.question || '') + ' ' + (m.description || '')).toLowerCase();
-        if (POLY_BAD_KW.some(b => q.includes(b))) return false;
-        return kw.some(k => q.includes(k));
+        return matchesPolymarketCoin(m, sym);
       });
     }
     if (!hits.length) return null;

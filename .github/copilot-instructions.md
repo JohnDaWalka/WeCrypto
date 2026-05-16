@@ -1,63 +1,68 @@
-# WECRYPTO Copilot Instructions
+# Copilot Instructions for WE-CRYPTO (Kalshi 15m Prediction Engine)
 
-## Build, run, and test commands
+## Build, Test, and Lint Commands
 
-### Primary app (repo root)
-- `npm install`
-- `npm start` (runs Electron with `electron/main.js`)
-- `npm run build` (Windows installer + portable targets via electron-builder)
-- `npm run build:portable`
-- `npm run build:installer`
-- `npm run tauri:dev`
-- `npm run tauri:build`
+- **Install dependencies:**
+  ```bash
+  npm install
+  ```
+- **Start app (Electron):**
+  ```bash
+  npm start
+  ```
+- **Build Windows installer:**
+  ```bash
+  npm run build:installer
+  ```
+- **Build portable app:**
+  ```bash
+  npm run build:portable
+  ```
+- **Run integration tests:**
+  ```bash
+  node test-integration.js
+  ```
+- **Run signal logic audit:**
+  ```bash
+  node test-signal-logic-audit.js
+  ```
+- **Run a single test:**
+  ```bash
+  node test-signal-inversion.js
+  ```
 
-### Run a single test script
-- `node test-snapshot-tuner.js`
-- `node test-realtime-tuner.js`
-- `node test-integration.js`
-- `node test-signal-logic-audit.js`
-- `node tests/test-live-feeds.js` (expects proxy endpoints on `http://127.0.0.1:3010`)
-- `node tests/test-api-status.js`
+## High-Level Architecture
 
-### Other package roots in this repo
-- `desktop-build\` (`npm start`, `npm run build`, `npm run build:portable`, `npm run build:installer`)
-- `we-crypto-electron\` (`npm start`, `npm run dist`)
-- `we-crypto-cfm-tauri\` (`npm run dev`, `npm run build`)
+- **Three-layer adaptive learning stack:**
+  - Real-Time (30s): Market polling, rapid accuracy check, fast gate adjustments
+  - Snapshot (1h): Regime detection, weight tuning
+  - Walk-Forward (daily): Baseline/seasonal optimization
+- **Prediction Signal Flow:** 9 technical indicators (RSI, MACD, CCI, Fisher, ADX, ATR, Order Book, Kalshi %, Crowd Fade) → Adaptive weighting → Aggregation → Confidence & Direction
+- **Core Components:**
+  - Electron main process (main.js)
+  - Renderer (app.js, kalshi-renderer-bridge.js)
+  - Prediction engine (predictions.js, adaptive-learning-engine.js, historical-settlement-fetcher.js)
+  - External APIs: Kalshi, Polymarket, Coinbase, Binance, Pyth
+- **30s polling cycle:** Fetch market data, update weights, generate predictions, update UI
 
-### Linting & Formatting
-- No lint script is defined in package manifests
-- **Prettier is configured** (`.prettierrc`): use 2-space indents, double quotes, semicolons, trailing commas (es5), 80 char line width, LF line endings
-- Format with Prettier locally before committing (no automated linting in CI)
+## Key Conventions
 
-## High-level architecture
+- **Script load order:** Add new modules in `public/index.html` before `src/core/app.js` and after their dependencies
+- **Global runtime contract:** Expose cross-module APIs on `window` (not via ES module imports)
+- **Quant core modules:** Initialize all quant/statistical engines on `window.QuantCore` for access across app
+- **Adaptive weights:** Updated every 2 minutes, range 0.3x–2.0x, trending acceleration/penalty applied
+- **Testing:** Use provided test scripts for integration, signal logic, and quant core validation
+- **Agents:** Custom agents for Kalshi orderbook, quant regime, smart money flow, and signal clarity are available (see .github/AGENTS.md)
 
-### Three-Layer Adaptive Learning Stack
+---
 
-The core prediction engine runs in **three parallel feedback loops**:
+For more details, see:
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- [docs/SIGNALS.md](./docs/SIGNALS.md)
+- [src/agents/README.md](./src/agents/README.md)
+- [src/quant/README.md](./src/quant/README.md)
 
-1. **Real-Time Layer (30 seconds)**
-   - `realtime-tuner.js` polls Kalshi historical markets every 30s
-   - Rapid accuracy checks against just-settled contracts
-   - Fast gate adjustments (±4-8% weight changes)
-   - Continuous during market hours
 
-2. **Snapshot Layer (1 hour)**
-   - `snapshot-tuner.js` aggregates 60 minutes of market data
-   - Detects market regime (trending/range-bound/crash via ADX, ATR)
-   - Weight tuning ±8% based on regime
-   - Runs once per hour, applies temporary multipliers
-
-3. **Walk-Forward Layer (daily)**
-   - `h15-tuner.js` uses 14-day sliding window for baseline calibration
-   - Seasonal adjustment and long-term drift correction
-   - Runs daily for stability
-   - Locks in robust weights that persist across sessions
-
-All three feed `src/core/predictions.js`, which calculates **9 signals**: RSI, MACD, CCI, Fisher, ADX, ATR, Order Book pressure, Kalshi probability, Crowd Fade contrarian.
-
-### Process Architecture
-
-1. **Electron main process (`electron/main.js`)** boots the desktop shell and starts:
    - The local Rust proxy executable (`we-crypto-proxy.exe`, port cascade starting at 3010)
    - The Kalshi Node worker (`electron/kalshi-worker.js`, HTTP bridge on 3050)
    - Optional web mirror service (`electron/wecrypto-web-service.js`, default 3443)
