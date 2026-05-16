@@ -87,6 +87,7 @@
   // State
   const sampleBuf = {};  // sym → [ { t, sources:{CDC,CB,GKO,DEX}, vol, bid, ask } ]
   window._cfm = {};
+  window._fundingRateCache = window._fundingRateCache || {};
   // Funding rates from perp sources — stored separately so they survive the
   // per-cycle window._cfm[sym] = computeCFM(sym) overwrite in runCycle().
   const _fundingRates = {};
@@ -467,6 +468,12 @@
       const avg = rates.reduce((a, b) => a + b, 0) / rates.length;
       const bias = avg > 0.0003 ? 'bearish' : avg < -0.0001 ? 'bullish' : 'neutral';
       const strength = Math.min(1, Math.abs(avg) / 0.001); // 0–1 normalised against 0.1 % threshold
+      window._fundingRateCache[sym] = {
+        rate: avg,
+        sources: rates.length,
+        ts: Date.now(),
+        raw: { ...c },
+      };
       // window._cfm[sym] was just written by computeCFM — safe to annotate it now
       if (window._cfm[sym]) {
         window._cfm[sym].fundingBias = { avg, bias, strength, sources: rates.length };

@@ -255,7 +255,7 @@
     const shouldClearOldLogs = (logStr) => {
       try { const parsed = JSON.parse(logStr); const meta = parsed._metadata || {}; return meta.timestamp && (now - meta.timestamp) > LOG_TTL_MS; } catch { return false; }
     };
-    
+
     try { const r = localStorage.getItem(PRED_LOG_STORE); if (r && !shouldClearOldLogs(r)) window._predLog = JSON.parse(r); else localStorage.removeItem(PRED_LOG_STORE); } catch (e) { }
     try { const r = localStorage.getItem(KALSHI_LOG_STORE); if (r && !shouldClearOldLogs(r)) window._kalshiLog = JSON.parse(r); else localStorage.removeItem(KALSHI_LOG_STORE); } catch (e) { }
     try { const r = localStorage.getItem(LAST_PRED_STORE); if (r) window._lastPrediction = JSON.parse(r); } catch (e) { }
@@ -362,6 +362,7 @@
 
       window._signalScheduler = new window.SignalSchedulerAgent({
         lanes: {
+          microstructure: { concurrency: 4, gapMs: 8 },
           price: { concurrency: 3, gapMs: 20 },
           momentum: { concurrency: 4, gapMs: 65 },
           validation: { concurrency: 1, gapMs: 350 },
@@ -782,6 +783,8 @@
   function classifyTradeSetup(ki) {
     if (!ki || ki.action !== 'trade') return null;
     if (ki.alignment === 'CROWD_FADE' || ki.crowdFade) return 'crowd-fade';
+    if (ki.closeValue || ki.timingRegime === 'CLOSE_VALUE') return 'close-value';
+    if (ki.scalpFlip || ki.timingRegime === 'SCALP_EARLY') return 'scalp-flip';
     if (ki.sweetSpot) return 'sweet-spot';
     if (ki.signalLocked) return 'signal-lock';
     if (ki.alignment === 'ALIGNED') return 'aligned';
@@ -814,6 +817,8 @@
 
         const profiles = {
           'crowd-fade': { ratios: [1.00, 1.26, 1.52], gaps: [0.00, 0.23, 0.48], durs: [0.26, 0.26, 0.34] },
+          'close-value': { ratios: [1.00, 1.18, 1.44], gaps: [0.00, 0.18, 0.38], durs: [0.22, 0.24, 0.30] },
+          'scalp-flip': { ratios: [1.00, 1.30, 1.12], gaps: [0.00, 0.16, 0.32], durs: [0.18, 0.18, 0.24] },
           'sweet-spot': { ratios: [1.00, 1.20, 1.50], gaps: [0.00, 0.22, 0.44], durs: [0.24, 0.24, 0.30] },
           'signal-lock': { ratios: [1.00, 1.12, 1.00], gaps: [0.00, 0.24, 0.52], durs: [0.20, 0.20, 0.28] },
           'aligned': { ratios: [1.00, 1.33], gaps: [0.00, 0.28], durs: [0.26, 0.34] },
@@ -3368,6 +3373,14 @@
       scheduleWebStatePublish('async-predictions', 100);
     });
 
+    window._asyncRefreshEngine.on('orderbook:imbalance', () => {
+      try { window._runAdaptiveLiveRetune?.('orderbook-imbalance-event'); } catch (_) {}
+      if (['predictions', 'cfm', 'universe'].includes(currentView)) {
+        refreshActiveView();
+      }
+      scheduleWebStatePublish('async-orderbook', 50);
+    });
+
     window._asyncRefreshEngine.on('market:data-updated', () => {
       if (['cfm', 'predictions', 'universe', 'markets5m', 'charts'].includes(currentView)) {
         refreshActiveView();
@@ -3651,6 +3664,14 @@
 
   window.addEventListener('predictiontide', () => {
     scheduleWebStatePublish('predictiontide', 75);
+    if (!predsLoaded || predictionRunInFlight) return;
+    if (currentView === 'universe') renderUniverse();
+    else if (['predictions', 'cfm'].includes(currentView)) renderPredictions();
+  });
+
+  window.addEventListener('predictions:microstructure-updated', () => {
+    try { window._runAdaptiveLiveRetune?.('microstructure-updated'); } catch (_) {}
+    scheduleWebStatePublish('microstructure-prediction', 50);
     if (!predsLoaded || predictionRunInFlight) return;
     if (currentView === 'universe') renderUniverse();
     else if (['predictions', 'cfm'].includes(currentView)) renderPredictions();
@@ -4051,6 +4072,12 @@
             crowdFade: !!intent?.crowdFade,
             crowdFadeSuggested: !!intent?.crowdFadeSuggested,
             signalLocked: !!intent?.signalLocked,
+            timingRegime: intent?.timingRegime || null,
+            timingLabel: intent?.timingLabel || null,
+            timingScore: _webNum(intent?.timingScore, 2),
+            closeValue: !!intent?.closeValue,
+            scalpFlip: !!intent?.scalpFlip,
+            exitPlan: intent?.exitPlan || null,
             reason: intent?.reason || null,
             humanReason: intent?.humanReason || null,
           },
@@ -8044,6 +8071,8 @@
       else if (secsLeft > 5) phase = 'LAST_CALL';
       else phase = 'SETTLING';
     }
+    if (ki.timingRegime === 'SCALP_EARLY') phase = 'SCALP';
+    else if (ki.timingRegime === 'CLOSE_VALUE') phase = 'CLOSE_VALUE';
 
     const isTrade = ki.action === 'trade';
     const isHold = ki.action === 'hold';
@@ -8068,6 +8097,12 @@
       title = 'Stalk fade';
       detail = `Wait ${ki.crowdFadeConfirmLeftSec ?? '?'}s for ${ki.crowdFadeTimingLabel || 'adaptive'} mispricing confirmation before entering ${side}${ki.crowdFadeWindowLabel ? ` (${ki.crowdFadeWindowLabel})` : ''}.`;
       tone = '#ffb74d';
+    } else if (phase === 'SCALP') {
+      title = isTrade ? `Scalp ${side}` : 'Stalk scalp';
+      detail = isTrade
+        ? (ki.exitPlan || 'Buy the early flip and sell into the probability expansion before book pressure fades.')
+        : `Book/tape scanner is watching for a clean flip${ki.timingBlocks?.length ? ': ' + ki.timingBlocks.slice(0, 2).join(', ') : '.'}`;
+      tone = isTrade ? 'var(--color-green)' : '#ffb74d';
     } else if (phase === 'OPENING') {
       title = isTrade ? `Prepare ${side}` : 'Observe open';
       detail = isTrade
@@ -8091,12 +8126,18 @@
     } else if (phase === 'LATE') {
       title = isTrade ? `Manage ${side}` : 'Late phase';
       detail = isTrade
-        ? 'Late-cycle trade: reduce size and avoid chasing ticks.'
-        : 'Prefer management over new entries in final 3 minutes.';
+        ? 'Late-cycle trade: reduce size unless it upgrades into the 2-3m value window.'
+        : 'Stalk only heavy payout skew or clear mispricing into the 2-3m close window.';
       tone = isTrade ? 'var(--color-orange)' : 'var(--color-text-muted)';
+    } else if (phase === 'CLOSE_VALUE') {
+      title = isTrade ? `Value ${side}` : 'Close-value scan';
+      detail = isTrade
+        ? (ki.exitPlan || '2-3m mispricing window is active; enter only while edge and book pressure stay aligned.')
+        : `Hunting payout/mispricing skew${ki.timingBlocks?.length ? ': ' + ki.timingBlocks.slice(0, 2).join(', ') : '.'}`;
+      tone = isTrade ? 'var(--color-green)' : '#ffd700';
     } else if (phase === 'LAST_CALL') {
       title = 'Last call';
-      detail = 'Avoid new entries in final 60s unless already locked and edge is exceptional.';
+      detail = 'Final seconds: only exceptional fill-at-price entries; otherwise let the contract settle.';
       tone = 'var(--color-red)';
     } else if (phase === 'SETTLING') {
       title = 'Settling';
@@ -8118,6 +8159,8 @@
       OPENING: 'OPEN',
       SETUP: 'SETUP',
       PRIME: 'PRIME',
+      SCALP: 'SCALP',
+      CLOSE_VALUE: '2-3M VALUE',
       LATE: 'LATE',
       LAST_CALL: 'LAST CALL',
       SETTLING: 'SETTLING',
@@ -8171,6 +8214,11 @@
             secsLeft: ki.secsLeft ?? null,
             minsLeft: ki.minsLeft ?? null,
             sweetSpot: ki.sweetSpot ?? false,
+            timingRegime: ki.timingRegime ?? null,
+            timingScore: ki.timingScore ?? null,
+            closeValue: ki.closeValue ?? false,
+            scalpFlip: ki.scalpFlip ?? false,
+            missedOpportunityScore: ki.missedOpportunityScore ?? 0,
             crowdFade: ki.crowdFade ?? false,
             signalLocked: ki.signalLocked ?? false,
             setupType: setupType ?? null,
@@ -8390,6 +8438,7 @@
                             <span style="background:${sideBg};color:${sideColor};padding:3px 12px;border-radius:4px;font-size:14px;font-weight:800;letter-spacing:.7px">${ki.side}</span>
                             <span style="font-size:12px;font-weight:700;color:var(--color-text);font-family:var(--font-mono)">KALSHI${strikeC ? ' · ' + strikeC : ''}</span>
                             ${ki.isInversion ? '<span style="background:rgba(255,120,0,0.22);color:#ff8c00;padding:2px 7px;border-radius:3px;font-size:11px;font-weight:800">🔥 INVERSION</span>' : ''}
+                            ${ki.timingLabel ? `<span style="background:rgba(90,160,255,0.18);color:#7db7ff;padding:2px 7px;border-radius:3px;font-size:11px;font-weight:800">${ki.timingLabel}</span>` : ''}
                             ${isLastCall ? `<span id="kalshi-lc-${ki.sym}" data-close-ms="${ki.closeTimeMs}" style="background:rgba(255,40,40,0.22);color:var(--color-red);padding:2px 7px;border-radius:3px;font-size:11px;font-weight:800;font-family:var(--font-mono)">⚡ ${timeStr}</span>` : ''}
                             <span style="margin-left:auto;color:${alignColor};font-size:11px;font-weight:700">${alignTagC}</span>
                           </div>`}
@@ -8426,6 +8475,8 @@
                      ${ki.tailRisk ? `<div style="font-size:11px;color:#ff6b6b;margin-top:3px">⚠ Tail risk ($${ki.entryPrice != null ? ki.entryPrice.toFixed(2) : '?'} entry)${ki.lossErasesWins ? ' — one loss erases ' + ki.lossErasesWins + ' wins' : ''}</div>` : ''}
                       ${isCrowdFade ? `<div style="font-size:11px;color:#e040fb;margin-top:3px">🔄 Mispricing hunter active — blockchain momentum is diverging from crowd pricing</div>`
               : isDivergent ? `<div style="font-size:11px;color:#ff8c00;margin-top:3px">⚡ Model vs house — buy the mispriced side, the edge IS the divergence</div>` : ''}
+                      ${ki.exitPlan && isTrade ? `<div style="font-size:11px;color:#7db7ff;margin-top:3px">${ki.exitPlan}</div>` : ''}
+                      ${ki.timingBlocks?.length && !isTrade ? `<div style="font-size:11px;color:var(--color-text-faint);margin-top:3px">Watching: ${ki.timingBlocks.slice(0, 3).join(' · ')}</div>` : ''}
                       ${ki.humanReason ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:4px;line-height:1.4">${ki.humanReason}</div>` : ''}
                       ${renderFifteenMinuteMovePlan(ki, true)}
                     </div>`;
@@ -12328,6 +12379,8 @@
           console.info('[WE] ⚡ Async refresh engine active — settlement pulses handled in background');
         }
       }, 4500); // arm after all modules are up
+      // Start high-precision 15m coordinator to prefetch and confirm predictions
+      setTimeout(() => { if (window.Coordinator15m) { window.Coordinator15m.start(); console.info('[WE] Coordinator15m started'); } }, 6000);
     });
   });
 
@@ -12400,19 +12453,73 @@
         window._adaptiveTuner = new AdaptiveTuner();
         console.log('[App] AdaptiveTuner initialized');
 
-        // Schedule tuning to run every 15 minutes (match trade timeframe)
+        const adaptiveCoinSymbols = () => {
+          if (window._adaptiveTuner?.getTuningCoins) return window._adaptiveTuner.getTuningCoins();
+          return (window.PREDICTION_COINS || []).map(c => c && c.sym).filter(Boolean);
+        };
+        const secsToClose = (sym) => {
+          const close = window.PredictionMarkets?.getCoin?.(sym)?.kalshi15m?.closeTime;
+          if (!close) return null;
+          const ms = new Date(close).getTime() - Date.now();
+          return Number.isFinite(ms) ? ms / 1000 : null;
+        };
+        window._runAdaptiveLiveRetune = (reason = 'continuous') => {
+          if (!window._adaptiveTuner?.observeLiveMarketState) return null;
+          const touched = [];
+          for (const sym of adaptiveCoinSymbols()) {
+            try {
+              const pred = window._predictions?.[sym] || window._lastPrediction?.[sym] || null;
+              const cfm = window._cfmAll?.[sym] || window.CFMEngine?.getAll?.()?.[sym] || null;
+              const balance = window.OB?.getBalanceMetrics?.(sym) || null;
+              const state = window._adaptiveTuner.observeLiveMarketState(sym, {
+                pred,
+                cfm,
+                secsLeft: secsToClose(sym),
+                bookImbalance: balance?.imbalance?.value,
+                buyRatio: balance?.flow?.buyRatio,
+                reason,
+              });
+              if (state) touched.push(sym);
+            } catch (err) {
+              console.warn('[AdaptiveTuner] live retune failed for', sym, err.message);
+            }
+          }
+          return touched;
+        };
+
+        setTimeout(async () => {
+          try {
+            window._runAdaptiveLiveRetune?.('startup');
+            await window._adaptiveTuner.runTuningCycle({ validatePyth: false, dryRun: false, reason: 'startup-live-retune' });
+          } catch (err) {
+            console.warn('[AdaptiveTuner] startup retune failed:', err.message);
+          }
+        }, 5000);
+
+        // Continuous live adaptation: cheap, all-coin threshold pressure.
+        setInterval(() => {
+          try { window._runAdaptiveLiveRetune?.('continuous-live-retune'); } catch (_) {}
+        }, 5000);
+
+        // Outcome/indicator retune checks run on the tuner cadence instead of waiting 15m.
         setInterval(async () => {
           try {
-            const result = await window._adaptiveTuner.runTuningCycle({ validatePyth: true, dryRun: false });
+            const trigger = window._adaptiveTuner.shouldRetune?.() || { shouldRetune: true, trigger: 'scheduled' };
+            if (!trigger.shouldRetune) return;
+            const result = await window._adaptiveTuner.runTuningCycle({
+              validatePyth: true,
+              dryRun: false,
+              reason: trigger.trigger || 'continuous-scheduled',
+            });
             if (result.totalAdjustments > 0) {
               console.log(`[AdaptiveTuner] ${result.totalAdjustments} thresholds adjusted at ${new Date().toLocaleTimeString()}`);
             }
           } catch (err) {
             console.warn('[AdaptiveTuner] Cycle failed:', err.message);
           }
-        }, 15 * 60 * 1000); // 15 minutes
+        }, 60 * 1000);
 
-        console.log('[App] AdaptiveTuner scheduled for every 15 minutes');
+        console.log('[App] AdaptiveTuner continuous live retune enabled + cycle checks every 60 seconds');
       }
       if (typeof PythSettlementValidator !== 'undefined') {
         window._pythSettlementValidator = new PythSettlementValidator();
@@ -12422,7 +12529,7 @@
         setInterval(async () => {
           if (!window._pythSettlementValidator || !window._adaptiveTuner) return;
           try {
-            const TRACKING_COINS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
+            const TRACKING_COINS = window._adaptiveTuner?.getTuningCoins?.() || ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'DOGE', 'HYPE'];
             for (const sym of TRACKING_COINS) {
               const priceData = await window._pythSettlementValidator.getCurrentPrice(sym);
               window._pythSettlementValidator.recordPrice(sym, priceData.price);

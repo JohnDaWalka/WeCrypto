@@ -140,6 +140,7 @@
 
             // Fire all streams in parallel — they run independently and never block startup.
             void this.streamPredictions().catch(err => console.error('[AsyncRefreshEngine] predictions stream failed:', err));
+            void this.streamOrderBookImbalance().catch(err => console.error('[AsyncRefreshEngine] order-book stream failed:', err));
             void this.streamKalshiBalance().catch(err => console.error('[AsyncRefreshEngine] balance stream failed:', err));
             void this.streamMarketData().catch(err => console.error('[AsyncRefreshEngine] market stream failed:', err));
             void this.streamSettlementPulse().catch(err => console.error('[AsyncRefreshEngine] settlement stream failed:', err));
@@ -276,6 +277,92 @@
                     this.metrics.streamStates[streamId] = `⚠ ${err.message}`;
                     await this.sleepUntil(Date.now() + 5_000);
                     nextRunAt = this.nextAlignedAt(30_000);
+                }
+            }
+        }
+
+        /**
+         * STREAM 1b: Order book imbalance (fast, async, no REST dependency)
+         * Samples live WebSocket books independently from the heavier prediction
+         * cycle and asks the prediction engine to rescore only when imbalance is
+         * meaningful or changing fast.
+         */
+        async streamOrderBookImbalance() {
+            const streamId = 'orderbook-imbalance';
+            const coins = () => (window.PREDICTION_COINS || [])
+                .map(c => c && c.sym)
+                .filter(Boolean);
+            let cycle = 0;
+            const lastBySym = {};
+
+            while (this.running) {
+                try {
+                    const intervalMs = document.hidden ? 5000 : 1000;
+                    await this.sleep(intervalMs);
+                    if (!this.running) break;
+
+                    cycle++;
+                    const updates = [];
+                    for (const sym of coins()) {
+                        const book = window.OB?.getFreshBook?.(sym, 3000) || window.OB?.books?.[sym] || null;
+                        const balance = window.OB?.getBalanceMetrics?.(sym) || null;
+                        const imbalance = Number(balance?.imbalance?.value ?? 0);
+                        const band = balance?.imbalance?.band || 'unknown';
+                        const ageMs = book?.timestamp ? Math.max(0, this.nowMs() - book.timestamp) : Infinity;
+                        if (!book || ageMs > 3500) continue;
+
+                        const prev = lastBySym[sym] || {};
+                        const delta = Math.abs(imbalance - Number(prev.imbalance || 0));
+                        const absImb = Math.abs(imbalance);
+                        const closeMs = (() => {
+                            const close = window.PredictionMarkets?.getCoin?.(sym)?.kalshi15m?.closeTime;
+                            if (!close) return null;
+                            const ms = new Date(close).getTime() - this.nowMs();
+                            return Number.isFinite(ms) ? ms : null;
+                        })();
+                        const closeValueWindow = Number.isFinite(closeMs) && closeMs <= 210000 && closeMs >= 45000;
+                        try {
+                            window._adaptiveTuner?.observeLiveMarketState?.(sym, {
+                                pred: window._predictions?.[sym] || window._lastPrediction?.[sym] || null,
+                                cfm: window._cfmAll?.[sym] || window.CFMEngine?.getAll?.()?.[sym] || null,
+                                secsLeft: Number.isFinite(closeMs) ? closeMs / 1000 : null,
+                                bookImbalance: imbalance,
+                                buyRatio: balance?.flow?.buyRatio,
+                                reason: 'orderbook-imbalance-scan',
+                            });
+                        } catch (_) {}
+                        const shouldRescore = closeValueWindow
+                            || absImb >= 0.20
+                            || delta >= 0.07
+                            || /strong|extreme/.test(String(band));
+
+                        lastBySym[sym] = { imbalance, band, ts: this.nowMs() };
+                        if (!shouldRescore) continue;
+
+                        let prediction = null;
+                        if (window.PredictionEngine?.rescoreLiveMicrostructure) {
+                            prediction = window.PredictionEngine.rescoreLiveMicrostructure(sym, {
+                                reason: closeValueWindow ? 'close-window-book-scan' : 'orderbook-imbalance-scan',
+                            });
+                        }
+                        updates.push({ sym, imbalance, band, delta, closeMs, rescored: !!prediction });
+                    }
+
+                    if (updates.length) {
+                        this.bus.emit('orderbook:imbalance', {
+                            cycle,
+                            updates,
+                            timestamp: this.nowMs(),
+                        });
+                    }
+
+                    this.metrics.streamStates[streamId] = updates.length
+                        ? `✓ cycle ${cycle} (${updates.length} cues)`
+                        : `✓ cycle ${cycle}`;
+                } catch (err) {
+                    console.warn(`[Stream:OrderBookImbalance] Error:`, err.message);
+                    this.metrics.streamStates[streamId] = `⚠ ${err.message}`;
+                    await this.sleep(3000);
                 }
             }
         }

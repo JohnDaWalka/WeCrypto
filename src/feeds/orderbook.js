@@ -20,7 +20,7 @@
   const LIQSNAP_MAX = 450;
   const WALL_BEEPS_PERMANENTLY_DISABLED = true;
 
-  const books = {};   // sym → { bids, asks, mid }
+  const books = {};   // sym → { bids, asks, mid, timestamp }
   const wallTracker = {};   // sym → { bids: Map<priceStr,{qty,firstTs,lastQty}>, asks: Map }
   const liquiditySnaps = {}; // sym → [{ts, mid, bids, asks}]
   const balanceMetrics = {}; // sym → depth balance snapshot
@@ -68,7 +68,7 @@
 
   function _initBookState(sym) {
     if (books[sym]) return;
-    books[sym] = { bids: [], asks: [], mid: 0, spread: 0, spreadPct: 0 };
+    books[sym] = { bids: [], asks: [], mid: 0, spread: 0, spreadPct: 0, timestamp: 0, source: 'orderbook-ws' };
     wallTracker[sym] = { bids: new Map(), asks: new Map() };
     liquiditySnaps[sym] = [];
     balanceMetrics[sym] = null;
@@ -212,13 +212,22 @@
     const spread = bestAsk - bestBid;
     const spreadPct = mid > 0 ? (spread / mid) * 100 : 0;
 
-    books[sym] = { bids, asks, mid, spread, spreadPct };
-
     const now = Date.now();
+    books[sym] = { bids, asks, mid, spread, spreadPct, timestamp: now, source: 'orderbook-ws' };
     detectWalls(sym, 'bids', bids, mid, now);
     detectWalls(sym, 'asks', asks, mid, now);
 
     balanceMetrics[sym] = computeBalanceMetrics(sym, bids, asks, mid, spreadPct);
+
+    if (window.PredictionEngine?.updateLiveOrderBook) {
+      try {
+        window.PredictionEngine.updateLiveOrderBook(sym, books[sym], {
+          balance: balanceMetrics[sym],
+          source: 'orderbook-ws',
+          silent: true,
+        });
+      } catch (_) { }
+    }
 
     // Liquidity snapshot
     if (now - lastSnapTs[sym] >= LIQSNAP_INTERVAL) {
@@ -230,6 +239,11 @@
 
     const fns = listeners.get(sym);
     if (fns) fns.forEach(fn => fn(books[sym]));
+    try {
+      window.dispatchEvent(new CustomEvent('orderbook:updated', {
+        detail: { sym, book: books[sym], balance: balanceMetrics[sym] }
+      }));
+    } catch (_) { }
   }
 
   // ── Wall detection ────────────────────────────────────────────────────────
@@ -353,6 +367,11 @@
     onBook: (sym, fn) => {
       if (!listeners.has(sym)) listeners.set(sym, []);
       listeners.get(sym).push(fn);
+    },
+    getFreshBook: (sym, ttlMs = 2500) => {
+      const book = books[sym];
+      if (!book || !book.timestamp) return null;
+      return Date.now() - book.timestamp <= ttlMs ? book : null;
     },
     getBalanceMetrics: (sym) => balanceMetrics[sym] || null,
     offBook: (sym, fn) => {

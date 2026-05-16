@@ -28,8 +28,8 @@
   const CB_EXCH_BASE = 'https://api.exchange.coinbase.com';
   const CB_EXCH_SYMS = { BTC: 'BTC-USD', ETH: 'ETH-USD', SOL: 'SOL-USD', XRP: 'XRP-USD', DOGE: 'DOGE-USD', BNB: 'BNB-USD' };
   const GECKO_ONLY = new Set(['HYPE', 'BNB']);
-  const BIN_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
-  const MEXC_SYMS = { BTC:'BTCUSDT', ETH:'ETHUSDT', SOL:'SOLUSDT', XRP:'XRPUSDT', HYPE:'HYPEUSDT', DOGE:'DOGEUSDT', BNB:'BNBUSDT' };
+  const BIN_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
+  const MEXC_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
   const BYBIT_BASE = 'https://api.bybit.com/v5';
   const BYBIT_SYMS = { BTC: 'BTCUSDT', ETH: 'ETHUSDT', SOL: 'SOLUSDT', XRP: 'XRPUSDT', HYPE: 'HYPEUSDT', DOGE: 'DOGEUSDT', BNB: 'BNBUSDT' };
   const KUCOIN_BASE = 'https://api.kucoin.com/api/v1';
@@ -55,7 +55,7 @@
   let advancedBacktestWarmPromise = null;
 
   // ── Backtest localStorage cache (cold-start / refresh acceleration) ───────
-  const BT_CACHE_KEY    = 'beta1_bt_cache';
+  const BT_CACHE_KEY = 'beta1_bt_cache';
   const BT_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
   function saveBtCache() {
@@ -66,7 +66,7 @@
         if (bt) store[coin.sym] = { bt, ts: Date.now(), walkKey: candleCache[coin.sym]?._walkBacktestKey || '' };
       });
       localStorage.setItem(BT_CACHE_KEY, JSON.stringify(store));
-    } catch(e) {}
+    } catch (e) { }
   }
 
   (function loadBtCache() {
@@ -81,35 +81,35 @@
         // Pre-seed in-memory key so runWalkForwardBacktest skips re-run when candles match
         if (!candleCache[coin.sym]) candleCache[coin.sym] = {};
         candleCache[coin.sym]._walkBacktestKey = entry.walkKey;
-        candleCache[coin.sym]._walkBacktest    = entry.bt;
+        candleCache[coin.sym]._walkBacktest = entry.bt;
       });
-    } catch(e) {}
+    } catch (e) { }
   })();
   // PATCH-DIAG: ichimoku ↓ (slow, hurts short horizons), momentum ↑ short-term,
   //             structure ↑, williamsR ↓ (single-indicator dominance reduced)
   const ENABLE_MDT_SCORE_MULT = true; // set false to instantly revert to pre-MDT formula
   const COMPOSITE_WEIGHTS = {
     // ── Trend-following (74% of weight) — momentum continuation dominates at 1-15 min ──
-    ema:          0.18,  // ↑↑ strongest directional anchor
-    structure:    0.17,  // ↑↑ breakout/breakdown confirmation
-    momentum:     0.14,  // ↑↑↑ short-term rate of change
-    persistence:  0.12,  // recent candle direction continuation
-    macd:         0.10,  // trend momentum confirmation
-    obv:          0.09,  // volume-confirmed direction
-    volume:       0.08,  // volume confirmation
+    ema: 0.18,  // ↑↑ strongest directional anchor
+    structure: 0.17,  // ↑↑ breakout/breakdown confirmation
+    momentum: 0.14,  // ↑↑↑ short-term rate of change
+    persistence: 0.12,  // recent candle direction continuation
+    macd: 0.10,  // trend momentum confirmation
+    obv: 0.09,  // volume-confirmed direction
+    volume: 0.08,  // volume confirmation
     // ── Neutral / gating ──────────────────────────────────────────────────
-    vwap:         0.06,  // ↓↓ mean-reversion bias, reduced
-    adx:          0.05,  // ↓↓ ADX gate handles flat suppression separately
-    book:         0.13,  // microstructure (live-only)
-    flow:         0.12,  // microstructure (live-only)
+    vwap: 0.06,  // ↓↓ mean-reversion bias, reduced
+    adx: 0.05,  // ↓↓ ADX gate handles flat suppression separately
+    book: 0.13,  // microstructure (live-only)
+    flow: 0.12,  // microstructure (live-only)
     mktSentiment: 0.11,  // sentiment (live-only)
     // ── Mean-reversion oscillators (15% total) — reduce harmful anti-momentum votes ──
-    rsi:          0.04,  // ↓↓ overbought/oversold misleads at short horizons
-    bands:        0.04,  // ↓↓ price at upper band ≠ sell at 5-min
-    williamsR:    0.04,  // ↓↓↓ was 0.17 — most harmful mean-reversion signal
-    stochrsi:     0.03,  // ↓↓ mean-reversion oscillator
-    mfi:          0.03,  // ↓↓ mean-reversion oscillator
-    ichimoku:     0.02,  // ↓↓↓ 52-bar cloud is noise at 1–5 min horizons
+    rsi: 0.04,  // ↓↓ overbought/oversold misleads at short horizons
+    bands: 0.04,  // ↓↓ price at upper band ≠ sell at 5-min
+    williamsR: 0.04,  // ↓↓↓ was 0.17 — most harmful mean-reversion signal
+    stochrsi: 0.03,  // ↓↓ mean-reversion oscillator
+    mfi: 0.03,  // ↓↓ mean-reversion oscillator
+    ichimoku: 0.02,  // ↓↓↓ 52-bar cloud is noise at 1–5 min horizons
   };
 
   // ================================================================
@@ -120,17 +120,17 @@
   // ================================================================
   const SIGNAL_GATE = {
     // Hard gate — signal must pass ALL of these to be directional
-    minConfidence:    42,    // % confidence
-    minAgreement:     0.56,  // indicator agreement ratio (was 0.54)
-    maxConflict:      0.38,
-    minAbsScore:      0.22,  // was 0.10 — now scaled for post-amplification composite
-    minReliability:   0.42,
+    minConfidence: 42,    // % confidence
+    minAgreement: 0.56,  // indicator agreement ratio (was 0.54)
+    maxConflict: 0.38,
+    minAbsScore: 0.22,  // was 0.10 — now scaled for post-amplification composite
+    minReliability: 0.42,
 
     // Soft gate — signal is flagged LOW CONVICTION if below either
-    medConfidence:    58,
-    medAgreement:     0.64,  // was 0.62
-    medAbsScore:      0.38,  // was 0.20 — scaled for post-amplification
-    medReliability:   0.52,
+    medConfidence: 58,
+    medAgreement: 0.64,  // was 0.62
+    medAbsScore: 0.38,  // was 0.20 — scaled for post-amplification
+    medReliability: 0.52,
   };
 
   /**
@@ -148,10 +148,10 @@
       return { passed: true, gated: false, quality: 'medium', label: 'NEUTRAL', reasons: [] };
     }
 
-    const conf      = pred.confidence ?? 0;
-    const absScore  = Math.abs(pred.score ?? 0);
+    const conf = pred.confidence ?? 0;
+    const absScore = Math.abs(pred.score ?? 0);
     const agreement = pred.diagnostics?.agreement ?? 0.5;
-    const conflict  = pred.diagnostics?.conflict  ?? 0;
+    const conflict = pred.diagnostics?.conflict ?? 0;
     const reliability = pred.backtest?.summary?.reliability ?? 0;
     const routedAction = pred.diagnostics?.routedAction ?? '';
     const reasons = [];
@@ -215,12 +215,12 @@
   const BACKTEST_THRESHOLD_GRID = [0.08, 0.10, 0.12, 0.16, 0.20];
   const BACKTEST_AGREEMENT_GRID = [0.50, 0.54, 0.58];
   const BACKTEST_FILTER_OVERRIDES = {
-    BTC:  { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-    ETH:  { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-    SOL:  { h1: { entryThreshold: 0.20, minAgreement: 0.52 }, h5: { entryThreshold: 0.25, minAgreement: 0.56 }, h10: { entryThreshold: 0.30, minAgreement: 0.60 }, h15: { entryThreshold: 0.35, minAgreement: 0.64 } },
-    XRP:  { h1: { entryThreshold: 0.19, minAgreement: 0.52 }, h5: { entryThreshold: 0.23, minAgreement: 0.56 }, h10: { entryThreshold: 0.28, minAgreement: 0.60 }, h15: { entryThreshold: 0.32, minAgreement: 0.64 } },
+    BTC: { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
+    ETH: { h1: { entryThreshold: 0.23, minAgreement: 0.54 }, h5: { entryThreshold: 0.28, minAgreement: 0.58 }, h10: { entryThreshold: 0.33, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
+    SOL: { h1: { entryThreshold: 0.20, minAgreement: 0.52 }, h5: { entryThreshold: 0.25, minAgreement: 0.56 }, h10: { entryThreshold: 0.30, minAgreement: 0.60 }, h15: { entryThreshold: 0.35, minAgreement: 0.64 } },
+    XRP: { h1: { entryThreshold: 0.19, minAgreement: 0.52 }, h5: { entryThreshold: 0.23, minAgreement: 0.56 }, h10: { entryThreshold: 0.28, minAgreement: 0.60 }, h15: { entryThreshold: 0.32, minAgreement: 0.64 } },
     DOGE: { h1: { entryThreshold: 0.28, minAgreement: 0.58 }, h5: { entryThreshold: 0.32, minAgreement: 0.60 }, h10: { entryThreshold: 0.35, minAgreement: 0.62 }, h15: { entryThreshold: 0.38, minAgreement: 0.66 } },
-    BNB:  { h1: { entryThreshold: 0.20, maxScore: 0.58, minAgreement: 0.54 }, h5: { entryThreshold: 0.25, maxScore: 0.58, minAgreement: 0.58 }, h10: { entryThreshold: 0.29, maxScore: 0.58, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, maxScore: 0.58, minAgreement: 0.64 } },
+    BNB: { h1: { entryThreshold: 0.20, maxScore: 0.58, minAgreement: 0.54 }, h5: { entryThreshold: 0.25, maxScore: 0.58, minAgreement: 0.58 }, h10: { entryThreshold: 0.29, maxScore: 0.58, minAgreement: 0.62 }, h15: { entryThreshold: 0.33, maxScore: 0.58, minAgreement: 0.64 } },
     HYPE: { h1: { entryThreshold: 0.18, maxScore: 0.40, minAgreement: 0.52 }, h5: { entryThreshold: 0.20, maxScore: 0.40, minAgreement: 0.52 }, h10: { entryThreshold: 0.22, maxScore: 0.40, minAgreement: 0.54 }, h15: { entryThreshold: 0.24, maxScore: 0.40, minAgreement: 0.56 } },
   };
   const ORBITAL_ROUTER_PROFILES = {
@@ -291,14 +291,14 @@
 
     // Session windows (UTC)
     const sessions = {
-      asia_open:   { start: 0, end: 2,   label: 'Asia Open',     scalp: true,  desc: 'Tokyo/Seoul open — high volatility spike, scalp-friendly' },
-      asia_mid:    { start: 2, end: 6,   label: 'Asia Session',  scalp: false, desc: 'Mid-session Asia — liquidity thinning' },
-      london_open: { start: 7, end: 9,   label: 'London Open',   scalp: true,  desc: 'London/EU open — biggest volume surge, prime scalp window' },
-      london_mid:  { start: 9, end: 12,  label: 'London Session', scalp: false, desc: 'EU active — steady directional flow' },
-      ny_open:     { start: 13, end: 15.5, label: 'NY Open',      scalp: true,  desc: 'NYSE open overlap — maximum liquidity, sharpest moves' },
-      ny_mid:      { start: 15.5, end: 18, label: 'NY Session',   scalp: false, desc: 'US afternoon — momentum continuation or reversal' },
-      ny_close:    { start: 18, end: 21,  label: 'NY Close',      scalp: true,  desc: 'NYSE close — position squaring, mean-reversion scalps' },
-      dead_zone:   { start: 21, end: 24,  label: 'Dead Zone',     scalp: false, desc: 'Low liquidity — avoid scalping, wide spreads' },
+      asia_open: { start: 0, end: 2, label: 'Asia Open', scalp: true, desc: 'Tokyo/Seoul open — high volatility spike, scalp-friendly' },
+      asia_mid: { start: 2, end: 6, label: 'Asia Session', scalp: false, desc: 'Mid-session Asia — liquidity thinning' },
+      london_open: { start: 7, end: 9, label: 'London Open', scalp: true, desc: 'London/EU open — biggest volume surge, prime scalp window' },
+      london_mid: { start: 9, end: 12, label: 'London Session', scalp: false, desc: 'EU active — steady directional flow' },
+      ny_open: { start: 13, end: 15.5, label: 'NY Open', scalp: true, desc: 'NYSE open overlap — maximum liquidity, sharpest moves' },
+      ny_mid: { start: 15.5, end: 18, label: 'NY Session', scalp: false, desc: 'US afternoon — momentum continuation or reversal' },
+      ny_close: { start: 18, end: 21, label: 'NY Close', scalp: true, desc: 'NYSE close — position squaring, mean-reversion scalps' },
+      dead_zone: { start: 21, end: 24, label: 'Dead Zone', scalp: false, desc: 'Low liquidity — avoid scalping, wide spreads' },
     };
 
     let current = sessions.dead_zone;
@@ -356,7 +356,7 @@
 
   function normCandle(c) {
     if (Array.isArray(c)) return { t: c[0], o: +c[1], h: +c[2], l: +c[3], c: +c[4], v: +c[5] };
-    return { t: c.t, o: +(c.o||0), h: +(c.h||0), l: +(c.l||0), c: +(c.c||0), v: +(c.v||0) };
+    return { t: c.t, o: +(c.o || 0), h: +(c.h || 0), l: +(c.l || 0), c: +(c.c || 0), v: +(c.v || 0) };
   }
 
   function wait(ms) {
@@ -405,7 +405,7 @@
     };
 
     const queued = geckoRequestQueue.then(() => run());
-    geckoRequestQueue = queued.catch(() => {});
+    geckoRequestQueue = queued.catch(() => { });
     return queued;
   }
 
@@ -844,11 +844,11 @@
     const json = await res.json();
     if (!Array.isArray(json)) return [];
     return json.map(t => ({
-      px:   Number(t.price),
-      qty:  Number(t.qty),
+      px: Number(t.price),
+      qty: Number(t.qty),
       // isBuyerMaker=false → taker was buyer (aggressive buy)
       side: t.isBuyerMaker ? 'sell' : 'buy',
-      t:    Number(t.time),
+      t: Number(t.time),
     })).filter(t => Number.isFinite(t.qty) && t.qty > 0);
   }
 
@@ -918,7 +918,7 @@
   // HYPE not listed on Kraken; all other PREDICTION_COINS supported
   // ---------------------------------------------------------------
   const KRAKEN_BASE = 'https://api.kraken.com/0/public';
-  const KRAKEN_SYMS = { BTC:'XBTUSD', ETH:'ETHUSD', SOL:'SOLUSD', XRP:'XRPUSD', DOGE:'XDGUSD', BNB:'BNBUSD' };
+  const KRAKEN_SYMS = { BTC: 'XBTUSD', ETH: 'ETHUSD', SOL: 'SOLUSD', XRP: 'XRPUSD', DOGE: 'XDGUSD', BNB: 'BNBUSD' };
 
   function krakenInterval(tf) {
     return tf === '1m' ? 1 : tf === '5m' ? 5 : tf === '15m' ? 15 : 5;
@@ -975,10 +975,10 @@
     if (!rows) return [];
     // Kraken trade: [price, volume, time_float, "b"/"s", ...]
     return rows.slice(-limit).map(t => ({
-      px:   Number(t[0]),
-      qty:  Number(t[1]),
+      px: Number(t[0]),
+      qty: Number(t[1]),
       side: t[3] === 'b' ? 'buy' : 'sell',
-      t:    Math.round(Number(t[2]) * 1000),
+      t: Math.round(Number(t[2]) * 1000),
     })).filter(t => Number.isFinite(t.qty) && t.qty > 0);
   }
 
@@ -1366,7 +1366,7 @@
     const signal = clamp(((aboveRate - 50) / 30) + slopePct * 4, -1, 1);
     const label = aboveRate >= 75 && slopePct > 0.04 ? 'Persistent uptrend'
       : aboveRate <= 25 && slopePct < -0.04 ? 'Persistent downtrend'
-      : 'Mixed persistence';
+        : 'Mixed persistence';
     return { aboveRate, slopePct, signal, label };
   }
 
@@ -1392,7 +1392,7 @@
     }
     const label = zone === 'support' ? 'Near support buffer'
       : zone === 'resistance' ? 'Near resistance buffer'
-      : 'Inside range';
+        : 'Inside range';
     return { support, resistance, supportGapPct, resistanceGapPct, signal, label, zone, bufferPct };
   }
 
@@ -1567,9 +1567,9 @@
       vetoed: !isActive && (conflictVeto || weakCoreVeto || structureVeto || persistenceVeto),
       vetoReason: conflictVeto ? 'conflict veto'
         : weakCoreVeto ? 'weak-core veto'
-        : structureVeto ? 'structure veto'
-        : persistenceVeto ? 'persistence veto'
-        : '',
+          : structureVeto ? 'structure veto'
+            : persistenceVeto ? 'persistence veto'
+              : '',
     };
   }
 
@@ -1683,15 +1683,15 @@
   function summarizeReliabilityLabel(reliability) {
     return reliability >= 0.72 ? 'Strong'
       : reliability >= 0.56 ? 'Decent'
-      : reliability >= 0.40 ? 'Mixed'
-      : 'Weak';
+        : reliability >= 0.40 ? 'Mixed'
+          : 'Weak';
   }
 
   function summarizeTradeFitLabel(tradeFit) {
     return tradeFit >= 0.72 ? 'Dialed in'
       : tradeFit >= 0.58 ? 'Short-term edge'
-      : tradeFit >= 0.44 ? 'Watchlist only'
-      : 'Needs caution';
+        : tradeFit >= 0.44 ? 'Watchlist only'
+          : 'Needs caution';
   }
 
   function scoreTradeFitHorizon(stats, horizonMin) {
@@ -1930,8 +1930,8 @@
   function normalCDF(z) {
     const t = 1 / (1 + 0.2316419 * Math.abs(z));
     const poly = t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
-    const pdf  = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
-    const p    = 1 - pdf * poly;
+    const pdf = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
+    const p = 1 - pdf * poly;
     return z >= 0 ? p : 1 - p;
   }
 
@@ -2335,8 +2335,8 @@
         regime = 'TRENDING_UP'; bias = 'bullish'; layer = 4;
         biasScore = str * (confirmed ? 1.15 : caution ? 0.65 : 0.90);
         biasConf = confirmed ? Math.min(88, 68 + (adx - 22) * 0.8)
-                 : caution  ? Math.min(55, 42 + (adx - 22) * 0.5)
-                             : Math.min(72, 58 + (adx - 22) * 0.6);
+          : caution ? Math.min(55, 42 + (adx - 22) * 0.5)
+            : Math.min(72, 58 + (adx - 22) * 0.6);
         path.push({ node: 'TREND', type: 'trend', cond: `adx=${adx.toFixed(1)} trendUp confirmed=${confirmed} caution=${caution}`, result: 'TRENDING_UP', pass: true });
       } else if (trendDn) {
         const str = clamp((adx / 50) * Math.min(absVal(emaCross) / 0.3, 1), 0.25, 1);
@@ -2345,8 +2345,8 @@
         regime = 'TRENDING_DOWN'; bias = 'bearish'; layer = 4;
         biasScore = -(str * (confirmed ? 1.15 : caution ? 0.65 : 0.90));
         biasConf = confirmed ? Math.min(88, 68 + (adx - 22) * 0.8)
-                 : caution  ? Math.min(55, 42 + (adx - 22) * 0.5)
-                             : Math.min(72, 58 + (adx - 22) * 0.6);
+          : caution ? Math.min(55, 42 + (adx - 22) * 0.5)
+            : Math.min(72, 58 + (adx - 22) * 0.6);
         path.push({ node: 'TREND', type: 'trend', cond: `adx=${adx.toFixed(1)} trendDn confirmed=${confirmed} caution=${caution}`, result: 'TRENDING_DOWN', pass: true });
       } else {
         const diDiffVal = (pdi - mdi) / ((pdi + mdi) || 1);
@@ -2609,18 +2609,18 @@
       const suppressFactor = clamp((adxResult.adx - 22) / 28, 0, 0.70);
       if (isBullTrend) {
         // Dampen bearish readings from contrarian oscillators during bull trends
-        if (rsiSig   < 0) rsiSig   *= (1 - suppressFactor);
+        if (rsiSig < 0) rsiSig *= (1 - suppressFactor);
         if (stochSig < 0) stochSig *= (1 - suppressFactor);
-        if (wRSig    < 0) wRSig    *= (1 - suppressFactor);
-        if (bandSig  < 0) bandSig  *= (1 - suppressFactor * 0.6);
-        if (mfiSig   < 0) mfiSig   *= (1 - suppressFactor * 0.6);
+        if (wRSig < 0) wRSig *= (1 - suppressFactor);
+        if (bandSig < 0) bandSig *= (1 - suppressFactor * 0.6);
+        if (mfiSig < 0) mfiSig *= (1 - suppressFactor * 0.6);
       } else {
         // Dampen bullish readings from contrarian oscillators during bear trends
-        if (rsiSig   > 0) rsiSig   *= (1 - suppressFactor);
+        if (rsiSig > 0) rsiSig *= (1 - suppressFactor);
         if (stochSig > 0) stochSig *= (1 - suppressFactor);
-        if (wRSig    > 0) wRSig    *= (1 - suppressFactor);
-        if (bandSig  > 0) bandSig  *= (1 - suppressFactor * 0.6);
-        if (mfiSig   > 0) mfiSig   *= (1 - suppressFactor * 0.6);
+        if (wRSig > 0) wRSig *= (1 - suppressFactor);
+        if (bandSig > 0) bandSig *= (1 - suppressFactor * 0.6);
+        if (mfiSig > 0) mfiSig *= (1 - suppressFactor * 0.6);
       }
     }
 
@@ -2669,9 +2669,9 @@
     const wallAbs = detectWallAbsorption(options.candles1m || null);
     if (wallAbs.detected) {
       const sup = wallAbs.strength;
-      signalVector.momentum  = signalVector.momentum  * (1 - sup * 0.88); // most noisy
-      signalVector.obv       = signalVector.obv       * (1 - sup * 0.68); // wrong-dir accumulation
-      signalVector.stochrsi  = signalVector.stochrsi  * (1 - sup * 0.52); // reacts to wick overshoots
+      signalVector.momentum = signalVector.momentum * (1 - sup * 0.88); // most noisy
+      signalVector.obv = signalVector.obv * (1 - sup * 0.68); // wrong-dir accumulation
+      signalVector.stochrsi = signalVector.stochrsi * (1 - sup * 0.52); // reacts to wick overshoots
       // Inject absorption counter-bias via persistence (highest-quality weight)
       const absorbBias = wallAbs.dir * sup * 0.65;
       signalVector.persistence = clamp(signalVector.persistence * 0.4 + absorbBias, -1, 1);
@@ -2716,26 +2716,26 @@
     const scalpSetups = includeSetups ? detectScalpSetups(candles, indicatorsPack, bookAnalysis, tradeFlow, session) : [];
 
     const indicatorsSummary = {
-      rsi:      { value: rsi, signal: rsiSig, label: rsi > 70 ? 'Overbought' : rsi < 30 ? 'Oversold' : rsi > 55 ? 'Bullish' : rsi < 45 ? 'Bearish' : 'Neutral' },
-      ema:      { value: emaCross, signal: emaSig, label: emaCross > 0.1 ? 'Bull Cross' : emaCross < -0.1 ? 'Bear Cross' : 'Converging', ema9: ema9[ema9.length - 1], ema21: ema21[ema21.length - 1] },
-      vwap:     { value: vwapDevRolling, signal: vwapSig, price: vwapRollingLast, bands: vwapBands, label: Math.abs(vwapDevRolling) < 0.3 ? 'At VWAP' : vwapDevRolling > 0 ? 'Above VWAP' : 'Below VWAP' },
-      obv:      { slope: obvSlope, signal: obvSig, label: obvSlope > 2 ? 'Accumulation' : obvSlope < -2 ? 'Distribution' : 'Flat' },
-      volume:   { buyPct: buyV / ((buyV + sellV) || 1) * 100, sellPct: sellV / ((buyV + sellV) || 1) * 100, ratio: volRatio, signal: volSig, label: volRatio > 1.2 ? 'Buy Pressure' : volRatio < 0.8 ? 'Sell Pressure' : 'Balanced' },
+      rsi: { value: rsi, signal: rsiSig, label: rsi > 70 ? 'Overbought' : rsi < 30 ? 'Oversold' : rsi > 55 ? 'Bullish' : rsi < 45 ? 'Bearish' : 'Neutral' },
+      ema: { value: emaCross, signal: emaSig, label: emaCross > 0.1 ? 'Bull Cross' : emaCross < -0.1 ? 'Bear Cross' : 'Converging', ema9: ema9[ema9.length - 1], ema21: ema21[ema21.length - 1] },
+      vwap: { value: vwapDevRolling, signal: vwapSig, price: vwapRollingLast, bands: vwapBands, label: Math.abs(vwapDevRolling) < 0.3 ? 'At VWAP' : vwapDevRolling > 0 ? 'Above VWAP' : 'Below VWAP' },
+      obv: { slope: obvSlope, signal: obvSig, label: obvSlope > 2 ? 'Accumulation' : obvSlope < -2 ? 'Distribution' : 'Flat' },
+      volume: { buyPct: buyV / ((buyV + sellV) || 1) * 100, sellPct: sellV / ((buyV + sellV) || 1) * 100, ratio: volRatio, signal: volSig, label: volRatio > 1.2 ? 'Buy Pressure' : volRatio < 0.8 ? 'Sell Pressure' : 'Balanced' },
       momentum: { value: mom, signal: momSig, label: mom > 0.5 ? 'Rising' : mom < -0.5 ? 'Falling' : 'Flat' },
-      bands:    { position: bands.position, widthPct: bands.widthPct, signal: bandSig, upper: bands.upper, lower: bands.lower, label: bands.position >= 0.88 ? 'Upper-band stretch' : bands.position <= 0.12 ? 'Lower-band stretch' : 'Inside bands' },
+      bands: { position: bands.position, widthPct: bands.widthPct, signal: bandSig, upper: bands.upper, lower: bands.lower, label: bands.position >= 0.88 ? 'Upper-band stretch' : bands.position <= 0.12 ? 'Lower-band stretch' : 'Inside bands' },
       persistence,
       structure,
-      book:     bookAnalysis,
-      flow:     tradeFlow,
-      macd:     { macd: macdResult.macd, signal: macdResult.signal, histogram: macdResult.histogram, sig: macdSig, label: macdResult.histogram > 0 ? (macdResult.macd > macdResult.signal ? 'Bull MACD' : 'Bullish') : (macdResult.macd < macdResult.signal ? 'Bear MACD' : 'Bearish') },
+      book: bookAnalysis,
+      flow: tradeFlow,
+      macd: { macd: macdResult.macd, signal: macdResult.signal, histogram: macdResult.histogram, sig: macdSig, label: macdResult.histogram > 0 ? (macdResult.macd > macdResult.signal ? 'Bull MACD' : 'Bullish') : (macdResult.macd < macdResult.signal ? 'Bear MACD' : 'Bearish') },
       stochrsi: { k: stochRsiResult.k, d: stochRsiResult.d, signal: stochSig, label: stochRsiResult.k > 80 ? 'Overbought' : stochRsiResult.k < 20 ? 'Oversold' : stochRsiResult.k > stochRsiResult.d ? 'Bull cross' : 'Bear cross' },
-      adx:      { adx: adxResult.adx, pdi: adxResult.pdi, mdi: adxResult.mdi, signal: adxSig, label: adxResult.adx > 25 ? (adxResult.pdi > adxResult.mdi ? 'Strong uptrend' : 'Strong downtrend') : 'Ranging' },
+      adx: { adx: adxResult.adx, pdi: adxResult.pdi, mdi: adxResult.mdi, signal: adxSig, label: adxResult.adx > 25 ? (adxResult.pdi > adxResult.mdi ? 'Strong uptrend' : 'Strong downtrend') : 'Ranging' },
       ichimoku: { ...ichimoku, signal: ichiSig, label: ichimoku.cloudPos === 'above' ? 'Above cloud' : ichimoku.cloudPos === 'below' ? 'Below cloud' : 'In cloud' },
       williamsR: { value: wR, signal: wRSig, label: wR > -20 ? 'Overbought' : wR < -80 ? 'Oversold' : 'Neutral' },
-      mfi:      { value: mfi, signal: mfiSig, label: mfi > 80 ? 'Overbought' : mfi < 20 ? 'Oversold' : mfi > 55 ? 'Bullish' : mfi < 45 ? 'Bearish' : 'Neutral' },
+      mfi: { value: mfi, signal: mfiSig, label: mfi > 80 ? 'Overbought' : mfi < 20 ? 'Oversold' : mfi > 55 ? 'Bullish' : mfi < 45 ? 'Bearish' : 'Neutral' },
       mktSentiment: {
         kalshi: mktData?.kalshi ?? null,
-        poly:   mktData?.poly   ?? null,
+        poly: mktData?.poly ?? null,
         combined: mktData?.combinedProb ?? null,
         signal: mktSig,
         label: mktSig > 0.3 ? 'Markets say UP' : mktSig < -0.3 ? 'Markets say DOWN' : 'Markets neutral',
@@ -2776,9 +2776,9 @@
           // YES resolves if closePrice ≥ targetPriceNum (meet or exceed).
           // Compute model-implied P(closePrice ≥ ref) using normal CDF over
           // our projected price distribution (mean = target, sigma = ATR-range).
-          const k15m       = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
-          const kalshiRef  = k15m?.targetPriceNum ?? null;   // null while "TBD"
-          const kalshiYes  = k15m?.probability    ?? null;   // market's YES price (0–1)
+          const k15m = window.PredictionMarkets?.getCoin(options.sym)?.kalshi15m ?? null;
+          const kalshiRef = k15m?.targetPriceNum ?? null;   // null while "TBD"
+          const kalshiYes = k15m?.probability ?? null;   // market's YES price (0–1)
 
           if (kalshiRef !== null && kalshiRef > 0) {
             // sigma: one-sigma price move over 15 min based on ATR
@@ -2786,22 +2786,22 @@
             // z: how far our projected target is above/below the reference threshold
             const z = (target - kalshiRef) / sigma;
             // P(closePrice ≥ kalshiRef) — model-implied YES probability
-            const modelYesPct  = Math.round(normalCDF(z) * 100);
+            const modelYesPct = Math.round(normalCDF(z) * 100);
             const kalshiYesPct = kalshiYes !== null ? Math.round(kalshiYes * 100) : null;
-            const divergence   = kalshiYesPct !== null ? Math.abs(modelYesPct - kalshiYesPct) : null;
+            const divergence = kalshiYesPct !== null ? Math.abs(modelYesPct - kalshiYesPct) : null;
             // Distance from current price to reference (+ means we need to rise to meet it)
-            const gapPct       = ((kalshiRef - lastPrice) / lastPrice) * 100;
+            const gapPct = ((kalshiRef - lastPrice) / lastPrice) * 100;
 
             acc[entry].kalshiAlign = {
-              ref:           kalshiRef,        // settlement threshold (≥ this → YES)
+              ref: kalshiRef,        // settlement threshold (≥ this → YES)
               gapPct,                          // how far current price is from ref
               modelYesPct,                     // our model's P(≥ ref)
               kalshiYesPct,                    // market's YES price
               divergence,                      // |model - market| in percentage points
               // aligned = both agree direction; divergent = gap > 20pp (edge opportunity)
               status: divergence === null ? 'no-market'
-                    : divergence <= 12  ? 'aligned'
-                    : divergence <= 25  ? 'soft-split'
+                : divergence <= 12 ? 'aligned'
+                  : divergence <= 25 ? 'soft-split'
                     : 'divergent',
             };
           }
@@ -3249,9 +3249,9 @@
     ));
     const vetoReason = conflictVeto ? 'Conflict veto'
       : weakCoreVeto ? 'Weak-core veto'
-      : structureVeto ? 'Structure veto'
-      : persistenceVeto ? 'Persistence veto'
-      : '';
+        : structureVeto ? 'Structure veto'
+          : persistenceVeto ? 'Persistence veto'
+            : '';
     const vetoSeverity = hardVeto ? 'hard' : softVeto ? 'soft' : '';
 
     return {
@@ -3335,12 +3335,12 @@
     const sourceLabel = cache?.source || '';
     const trustBase = sourceLabel.includes('coinbase') ? 0.90
       : sourceLabel.includes('crypto.com') ? 0.86
-      : sourceLabel.includes('binance') ? 0.80
-      : sourceLabel.includes('bybit') ? 0.80
-      : sourceLabel.includes('kucoin') ? 0.78
-      : sourceLabel.includes('bitfinex') ? 0.78
-      : sourceLabel.includes('mexc') ? 0.76
-      : 0.72;
+        : sourceLabel.includes('binance') ? 0.80
+          : sourceLabel.includes('bybit') ? 0.80
+            : sourceLabel.includes('kucoin') ? 0.78
+              : sourceLabel.includes('bitfinex') ? 0.78
+                : sourceLabel.includes('mexc') ? 0.76
+                  : 0.72;
     const microTrust = cache?.book && cache?.trades?.length ? 0.84 : 0.46;
     const timingTrust = cache?.candles1m?.length ? 0.82 : 0.35;
     const derivativeTrust = derivCache[coin.sym] ? 0.70 : 0.30;
@@ -3495,8 +3495,8 @@
 
     const riskPackets = [];
     if (transitionRisk) {
-        riskPackets.push(applyRouterProfile({
-          family: 'session-risk',
+      riskPackets.push(applyRouterProfile({
+        family: 'session-risk',
         category: 'session',
         role: 'risk',
         label: 'Session transition',
@@ -3504,9 +3504,9 @@
         direction: 0,
         strength: session.current.label === 'Dead Zone' ? 0.82 : 0.58,
         freshness: 1,
-          trust: 0.86,
-          relevance: 0.86,
-        }, routerProfile));
+        trust: 0.86,
+        relevance: 0.86,
+      }, routerProfile));
     }
     if (bookLiquidity.state === 'thin') {
       riskPackets.push(applyRouterProfile({
@@ -3549,7 +3549,7 @@
         freshness: 1,
         trust: hardVeto ? 1 : 0.86,
         relevance: hardVeto ? 1 : 0.72,
-        }, routerProfile));
+      }, routerProfile));
     }
     const slideRisk = routerProfile.key === 'highBeta'
       && preferredHorizon >= 10
@@ -3709,8 +3709,8 @@
       coin.sym, routerContext, routedPackets, routed, baseScore, baseConf
     ) || null;
 
-    const normalizedScore      = cfmEnrich?.finalScore     ?? baseScore;
-    const normalizedConfidence = cfmEnrich?.finalConf      ?? baseConf;
+    const normalizedScore = cfmEnrich?.finalScore ?? baseScore;
+    const normalizedConfidence = cfmEnrich?.finalConf ?? baseConf;
     const resolvedRouterAction = cfmEnrich?.resolvedAction ?? routed.action;
     const normalizedSignal = resolvedRouterAction === 'invalidated' || resolvedRouterAction === 'stand-aside'
       ? 'neutral'
@@ -3733,20 +3733,20 @@
       scalpSetups: timed.scalpSetups,
       diagnostics: {
         ...timed.diagnostics,
-        routedAction:        resolvedRouterAction,
-        routedBias:          routed.bias,
+        routedAction: resolvedRouterAction,
+        routedBias: routed.bias,
         directionalConflict: routed.directionalConflict,
-        routedRiskScore:     routed.riskScore,
-        routedRiskFlags:     routed.riskFlags,
+        routedRiskScore: routed.riskScore,
+        routedRiskFlags: routed.riskFlags,
         routedPackets,
-        routedSummary:       routed.summaryText,
+        routedSummary: routed.summaryText,
         // CFM floating router diagnostics
-        cfmPackets:          cfmEnrich?.cfmPackets       || [],
-        cfmCalibration:      cfmEnrich?.calibration      || null,
-        cfmAnchor:           cfmEnrich?.anchor           || 0,
-        cfmOverride:         cfmEnrich?.cfmOverride      || false,
-        cfmOverrideReason:   cfmEnrich?.overrideReason   || null,
-        cfmEarlyExit:        cfmEnrich?.earlyExit        || null,
+        cfmPackets: cfmEnrich?.cfmPackets || [],
+        cfmCalibration: cfmEnrich?.calibration || null,
+        cfmAnchor: cfmEnrich?.anchor || 0,
+        cfmOverride: cfmEnrich?.cfmOverride || false,
+        cfmOverrideReason: cfmEnrich?.overrideReason || null,
+        cfmEarlyExit: cfmEnrich?.earlyExit || null,
       },
       backtest,
       // --- Derivatives: funding, OI, squeeze ---
@@ -3777,7 +3777,7 @@
     try {
       const data = await fetchGeckoJSON('/derivatives?include_tickers=unexpired', { minGapMs: 1800, retries: 4 }).catch(() => null);
       if (!Array.isArray(data)) return;
-      const symMap = { BTCUSDT:'BTC', ETHUSDT:'ETH', SOLUSDT:'SOL', XRPUSDT:'XRP', DOGEUSDT:'DOGE', BNBUSDT:'BNB', HYPEUSDT:'HYPE' };
+      const symMap = { BTCUSDT: 'BTC', ETHUSDT: 'ETH', SOLUSDT: 'SOL', XRPUSDT: 'XRP', DOGEUSDT: 'DOGE', BNBUSDT: 'BNB', HYPEUSDT: 'HYPE' };
       const seen = new Set();
       data.forEach(d => {
         const sym = symMap[d.symbol];
@@ -3823,14 +3823,18 @@
     const oi = deriv.oi;
 
     if (funding < -0.5) {
-      return { type: 'short_squeeze', severity: Math.abs(funding) > 1 ? 'high' : 'medium',
+      return {
+        type: 'short_squeeze', severity: Math.abs(funding) > 1 ? 'high' : 'medium',
         desc: `Funding ${funding.toFixed(3)}% — shorts paying heavy. Squeeze risk if price bounces.`,
-        direction: 'up' };
+        direction: 'up'
+      };
     }
     if (funding > 0.3) {
-      return { type: 'long_squeeze', severity: funding > 0.5 ? 'high' : 'medium',
+      return {
+        type: 'long_squeeze', severity: funding > 0.5 ? 'high' : 'medium',
         desc: `Funding +${funding.toFixed(3)}% — longs overcrowded. Liquidation cascade risk on dip.`,
-        direction: 'down' };
+        direction: 'down'
+      };
     }
     return null;
   }
@@ -3848,7 +3852,7 @@
           ...PREDICTION_COINS.map(c => loadCoinData(c)),
           fetchDerivatives()
         ]);
-      } catch {}
+      } catch { }
     },
     async runAll() {
       if (predictionRunPromise) return predictionRunPromise;
@@ -3866,7 +3870,7 @@
         PREDICTION_COINS.forEach(coin => {
           window._predictions[coin.sym] = computePrediction(coin, window._backtests[coin.sym]);
         });
-        warmAdvancedBacktests().catch(() => {});
+        warmAdvancedBacktests().catch(() => { });
         return window._predictions;
       })();
       try {

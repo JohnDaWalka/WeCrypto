@@ -42,9 +42,21 @@ class AdaptiveTuner {
     // gate *objects* ({minAbsScore, minAgreement, ...}), not numbers, and would break
     // any numeric comparisons in evaluateSignalGate before the first tuning cycle runs.
     this.currentGates = {};
-    const INIT_COINS = ['BTC', 'ETH', 'XRP', 'SOL', 'BNB', 'DOGE', 'HYPE'];
+    const INIT_COINS = Object.keys(this.baselineGates);
     for (const sym of INIT_COINS) {
       this.currentGates[sym] = this.baselineGates[sym].minAbsScore;
+    }
+    this.timingGates = {};
+    for (const sym of INIT_COINS) {
+      this.timingGates[sym] = {
+        closeEdgeAdj: 0,
+        closeMispriceAdj: 0,
+        closePayoutAdj: 0,
+        scalpEdgeAdj: 0,
+        source: 'baseline',
+        samples: 0,
+        updatedAt: 0,
+      };
     }
 
     // Market regime tracking
@@ -67,6 +79,330 @@ class AdaptiveTuner {
   // ──────────────────────────────────────────────────────────────
   // PUBLIC API
   // ──────────────────────────────────────────────────────────────
+
+  getTuningCoins() {
+    const active = (typeof window !== 'undefined' && Array.isArray(window.PREDICTION_COINS))
+      ? window.PREDICTION_COINS.map(c => c && c.sym).filter(Boolean)
+      : [];
+    const supported = active.length ? active : Object.keys(this.baselineGates);
+    return [...new Set(supported.map(s => String(s).toUpperCase()))]
+      .filter(sym => this.baselineGates[sym]);
+  }
+
+  clamp(value, min, max) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return min;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  _ensureTimingGate(sym) {
+    const key = String(sym || '').toUpperCase();
+    if (!this.timingGates[key]) {
+      this.timingGates[key] = {
+        closeEdgeAdj: 0,
+        closeMispriceAdj: 0,
+        closePayoutAdj: 0,
+        scalpEdgeAdj: 0,
+        source: 'dynamic',
+        samples: 0,
+        updatedAt: 0,
+      };
+    }
+    return this.timingGates[key];
+  }
+
+  _decayTimingGate(gate, elapsedMs) {
+    const decay = Math.pow(0.90, Math.min(8, Math.max(0, elapsedMs || 0) / 30000));
+    gate.closeEdgeAdj *= decay;
+    gate.closeMispriceAdj *= decay;
+    gate.closePayoutAdj *= decay;
+    gate.scalpEdgeAdj *= decay;
+  }
+
+  /**
+   * Live adaptive retune.
+   * Called continuously from the orchestrator/order-book scanner so threshold
+   * pressure changes immediately when the session, candle velocity, or book
+   * imbalance changes. Outcome retunes still correct this after settlement.
+   */
+  observeLiveMarketState(sym, context = {}) {
+    const key = String(sym || '').toUpperCase();
+    if (!this.baselineGates[key]) return null;
+
+    const now = Date.now();
+    const pred = context.pred || {};
+    const cfm = context.cfm || {};
+    const ind = pred.indicators || {};
+    const session = pred.session || {};
+    const sessionLabel = context.sessionLabel
+      || session.current?.label
+      || session.label
+      || 'unknown';
+    const sessionScalp = !!(session.current?.scalp || context.sessionScalp);
+    const secsLeft = Number(context.secsLeft);
+    const bookImbalance = Math.abs(Number(
+      context.bookImbalance
+      ?? ind.book?.imbalance
+      ?? pred.diagnostics?.liveBook?.imbalance
+      ?? 0
+    ));
+    const buyRatio = Number(ind.flow?.buyRatio ?? context.buyRatio ?? 50);
+    const flowShock = Number.isFinite(buyRatio) ? Math.abs(buyRatio - 50) / 50 : 0;
+    const volRatio = Number(ind.volume?.ratio ?? context.volumeRatio ?? 1);
+    const atrPct = Number(pred.volatility?.atrPct ?? context.atrPct ?? 0);
+    const tape = ind.tapeVelocity || pred.diagnostics?.tapeVelocity || {};
+    const rangeExpansion = Number(tape.rangeExpansion ?? context.rangeExpansion ?? 1);
+    const bodyExpansion = Number(tape.bodyExpansion ?? context.bodyExpansion ?? 1);
+    const volumeBurst = Number(tape.volumeBurst ?? context.volumeBurst ?? volRatio);
+    const modelShock = Math.abs(Number(pred.score || 0)) >= 0.48;
+    const hugeCandle = rangeExpansion >= 1.75
+      || bodyExpansion >= 1.65
+      || volumeBurst >= 2.10
+      || atrPct >= 3.0
+      || !!context.hugeCandle;
+    const bookShock = bookImbalance >= 0.30;
+    const tapeConfirmed = bookShock || flowShock >= 0.24 || modelShock;
+    const closeWindow = Number.isFinite(secsLeft) && secsLeft <= 210 && secsLeft >= 45;
+
+    const gate = this._ensureTimingGate(key);
+    const state = gate._state || {};
+    if (gate.updatedAt) this._decayTimingGate(gate, now - gate.updatedAt);
+
+    const reasons = [];
+    const sessionChanged = !!(state.sessionLabel && state.sessionLabel !== sessionLabel);
+    const impulseCooldownOk = !state.lastImpulseTs || (now - state.lastImpulseTs) >= 12000;
+
+    if (hugeCandle && tapeConfirmed) {
+      gate.closeEdgeAdj -= closeWindow ? 2.5 : 1.4;
+      gate.closeMispriceAdj -= closeWindow ? 0.018 : 0.010;
+      gate.closePayoutAdj -= 0.08;
+      gate.scalpEdgeAdj -= sessionScalp || !closeWindow ? 1.6 : 0.8;
+      reasons.push('huge candle confirmed by book/tape');
+      if (impulseCooldownOk) {
+        const bounds = this.tuneBounds[key];
+        const cur = this.currentGates[key] || this.baselineGates[key].minAbsScore;
+        this.currentGates[key] = this.clamp(cur - 0.035, bounds.min, bounds.max);
+        state.lastImpulseTs = now;
+        reasons.push('score gate relaxed for fast regime');
+      }
+    } else if (hugeCandle && !tapeConfirmed) {
+      gate.closeEdgeAdj += closeWindow ? 2.0 : 1.0;
+      gate.closeMispriceAdj += closeWindow ? 0.014 : 0.006;
+      gate.scalpEdgeAdj += 1.4;
+      reasons.push('huge candle unconfirmed; tightening fills');
+      if (impulseCooldownOk) {
+        const bounds = this.tuneBounds[key];
+        const cur = this.currentGates[key] || this.baselineGates[key].minAbsScore;
+        this.currentGates[key] = this.clamp(cur + 0.025, bounds.min, bounds.max);
+        state.lastImpulseTs = now;
+        reasons.push('score gate tightened for unconfirmed shock');
+      }
+    }
+
+    if (sessionChanged) {
+      if (sessionScalp) {
+        gate.scalpEdgeAdj -= 1.2;
+        gate.closeEdgeAdj -= 0.8;
+        reasons.push('session changed into scalp-friendly flow');
+      } else {
+        gate.scalpEdgeAdj += 0.8;
+        reasons.push('session changed out of scalp flow');
+      }
+    }
+
+    if (bookShock && closeWindow) {
+      gate.closeEdgeAdj -= 1.0;
+      gate.closeMispriceAdj -= 0.006;
+      reasons.push('close-window book imbalance');
+    } else if (bookShock) {
+      gate.scalpEdgeAdj -= 0.8;
+      reasons.push('live book imbalance');
+    }
+
+    if (atrPct >= 4.2 && !tapeConfirmed) {
+      gate.closeEdgeAdj += 1.0;
+      gate.scalpEdgeAdj += 1.0;
+      reasons.push('extreme volatility without confirmation');
+    }
+
+    gate.closeEdgeAdj = this.clamp(gate.closeEdgeAdj, -5, 6);
+    gate.closeMispriceAdj = this.clamp(gate.closeMispriceAdj, -0.045, 0.055);
+    gate.closePayoutAdj = this.clamp(gate.closePayoutAdj, -0.25, 0.30);
+    gate.scalpEdgeAdj = this.clamp(gate.scalpEdgeAdj, -4, 5);
+    gate.samples += 1;
+    gate.updatedAt = now;
+    gate.source = reasons.length ? 'live-adaptive' : gate.source;
+    if (reasons.length) gate.lastReasons = reasons;
+    gate._state = {
+      ...state,
+      sessionLabel,
+      sessionScalp,
+      hugeCandle,
+      bookShock,
+      tapeConfirmed,
+      closeWindow,
+      lastSeenTs: now,
+    };
+
+    if (typeof window !== 'undefined') {
+      window._adaptiveTimingGates = window._adaptiveTimingGates || {};
+      window._adaptiveTimingGates[key] = {
+        closeEdgeAdj: gate.closeEdgeAdj,
+        closeMispriceAdj: gate.closeMispriceAdj,
+        closePayoutAdj: gate.closePayoutAdj,
+        scalpEdgeAdj: gate.scalpEdgeAdj,
+        source: gate.source,
+        samples: gate.samples,
+        lastReasons: gate.lastReasons || [],
+        updatedAt: gate.updatedAt,
+      };
+      window._currentGates = { ...this.currentGates };
+    }
+
+    return {
+      sym: key,
+      closeEdgeAdj: gate.closeEdgeAdj,
+      closeMispriceAdj: gate.closeMispriceAdj,
+      closePayoutAdj: gate.closePayoutAdj,
+      scalpEdgeAdj: gate.scalpEdgeAdj,
+      scoreGate: this.currentGates[key],
+      reasons,
+      flags: { hugeCandle, bookShock, tapeConfirmed, closeWindow, sessionChanged },
+    };
+  }
+
+  getAdaptiveTimingThresholds(sym, base = {}, context = {}) {
+    const observed = this.observeLiveMarketState(sym, context) || {};
+    const gate = this._ensureTimingGate(sym);
+    return {
+      closeEdgeCents: Math.round(this.clamp((base.closeEdgeCents ?? 10) + gate.closeEdgeAdj, 5, 18)),
+      closeStrongEdgeCents: Math.round(this.clamp((base.closeStrongEdgeCents ?? 14) + gate.closeEdgeAdj, 8, 22)),
+      closeMinMisprice: this.clamp((base.closeMinMisprice ?? 0.12) + gate.closeMispriceAdj, 0.07, 0.22),
+      closePayoutMin: this.clamp((base.closePayoutMin ?? 1.75) + gate.closePayoutAdj, 1.45, 2.35),
+      scalpEdgeCents: Math.round(this.clamp((base.scalpEdgeCents ?? 6) + gate.scalpEdgeAdj, 3, 13)),
+      source: gate.source,
+      reasons: observed.reasons && observed.reasons.length ? observed.reasons : (gate.lastReasons || []),
+      adjustments: {
+        closeEdgeAdj: gate.closeEdgeAdj,
+        closeMispriceAdj: gate.closeMispriceAdj,
+        closePayoutAdj: gate.closePayoutAdj,
+        scalpEdgeAdj: gate.scalpEdgeAdj,
+      },
+      flags: observed.flags || {},
+    };
+  }
+
+  /**
+   * Outcome retune for the adaptive timing layer.
+   * Uses resolved 15m contracts to nudge the close-value/scalp gates:
+   * - wrong trades tighten the relevant timing gate
+   * - correct trades or missed opportunities relax it
+   */
+  retuneTimingFromLog() {
+    const log = (typeof window !== 'undefined' && Array.isArray(window._15mResolutionLog))
+      ? window._15mResolutionLog
+      : [];
+    if (!log.length) return { skipped: true, reason: 'no resolution log' };
+
+    const byCoin = {};
+    for (const raw of log.slice(-240)) {
+      const sym = String(raw?.sym || '').toUpperCase();
+      if (!this.baselineGates[sym]) continue;
+      const regime = raw.timingRegime || (raw.closeValue ? 'CLOSE_VALUE' : raw.scalpFlip ? 'SCALP_EARLY' : null);
+      const missed = raw.missedOpportunity || raw.missedOpportunityScore > 0;
+      const timingRelevant = regime === 'CLOSE_VALUE'
+        || regime === 'FINAL_SNIPE'
+        || regime === 'SCALP_EARLY'
+        || raw.closeValueCandidate
+        || raw.scalpCandidate
+        || missed;
+      if (!timingRelevant) continue;
+      if (!byCoin[sym]) byCoin[sym] = [];
+      byCoin[sym].push(raw);
+    }
+
+    const results = {};
+    for (const [sym, entries] of Object.entries(byCoin)) {
+      const gate = this._ensureTimingGate(sym);
+      let closeDelta = 0;
+      let mispriceDelta = 0;
+      let payoutDelta = 0;
+      let scalpDelta = 0;
+      let samples = 0;
+
+      for (const entry of entries.slice(-80)) {
+        const action = String(entry.orchestratorAction || entry.action || '').toLowerCase();
+        const traded = action === 'trade';
+        const correct = entry.modelCorrect === true || entry.correct === true;
+        const wrong = entry.modelCorrect === false || entry.correct === false;
+        const missed = !!entry.missedOpportunity || Number(entry.missedOpportunityScore || 0) >= 55;
+        const closeLike = entry.timingRegime === 'CLOSE_VALUE'
+          || entry.timingRegime === 'FINAL_SNIPE'
+          || entry.closeValue
+          || entry.closeValueCandidate;
+        const scalpLike = entry.timingRegime === 'SCALP_EARLY'
+          || entry.scalpFlip
+          || entry.scalpCandidate;
+
+        if (!closeLike && !scalpLike && !missed) continue;
+        samples++;
+
+        if (traded && wrong) {
+          if (closeLike) {
+            closeDelta += 0.55;
+            mispriceDelta += 0.004;
+            payoutDelta += 0.025;
+          }
+          if (scalpLike) scalpDelta += 0.45;
+        } else if ((traded && correct) || missed) {
+          if (closeLike || missed) {
+            closeDelta -= missed ? 0.65 : 0.30;
+            mispriceDelta -= missed ? 0.005 : 0.002;
+            payoutDelta -= missed ? 0.030 : 0.015;
+          }
+          if (scalpLike || missed) scalpDelta -= missed ? 0.50 : 0.25;
+        }
+      }
+
+      if (!samples) continue;
+      const scale = 1 / Math.max(3, Math.min(samples, 12));
+      gate.closeEdgeAdj = this.clamp(gate.closeEdgeAdj + closeDelta * scale, -5, 6);
+      gate.closeMispriceAdj = this.clamp(gate.closeMispriceAdj + mispriceDelta * scale, -0.045, 0.055);
+      gate.closePayoutAdj = this.clamp(gate.closePayoutAdj + payoutDelta * scale, -0.25, 0.30);
+      gate.scalpEdgeAdj = this.clamp(gate.scalpEdgeAdj + scalpDelta * scale, -4, 5);
+      gate.source = 'outcome-adaptive';
+      gate.updatedAt = Date.now();
+      gate.samples += samples;
+      gate.lastReasons = ['resolved timing outcome retune'];
+
+      results[sym] = {
+        samples,
+        closeEdgeAdj: gate.closeEdgeAdj,
+        closeMispriceAdj: gate.closeMispriceAdj,
+        closePayoutAdj: gate.closePayoutAdj,
+        scalpEdgeAdj: gate.scalpEdgeAdj,
+      };
+    }
+
+    const summary = { ts: Date.now(), coins: results };
+    if (typeof window !== 'undefined') {
+      window._lastTimingRetuneResult = summary;
+      window._adaptiveTimingGates = window._adaptiveTimingGates || {};
+      for (const [sym, gate] of Object.entries(this.timingGates)) {
+        window._adaptiveTimingGates[sym] = {
+          closeEdgeAdj: gate.closeEdgeAdj,
+          closeMispriceAdj: gate.closeMispriceAdj,
+          closePayoutAdj: gate.closePayoutAdj,
+          scalpEdgeAdj: gate.scalpEdgeAdj,
+          source: gate.source,
+          samples: gate.samples,
+          lastReasons: gate.lastReasons || [],
+          updatedAt: gate.updatedAt,
+        };
+      }
+    }
+    return summary;
+  }
 
   /**
    * Record a trade outcome for tuning analysis
@@ -442,12 +778,13 @@ class AdaptiveTuner {
    * @returns {object} Tuning cycle results
    */
   async runTuningCycle(options = {}) {
-    const { validatePyth = true, dryRun = false } = options;
+    const { validatePyth = true, dryRun = false, reason = 'scheduled' } = options;
 
     const cycleStartTime = Date.now();
     const results = {
       timestamp: cycleStartTime,
       cycleId: Math.random().toString(36).substr(2, 9),
+      reason,
       coins: [],
       totalAdjustments: 0,
       dryRun,
@@ -471,7 +808,7 @@ class AdaptiveTuner {
     }
 
     // ── Run recommendations for each coin ──
-    const TUNING_COINS = ['BTC', 'ETH', 'XRP', 'SOL', 'BNB', 'DOGE', 'HYPE'];
+    const TUNING_COINS = this.getTuningCoins();
     for (const sym of TUNING_COINS) {
       const rec = this.recommendTuning(sym);
 
@@ -493,14 +830,19 @@ class AdaptiveTuner {
       }
     }
 
-    this.lastTuneTime = Date.now();
-    results.cycleTime = results.cycleTime = Date.now() - cycleStartTime;
+    this.markTuneComplete();
+    results.cycleTime = Date.now() - cycleStartTime;
 
     // Run per-indicator gradient descent from _kalshiLog outcomes
     try {
-      this.retuneFromLog();
+      results.indicatorRetune = this.retuneFromLog();
     } catch (e) {
       console.warn('[AdaptiveTuner] retuneFromLog error:', e.message);
+    }
+    try {
+      results.timingRetune = this.retuneTimingFromLog();
+    } catch (e) {
+      console.warn('[AdaptiveTuner] retuneTimingFromLog error:', e.message);
     }
 
     // Expose to window for debugging
@@ -563,9 +905,17 @@ class AdaptiveTuner {
    * Covers all 7 tuning coins — DOGE and HYPE were previously missing.
    */
   resetToBaseline() {
-    const TUNING_COINS = ['BTC', 'ETH', 'XRP', 'SOL', 'BNB', 'DOGE', 'HYPE'];
+    const TUNING_COINS = this.getTuningCoins();
     for (const sym of TUNING_COINS) {
       this.currentGates[sym] = this.baselineGates[sym].minAbsScore;
+      const gate = this._ensureTimingGate(sym);
+      gate.closeEdgeAdj = 0;
+      gate.closeMispriceAdj = 0;
+      gate.closePayoutAdj = 0;
+      gate.scalpEdgeAdj = 0;
+      gate.source = 'baseline';
+      gate.lastReasons = ['reset to baseline'];
+      gate.updatedAt = Date.now();
     }
     console.log('[AdaptiveTuner] Reset to baseline thresholds');
   }
@@ -574,9 +924,10 @@ class AdaptiveTuner {
    * Get diagnostic info for debugging
    */
   getDiagnostics() {
-    const TUNING_COINS = ['BTC', 'ETH', 'XRP', 'SOL', 'BNB', 'DOGE', 'HYPE'];
+    const TUNING_COINS = this.getTuningCoins();
     const diagnostics = {
       currentGates: this.getCurrentGates(),
+      timingGates: this.timingGates,
       baselineGates: this.baselineGates,
       tuneBounds: this.tuneBounds,
       metrics: {},

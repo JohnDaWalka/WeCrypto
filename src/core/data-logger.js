@@ -135,6 +135,11 @@
       alignment: intent.alignment,
       side:      intent.side,
       conf:      intent.confidence,
+      timingRegime: intent.timingRegime ?? null,
+      timingScore: intent.timingScore ?? null,
+      closeValue: !!intent.closeValue,
+      scalpFlip: !!intent.scalpFlip,
+      missedOpportunityScore: intent.missedOpportunityScore ?? 0,
       reason:    (intent.reason || '').slice(0, 100),
     });
     if (!_stats.decisions[sym]) _stats.decisions[sym] = { trade: 0, watch: 0, hold: 0, exit: 0, skip: 0 };
@@ -176,6 +181,11 @@
       crowdFade:      isFullObj ? (res.crowdFade       ?? false) : false,
       edgeCents:      isFullObj ? (res.edgeCents       ?? null) : null,
       entryPrice:     isFullObj ? (res.entryPrice      ?? null) : null,
+      timingRegime:   isFullObj ? (res.timingRegime    ?? null) : null,
+      timingScore:    isFullObj ? (res.timingScore     ?? null) : null,
+      closeValue:     isFullObj ? (res.closeValue      ?? false) : false,
+      scalpFlip:      isFullObj ? (res.scalpFlip       ?? false) : false,
+      missedOpportunityScore: isFullObj ? (res.missedOpportunityScore ?? 0) : 0,
       wickedOut:      isFullObj ? (res.wickedOut        ?? false) : false,
       lateEntry:      isFullObj ? (res.lateEntry        ?? false) : false,
       closeSnapshots: isFullObj ? (res.closeSnapshots  ?? []) : [],
@@ -209,6 +219,10 @@
         wickedOut:  isFullObj ? (res.wickedOut ?? false) : false,
         alignment:  isFullObj ? (res.orchestratorAlign ?? null) : null,
         edgeCents:  isFullObj ? (res.edgeCents ?? null) : null,
+        timingRegime: isFullObj ? (res.timingRegime ?? null) : null,
+        timingScore: isFullObj ? (res.timingScore ?? null) : null,
+        closeValue: isFullObj ? (res.closeValue ?? false) : false,
+        scalpFlip: isFullObj ? (res.scalpFlip ?? false) : false,
       };
       cache.push(compact);
       if (cache.length > 100) cache = cache.slice(-100);
