@@ -4,10 +4,9 @@ node_modules (1)/
 
 # Build output
 dist/
-dist-patch/
-dist-verify*/
-dist-release*/
 build/
+# Do not add sibling dist-* release folders. They are intentionally not ignored
+# so accidental generated output stays visible in git status.
 
 # Electron build artifacts
 *.exe

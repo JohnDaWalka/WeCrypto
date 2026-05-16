@@ -187,76 +187,118 @@
     throw new Error('blockchain.info no longer available — use mempool.space');
   }
 
-  // ── ETH: Blockscout (primary) → Etherscan proxy/free (fallback) ──
+  // ── ETH: Blockscout stats (primary) → Etherscan gas/block fallback ──
+
+  const ETH_BLOCKSCOUT_STATS_URL = 'https://eth.blockscout.com/api/v2/stats';
+
+  function firstNumber(obj, keys) {
+    for (const key of keys) {
+      const value = key.split('.').reduce((acc, part) => acc?.[part], obj);
+      const n = parseFloat(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  }
+
+  function firstInteger(obj, keys) {
+    for (const key of keys) {
+      const value = key.split('.').reduce((acc, part) => acc?.[part], obj);
+      const n = parseInt(value, 10);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  }
+
+  function formatInt(n) {
+    return Number.isFinite(n) && n > 0 ? Math.round(n).toLocaleString() : '—';
+  }
+
+  function ethStatsMetrics(stats, gas) {
+    const block = firstInteger(stats, ['total_blocks', 'totalBlocks', 'blocks']);
+    const txsToday = firstInteger(stats, ['transactions_today', 'transactionsToday', 'txs_today']);
+    const totalAddrs = firstInteger(stats, ['total_addresses', 'totalAddresses', 'addresses']);
+    const totalTxs = firstInteger(stats, ['total_transactions', 'totalTransactions', 'transactions']);
+    const networkUtil = firstNumber(stats, ['network_utilization_percentage', 'networkUtilizationPercentage']);
+    const gasAvg = firstNumber(gas, ['avg', 'average', 'ProposeGasPrice', 'StandardGasPrice', 'SafeGasPrice', 'suggestBaseFee']);
+    const gasFast = firstNumber(gas, ['fast', 'FastGasPrice']) || gasAvg;
+    const gasSlow = firstNumber(gas, ['slow', 'SafeGasPrice']) || gasAvg;
+
+    return {
+      block,
+      txsToday,
+      totalAddrs,
+      totalTxs,
+      networkUtil,
+      gasAvg,
+      gasFast,
+      gasSlow,
+      metrics: [
+        { k: 'Gas Price', v: gasAvg ? `${gasAvg.toFixed(2)} Gwei` : '—' },
+        { k: 'Block', v: formatInt(block) },
+        { k: 'Gas Fast', v: gasFast ? `${gasFast.toFixed(2)} Gwei` : '—' },
+        { k: 'Gas Slow', v: gasSlow ? `${gasSlow.toFixed(2)} Gwei` : '—' },
+        { k: 'Txs Today', v: formatInt(txsToday) },
+        { k: 'Total Addrs', v: formatInt(totalAddrs) },
+        { k: 'Total Txs', v: formatInt(totalTxs) },
+        { k: 'Net Util', v: networkUtil ? `${networkUtil.toFixed(1)}%` : '—' },
+      ],
+    };
+  }
 
   async function ethBlockscout() {
     const [sR, pR] = await Promise.allSettled([
-      getJson('https://eth.blockscout.com/api/v2/stats'),
+      getJson(ETH_BLOCKSCOUT_STATS_URL),
       getJson(_etherscanV2Url('gastracker', 'gasoracle')),
     ]);
     const s = sR.status === 'fulfilled' && sR.value && typeof sR.value === 'object' ? sR.value : {};
     const p = pR.status === 'fulfilled' && pR.value && typeof pR.value === 'object' ? pR.value : {};
-
-    const txsTodayRaw = s.transactions_today ?? s.transactionsToday ?? s.txs_today ?? 0;
-    const txsToday = parseInt(txsTodayRaw, 10) || 0;
-    const gasAvgRaw = parseFloat(p?.result?.ProposeGasPrice || p?.result?.suggestBaseFee || 0) || 0;
-    const gasFastRaw = parseFloat(p?.result?.FastGasPrice || gasAvgRaw || 0) || 0;
-    const gasSlowRaw = parseFloat(p?.result?.SafeGasPrice || gasAvgRaw || 0) || 0;
-
-    const gasAvg = parseFloat(gasAvgRaw) || 0;
-    const gasFast = parseFloat(gasFastRaw) || 0;
-    const gasSlow = parseFloat(gasSlowRaw) || 0;
+    const statsGas = {
+      average: s.gas_prices?.average,
+      fast: s.gas_prices?.fast,
+      slow: s.gas_prices?.slow,
+    };
+    const etherscanGas = p?.result || {};
+    const parsed = ethStatsMetrics(s, { ...statsGas, ...etherscanGas });
+    const { gasAvg, gasFast, gasSlow, txsToday, block } = parsed;
 
     // Require at least one meaningful signal from either stats or gas oracle.
-    if (!txsToday && !gasAvg && !gasFast && !gasSlow) {
+    if (!block && !txsToday && !gasAvg && !gasFast && !gasSlow) {
       throw new Error('Blockscout ETH empty');
     }
 
     const score = gasAvg > 60 ? 0.50 : gasAvg > 25 ? 0.20 : gasAvg < 5 ? -0.15 : 0;
     return {
       sym: 'ETH', label: 'Ethereum', chain: 'Ethereum Mainnet',
-      source: 'Etherscan/Blockscout', explorerUrl: 'https://eth.blockscout.com',
-      metrics: [
-        { k: 'Gas Avg', v: gasAvg ? `${gasAvg.toFixed(1)} Gwei` : '—' },
-        { k: 'Gas Fast', v: gasFast ? `${gasFast.toFixed(1)} Gwei` : '—' },
-        { k: 'Gas Slow', v: gasSlow ? `${gasSlow.toFixed(1)} Gwei` : '—' },
-        { k: 'Txs Today', v: txsToday ? txsToday.toLocaleString() : '—' },
-        { k: 'Total Addrs', v: s.total_addresses ? parseInt(s.total_addresses).toLocaleString() : '—' },
-        { k: 'Total Txs', v: s.total_transactions ? parseInt(s.total_transactions).toLocaleString() : '—' },
-      ],
+      source: 'Blockscout/Etherscan', explorerUrl: 'https://eth.blockscout.com',
+      metrics: parsed.metrics,
       congestion: gasAvg > 50 ? 'HIGH' : gasAvg > 20 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
-      raw: { gasAvg, gasFast, gasSlow, txsToday },
+      raw: { gasAvg, gasFast, gasSlow, txsToday, block },
     };
   }
 
   async function ethEtherscan() {
-    const [bR, gR] = await Promise.allSettled([
+    const [sR, bR, gR] = await Promise.allSettled([
+      getJson(ETH_BLOCKSCOUT_STATS_URL),
       getJson(_etherscanV2Url('proxy', 'eth_blockNumber')),
       getJson(_etherscanV2Url('gastracker', 'gasoracle')),
     ]);
+    const s = sR.status === 'fulfilled' && sR.value && typeof sR.value === 'object' ? sR.value : {};
     const bRes = bR.status === 'fulfilled' ? bR.value : null;
     const gRes = gR.status === 'fulfilled' ? gR.value : null;
-
-    // Validate responses aren't null
-    if (!bRes || !gRes) throw new Error('Etherscan proxy empty');
-
-    const block = bRes?.result ? parseInt(bRes.result, 16) || 0 : 0;
-    const gasGwei = parseFloat(gRes?.result?.ProposeGasPrice || gRes?.result?.SafeGasPrice || 0) || 0;
-    if (!block && !gasGwei) throw new Error('Etherscan proxy empty');
-    const score = gasGwei > 60 ? 0.50 : gasGwei > 25 ? 0.20 : gasGwei < 5 ? -0.15 : 0;
+    const blockFromEtherscan = bRes?.result ? parseInt(bRes.result, 16) || 0 : 0;
+    const parsed = ethStatsMetrics(s, gRes?.result || {});
+    const block = blockFromEtherscan || parsed.block;
+    const gasAvg = parsed.gasAvg;
+    if (!block && !gasAvg && !parsed.txsToday) throw new Error('Etherscan ETH empty');
+    const score = gasAvg > 60 ? 0.50 : gasAvg > 25 ? 0.20 : gasAvg < 5 ? -0.15 : 0;
     return {
       sym: 'ETH', label: 'Ethereum', chain: 'Ethereum Mainnet',
       source: 'Etherscan', explorerUrl: 'https://etherscan.io',
-      metrics: [
-        { k: 'Gas Price', v: gasGwei ? `${gasGwei.toFixed(1)} Gwei` : '—' },
-        { k: 'Block', v: block ? block.toLocaleString() : '—' },
-        { k: 'Gas Fast', v: '—' }, { k: 'Gas Slow', v: '—' },
-        { k: 'Txs Today', v: '—' }, { k: 'Total Addrs', v: '—' },
-      ],
-      congestion: gasGwei > 50 ? 'HIGH' : gasGwei > 20 ? 'MED' : 'LOW',
+      metrics: parsed.metrics.map(m => m.k === 'Block' ? { ...m, v: formatInt(block) } : m),
+      congestion: gasAvg > 50 ? 'HIGH' : gasAvg > 20 ? 'MED' : 'LOW',
       score, signal: scoreLabel(score), ts: Date.now(),
-      raw: { gasAvg: gasGwei, gasFast: gasGwei, gasSlow: gasGwei, txsToday: 0 },
+      raw: { gasAvg, gasFast: parsed.gasFast, gasSlow: parsed.gasSlow, txsToday: parsed.txsToday, block },
     };
   }
 
@@ -599,7 +641,7 @@
 
   const ROUTES = [
     { sym: 'BTC', handlers: [btcMempool, btcBlockchain] },
-    { sym: 'ETH', handlers: [ethEtherscan, ethBlockscout] },
+    { sym: 'ETH', handlers: [ethBlockscout, ethEtherscan] },
     {
       sym: 'SOL', handlers: [
         ..._solRpcCandidates().map((url) => () => solRpc(url)),

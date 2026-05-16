@@ -18,6 +18,7 @@
   ```bash
   npm run build:portable
   ```
+  Build scripts route through `scripts/build-electron-safe.js`, which creates a unique artifact label and refuses to overwrite existing `.exe` outputs.
 - **Run integration tests:**
   ```bash
   node test-integration.js
@@ -53,6 +54,13 @@
 - **Adaptive weights:** Updated every 2 minutes, range 0.3x–2.0x, trending acceleration/penalty applied
 - **Testing:** Use provided test scripts for integration, signal logic, and quant core validation
 - **Agents:** Custom agents for Kalshi orderbook, quant regime, smart money flow, and signal clarity are available (see .github/AGENTS.md)
+
+## Build Artifact Rules
+
+- `dist/` is the only allowed top-level build output directory. Do not create `dist-patch/`, `dist-verify*/`, `dist-release*/`, or other sibling release folders.
+- Existing `.exe` files are immutable release artifacts. Never overwrite, delete, rename, or replace a previous `.exe` unless the user explicitly asks for that exact file operation.
+- Every new Electron release build must use a unique filename in `dist/`. Use the safe npm build scripts, or set `WECRYPTO_BUILD_LABEL` to a short unique suffix before building.
+- If the planned output filename already exists, stop and choose a new label. Do not use `Copy-Item -Force`, `Remove-Item`, or a clean build step that erases historical executables.
 
 ---
 
@@ -119,7 +127,7 @@ For more details, see:
   - **Crash**: ATR spike > 2σ → boost volatility stops (ATR)
   - Regime-specific multipliers apply temporarily, reset after 5-10 cycles
 
-- **Packaging caveat:** close running WECRYPTO executable before building, or output artifacts in `dist/` may be locked.
+- **Packaging caveat:** close running WECRYPTO executable before building, or output artifacts in `dist/` may be locked. Preserve every existing `.exe`; if a build target would overwrite one, stop and use a new artifact label.
 
 - **Workspace agent context:** `.github/AGENTS.md` defines a repo-specific **WE CFM Orchestrator Agent**; prefer that for deep domain work.
 
