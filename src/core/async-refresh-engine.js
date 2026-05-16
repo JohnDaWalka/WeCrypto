@@ -41,7 +41,7 @@
 
         emit(event, data) {
             if (!this.subscribers.has(event)) return;
-            for (const cb of this.subscribers.get(event)) {
+            for (const cb of [...this.subscribers.get(event)]) {
                 try { cb(data); } catch (e) {
                     console.error(`[EventBus] ${event} handler error:`, e.message);
                 }
@@ -67,6 +67,8 @@
             this.clockSyncedAt = 0;
             this.clockSyncInFlight = null;
             this.clockResyncIntervalMs = 15 * 60 * 1000;
+            this.fetchLocks = new Map();
+            this.fetchLastRun = new Map();
             this.etFormatter = new Intl.DateTimeFormat('en-US', {
                 timeZone: 'America/New_York',
                 year: 'numeric',
@@ -254,7 +256,7 @@
                             )
                         ]);
 
-                        const elapsedMs = Date.now() - cycleStart;
+                        const elapsedMs = this.nowMs() - cycleStart;
 
                         // Emit event so UI can update (non-blocking)
                         this.bus.emit('predictions:updated', {
@@ -266,7 +268,11 @@
 
                         this.metrics.totalUpdates++;
                         this.metrics.lastUpdateTs = this.nowMs();
-                        this.metrics.streamStates[streamId] = `✓ cycle ${cycle} (${elapsedMs}ms)`;
+                        this.setStreamState(streamId, {
+                            status: 'ok',
+                            cycle,
+                            detail: `${elapsedMs}ms`,
+                        });
 
                         console.log(`[Stream:Predictions] Cycle ${cycle} complete (${elapsedMs}ms)`);
                     }
@@ -274,8 +280,12 @@
                     nextRunAt = this.nextAlignedAt(30_000, nextRunAt + 30_000);
                 } catch (err) {
                     console.warn(`[Stream:Predictions] Error:`, err.message);
-                    this.metrics.streamStates[streamId] = `⚠ ${err.message}`;
-                    await this.sleepUntil(Date.now() + 5_000);
+                    this.setStreamState(streamId, {
+                        status: 'error',
+                        cycle,
+                        detail: err.message,
+                    });
+                    await this.sleepUntil(this.nowMs() + 5_000);
                     nextRunAt = this.nextAlignedAt(30_000);
                 }
             }
@@ -356,12 +366,18 @@
                         });
                     }
 
-                    this.metrics.streamStates[streamId] = updates.length
-                        ? `✓ cycle ${cycle} (${updates.length} cues)`
-                        : `✓ cycle ${cycle}`;
+                    this.setStreamState(streamId, {
+                        status: 'ok',
+                        cycle,
+                        detail: updates.length ? `${updates.length} cues` : 'heartbeat',
+                    });
                 } catch (err) {
                     console.warn(`[Stream:OrderBookImbalance] Error:`, err.message);
-                    this.metrics.streamStates[streamId] = `⚠ ${err.message}`;
+                    this.setStreamState(streamId, {
+                        status: 'error',
+                        cycle,
+                        detail: err.message,
+                    });
                     await this.sleep(3000);
                 }
             }
@@ -408,15 +424,23 @@
                                 timestamp: this.nowMs()
                             });
 
-                            this.metrics.streamStates[streamId] = `✓ $${(res.data.balance / 100).toFixed(2)}`;
+                            this.setStreamState(streamId, {
+                                status: 'ok',
+                                cycle,
+                                detail: `$${(res.data.balance / 100).toFixed(2)}`,
+                            });
                         }
                     }
 
                     nextRunAt = this.nextAlignedAt(5_000, nextRunAt + 5_000);
                 } catch (err) {
                     console.warn(`[Stream:KalshiBalance] Error:`, err.message);
-                    this.metrics.streamStates[streamId] = `⚠ ${err.message}`;
-                    await this.sleepUntil(Date.now() + 5_000);
+                    this.setStreamState(streamId, {
+                        status: 'error',
+                        cycle,
+                        detail: err.message,
+                    });
+                    await this.sleepUntil(this.nowMs() + 5_000);
                     nextRunAt = this.nextAlignedAt(5_000);
                 }
             }
@@ -445,28 +469,44 @@
                     const start = this.nowMs();
 
                     // Fetch market data (non-blocking call)
+                    let fetchResult = null;
                     if (window.fetchAll) {
-                        await Promise.race([
+                        fetchResult = await this.runLockedFetch('fetchAll', () => Promise.race([
                             Promise.resolve().then(() => window.fetchAll(false, false)),
                             new Promise((_, reject) =>
                                 setTimeout(() => reject(new Error('Market data timeout')), 20000)
                             )
-                        ]);
-
-                        const elapsedMs = Date.now() - start;
-
-                        this.bus.emit('market:data-updated', {
-                            cycle,
-                            elapsedMs,
-                            nextIntervalMs: desiredInterval,
-                            timestamp: this.nowMs()
+                        ]), {
+                            minGapMs: nearBoundary ? 1500 : 5000,
+                            force: false,
                         });
 
-                        this.metrics.streamStates[streamId] = `✓ cycle ${cycle} (${elapsedMs}ms, next ${desiredInterval}ms)`;
+                        const elapsedMs = this.nowMs() - start;
+
+                        if (!fetchResult?.skipped) {
+                            this.bus.emit('market:data-updated', {
+                                cycle,
+                                elapsedMs,
+                                nextIntervalMs: desiredInterval,
+                                timestamp: this.nowMs()
+                            });
+                        }
+
+                        this.setStreamState(streamId, {
+                            status: fetchResult?.skipped ? 'debounced' : 'ok',
+                            cycle,
+                            detail: fetchResult?.skipped
+                                ? `${fetchResult.reason} (${fetchResult.ageMs}ms old)`
+                                : `${elapsedMs}ms, next ${desiredInterval}ms`,
+                        });
                     }
                 } catch (err) {
                     console.warn(`[Stream:MarketData] Error:`, err.message);
-                    this.metrics.streamStates[streamId] = `⚠ ${err.message}`;
+                    this.setStreamState(streamId, {
+                        status: 'error',
+                        cycle,
+                        detail: err.message,
+                    });
                     await this.sleepUntil(this.nowMs() + 10000);
                 }
             }
@@ -498,17 +538,21 @@
 
                     // High-priority market data fetch (no cache)
                     if (window.fetchAll) {
-                        await Promise.race([
+                        await this.runLockedFetch('fetchAll', () => Promise.race([
                             Promise.resolve().then(() => window.fetchAll(true, true)),
                             new Promise((_, reject) =>
                                 setTimeout(() => reject(new Error('Settlement fetch timeout')), 15000)
                             )
-                        ]);
+                        ]), { force: true });
                     }
 
                     // Update Kalshi contracts
                     if (window.PredictionMarkets?.fetchAll) {
-                        await window.PredictionMarkets.fetchAll();
+                        await this.runLockedFetch(
+                            'prediction-markets-fetchAll',
+                            () => window.PredictionMarkets.fetchAll(),
+                            { force: true, minGapMs: 1000 }
+                        );
                     }
 
                     this.bus.emit('settlement:pulse', {
@@ -517,10 +561,18 @@
                         timestamp: this.nowMs()
                     });
 
-                    this.metrics.streamStates[streamId] = `✓ pulse ${pulseCount} @ ${label}`;
+                    this.setStreamState(streamId, {
+                        status: 'ok',
+                        cycle: pulseCount,
+                        detail: `pulse @ ${label}`,
+                    });
                 } catch (err) {
                     console.warn(`[Stream:SettlementPulse] Error:`, err.message);
-                    this.metrics.streamStates[streamId] = `⚠ ${err.message}`;
+                    this.setStreamState(streamId, {
+                        status: 'error',
+                        cycle: pulseCount,
+                        detail: err.message,
+                    });
                 }
             }
         }
@@ -545,10 +597,46 @@
          * Helper: Return the next absolute boundary for a cadence, optionally
          * anchored to an existing target to avoid cumulative jitter.
          */
-        nextAlignedAt(periodMs, anchorTs = Date.now()) {
+        nextAlignedAt(periodMs, anchorTs = this.nowMs()) {
             const base = Math.floor(anchorTs / periodMs) * periodMs;
             const next = base + periodMs;
             return Math.max(this.nowMs(), next);
+        }
+
+        setStreamState(streamId, state = {}) {
+            this.metrics.streamStates[streamId] = {
+                status: state.status || 'ok',
+                cycle: state.cycle ?? null,
+                detail: state.detail || '',
+                lastSeen: this.nowMs(),
+            };
+        }
+
+        async runLockedFetch(key, fn, options = {}) {
+            const { force = false, minGapMs = 0 } = options;
+            const now = this.nowMs();
+            const inFlight = this.fetchLocks.get(key);
+
+            if (inFlight) {
+                if (!force) return inFlight;
+                try { await inFlight; } catch (_) {}
+            }
+
+            const lastRun = this.fetchLastRun.get(key) || 0;
+            const ageMs = Math.max(0, now - lastRun);
+            if (!force && minGapMs > 0 && ageMs < minGapMs) {
+                return { skipped: true, reason: 'debounced', ageMs };
+            }
+
+            const run = Promise.resolve()
+                .then(fn)
+                .finally(() => {
+                    if (this.fetchLocks.get(key) === run) this.fetchLocks.delete(key);
+                    this.fetchLastRun.set(key, this.nowMs());
+                });
+
+            this.fetchLocks.set(key, run);
+            return run;
         }
 
         /**
@@ -602,7 +690,13 @@
             status.push(`Last Update: ${this.formatEasternTime(this.metrics.lastUpdateTs || this.nowMs())}`);
             status.push('Stream States:');
             for (const [stream, state] of Object.entries(this.metrics.streamStates)) {
-                status.push(`  ${stream}: ${state}`);
+                if (state && typeof state === 'object') {
+                    const seen = state.lastSeen ? this.formatEasternTime(state.lastSeen) : 'n/a';
+                    const cycle = state.cycle != null ? ` cycle ${state.cycle}` : '';
+                    status.push(`  ${stream}: ${state.status}${cycle} — ${state.detail || 'heartbeat'} @ ${seen}`);
+                } else {
+                    status.push(`  ${stream}: ${state}`);
+                }
             }
             status.push('═══════════════════════════════════════════');
             return status.join('\n');
